@@ -91,7 +91,13 @@ configure_docker_mirror() {
         local new
         new="$(cat /etc/docker/daemon.json  || echo '')"
         if [ "$prev" != "$new" ]; then
-            systemctl restart docker || true
+            local _smsly_ctrs=0
+            _smsly_ctrs="$(docker ps -q --filter "name=smsly-" 2>/dev/null | wc -l || echo 0)"
+            if [ "${_smsly_ctrs:-0}" -eq 0 ]; then
+                timeout 120 systemctl restart docker || true
+            else
+                echo -e "${YELLOW}  ⚠ Docker daemon config changed but $_smsly_ctrs SMSLY containers are running — deferring restart${NC}"
+            fi
         fi
     fi
 
@@ -392,13 +398,29 @@ ensure_infrastructure_permissions() {
     [ -f "$coredns_config_dir/mesh.hosts" ] && chmod 664 "$coredns_config_dir/mesh.hosts" || true
 
     if command -v docker ; then
-        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data|caddy_logs)$')"
+        local _vol_pattern='(^|_)(backups_data|caddy_data|caddy_logs)$'
+        if is_node_mode; then
+            _vol_pattern='(^|_)(backups_data|caddy_data|caddy_logs|caddy_config)$'
+        fi
+        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E "$_vol_pattern" || true)"
         for vol in ${_vol_names:-backups_data}; do
             if docker volume inspect "$vol" >/dev/null 2>&1; then
                 echo -e "${BLUE}     ↳ Setting permissions for volume: $vol...${NC}"
                 timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             else
                 echo -e "${YELLOW}     ⚠ $vol volume not found — skipping chown${NC}"
+            fi
+        done
+        for vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)postgres-archive$' || true); do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
+                echo -e "${BLUE}     ↳ Setting permissions for volume: $vol (70:70)...${NC}"
+                timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 70:70 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
+            fi
+        done
+        for vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)verdaccio_data$' || true); do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
+                echo -e "${BLUE}     ↳ Setting permissions for volume: $vol (10001:65533)...${NC}"
+                timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 10001:65533 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             fi
         done
     fi
@@ -854,11 +876,18 @@ refresh_runtime_services() {
         reload_container_caddy  || true
     fi
 
-    if [ "$MODE_AGENT_LITE" != "true" ]; then
+    local _refresh_tier="${STACK_TIER:-}"
+    if [ -z "$_refresh_tier" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        _refresh_tier="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "STACK_TIER" || true)"
+    fi
+    [ -n "$_refresh_tier" ] || _refresh_tier="full"
+    if [ "$MODE_AGENT_LITE" != "true" ] && [ "$_refresh_tier" != "lite" ]; then
         echo -e "${BLUE}  → Refreshing Observability Stack...${NC}"
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
-            docker compose -f infrastructure/docker/docker-compose.observability.yml pull || echo -e "${YELLOW}    ⚠ Observability pull failed${NC}"
-            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d || echo -e "${YELLOW}    ⚠ Observability up failed${NC}"
+            local _obs_env_args=()
+            [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && _obs_env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
+            timeout 300 docker compose "${_obs_env_args[@]}" -f infrastructure/docker/docker-compose.observability.yml pull || echo -e "${YELLOW}    ⚠ Observability pull failed${NC}"
+            timeout 300 docker compose "${_obs_env_args[@]}" -f infrastructure/docker/docker-compose.observability.yml up -d || echo -e "${YELLOW}    ⚠ Observability up failed${NC}"
             for obs_ctr in smsly-loki smsly-promtail smsly-prometheus smsly-cadvisor smsly-node-exporter smsly-grafana; do
                 i=0
                 while [ $i -lt 30 ]; do

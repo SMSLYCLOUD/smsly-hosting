@@ -17,11 +17,11 @@ class TransferServiceLocalDetectionTests(TestCase):
 
         # Configure PlatformConfig with a dummy server IP
         self.local_ip = '198.51.100.1'
-        self.config = PlatformConfig.objects.create(
-            domain='smsly.cloud',
-            server_ip=self.local_ip,
-            use_ssl=False
-        )
+        self.config = PlatformConfig.load()
+        self.config.domain = 'smsly.cloud'
+        self.config.server_ip = self.local_ip
+        self.config.use_ssl = False
+        self.config.save()
 
     def test_local_source_ip_bypasses_source_ssh_init(self):
         # Create a transfer where source_server_ip equals PlatformConfig's server_ip

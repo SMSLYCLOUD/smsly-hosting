@@ -139,7 +139,7 @@ def validate_and_sanitize_path(path: str, skip_system_check: bool = False, conta
         if char in normalized_path:
             raise ValueError(f"Path contains dangerous character: {char}")
 
-    if '$' in normalized_path and '{' in normalized_path and '}' in normalized_path:
+    if '$' in normalized_path:
         raise ValueError("Path contains environment variables")
 
     def _validate_system_dirs(candidate_path: str):
@@ -171,7 +171,7 @@ def validate_and_sanitize_path(path: str, skip_system_check: bool = False, conta
                         if char in resolved_path:
                             raise ValueError(f"Path contains dangerous character: {char}")
 
-                    if '$' in resolved_path and '{' in resolved_path and '}' in resolved_path:
+                    if '$' in resolved_path:
                         raise ValueError("Path contains environment variables")
 
                     normalized_path = resolved_path

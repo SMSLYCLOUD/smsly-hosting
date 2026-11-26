@@ -30,12 +30,15 @@ def collect_usage_task() -> None:
     try:
         active_services = Service.objects.filter(
             deployments__status=Deployment.Status.ACTIVE
+        ).exclude(
+            status=Service.Status.DELETED
         ).distinct()
 
         records = []
         for service in active_services:
-            cpu = service.cpu_cores
-            ram_gb = Decimal(service.memory_mb) / 1024
+            replicas = max(1, int(getattr(service, 'min_replicas', 1) or 1))
+            cpu = service.cpu_cores * replicas
+            ram_gb = (Decimal(service.memory_mb) / 1024) * replicas
 
             cost = (cpu * PRICE_CPU_HOUR) + (ram_gb * PRICE_RAM_GB_HOUR)
 
@@ -55,71 +58,76 @@ def collect_usage_task() -> None:
 @shared_task(soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1])
 def generate_monthly_invoices() -> None:
     """Run on 1st of each month — generate invoices for all active subscriptions."""
+    from django.db import transaction
+
     meter = UsageMeter()
     # Get subscriptions that need billing (active)
-    subscriptions = UserSubscription.objects.filter(status='ACTIVE')
+    sub_ids = list(UserSubscription.objects.filter(status='ACTIVE').values_list('id', flat=True))
 
-    for sub in subscriptions:
+    for sub_id in sub_ids:
         try:
-            now = timezone.now()
-            period_end = sub.current_period_end
-            period_start = sub.current_period_start
+            with transaction.atomic():
+                sub = UserSubscription.objects.select_for_update().select_related('user', 'plan').get(id=sub_id)
+                if sub.status != 'ACTIVE':
+                    continue
 
-            # Skip if an invoice for this billing period already exists
-            # (keeps re-runs and beat catch-ups idempotent).
-            if Invoice.objects.filter(subscription=sub, period_start=period_start).exists():
-                continue
+                now = timezone.now()
+                period_end = sub.current_period_end
+                period_start = sub.current_period_start
 
-            # Skip if not yet due
-            if period_end > now:
-                continue
+                # Skip if an invoice for this billing period already exists
+                # (keeps re-runs and beat catch-ups idempotent).
+                if Invoice.objects.filter(subscription=sub, period_start=period_start).exists():
+                    continue
 
-            # Calculate cost (base plan + usage)
-            # For simplicity, calculate_cost returns a total.
-            # In a real system, we'd detail line items.
-            total_cost = meter.calculate_cost(sub.user, period_start, period_end)
+                # Skip if not yet due
+                if period_end > now:
+                    continue
 
-            line_items = [
-                {
-                    'description': f"Subscription: {sub.plan.name}",
-                    'qty': 1,
-                    'unit_price': float(total_cost), # Simplified
-                    'total': float(total_cost)
-                }
-            ]
+                # Calculate cost (base plan + usage)
+                total_cost = meter.calculate_cost(sub.user, period_start, period_end)
 
-            # Create Invoice
-            invoice = Invoice.objects.create(
-                user=sub.user,
-                subscription=sub,
-                status='DRAFT',
-                period_start=period_start,
-                period_end=period_end,
-                subtotal=total_cost,
-                tax=0,
-                total=total_cost,
-                line_items=line_items,
-                due_date=now + timedelta(days=7)
-            )
+                line_items = [
+                    {
+                        'description': f"Subscription: {sub.plan.name}",
+                        'qty': 1,
+                        'unit_price': float(total_cost),
+                        'total': float(total_cost)
+                    }
+                ]
 
-            # Advance billing period
-            if sub.billing_cycle == 'MONTHLY':
-                next_period_end = period_end + timedelta(days=30)
-            else:
-                next_period_end = period_end + timedelta(days=365)
+                # Create Invoice
+                invoice = Invoice.objects.create(
+                    user=sub.user,
+                    subscription=sub,
+                    status='DRAFT',
+                    period_start=period_start,
+                    period_end=period_end,
+                    subtotal=total_cost,
+                    tax=0,
+                    total=total_cost,
+                    line_items=line_items,
+                    due_date=now + timedelta(days=7)
+                )
 
-            sub.current_period_start = period_end
-            sub.current_period_end = next_period_end
-            sub.save()
+                # Advance billing period
+                if sub.billing_cycle == 'MONTHLY':
+                    next_period_end = period_end + timedelta(days=30)
+                else:
+                    next_period_end = period_end + timedelta(days=365)
 
-            # Mark sent (or integrate with payment provider)
-            invoice.status = 'SENT'
-            invoice.save()
+                sub.current_period_start = period_end
+                sub.current_period_end = next_period_end
+                sub.save()
 
-            logger.info(f"Generated invoice {invoice.id} for user {sub.user.username}")
+                # Mark sent (or integrate with payment provider)
+                invoice.status = 'SENT'
+                invoice.save()
+
+                logger.info(f"Generated invoice {invoice.id} for user {sub.user.username}")
 
         except Exception as e:
-            logger.error(f"Failed to generate invoice for subscription {sub.id}: {e}")
+            logger.error(f"Failed to generate invoice for subscription {sub_id}: {e}")
 
 
 @shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1])
@@ -208,8 +216,13 @@ def calculate_infrastructure_costs() -> None:
 
     # Placeholder: estimate cost based on active resources * cost
     # $5/month per service (approx $0.16/day)
-    active_services_count = Service.objects.filter(deployments__status='ACTIVE').distinct().count()
-    cost_usd = active_services_count * 0.16
+    active_services = Service.objects.filter(
+        deployments__status='ACTIVE'
+    ).exclude(
+        status=Service.Status.DELETED
+    ).distinct()
+    total_replicas = sum(max(1, int(getattr(s, 'min_replicas', 1) or 1)) for s in active_services)
+    cost_usd = Decimal(total_replicas) * Decimal('0.16')
 
     InfrastructureCost.objects.create(
         date=yesterday,

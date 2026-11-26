@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+import contextlib
 import hashlib
 import json
 import logging
@@ -40,6 +41,7 @@ from .exceptions import (
     _DEFAULT_CRYPTO_CHUNK_SIZE,
     BackupEncryptionRequired,
     BackupKeyCollisionError,
+    UnknownBackupKeyIdError,
 )
 from .helpers import (
     _acquire_service_lock,
@@ -47,10 +49,82 @@ from .helpers import (
     _release_service_lock,
     _safe_tar_extractall,
 )
-from .operations import _dump_container_database
+from .operations import _dump_container_database, _exec_redis_cli
 from .cloud import _delete_backup_cloud_object, _download_backup_from_cloud, _upload_backup_to_cloud
 
 logger = logging.getLogger(__name__)
+
+_SAFE_DOCKER_VOLUME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$')
+_SAFE_ADDON_CTR_RE = re.compile(r'^smsly-addon-[a-z0-9-]+$')
+
+
+def _validate_tar_members(tar_path: str) -> None:
+    """Reject traversal, absolute paths, device nodes, or escaping symlinks in a tar archive."""
+    with tarfile.open(tar_path, 'r:*') as tf:
+        for member in tf.getmembers():
+            name = (member.name or '').replace('\\', '/')
+            if name.startswith('/') or '..' in name.split('/'):
+                raise ValueError(f"Unsafe archive member path: {member.name!r}")
+            if member.issym() or member.islnk():
+                link = (member.linkname or '').replace('\\', '/')
+                if link.startswith('/') or '..' in link.split('/'):
+                    raise ValueError(f"Unsafe archive link target: {member.name!r} -> {member.linkname!r}")
+            elif not (member.isfile() or member.isdir()):
+                raise ValueError(f"Unsafe archive special member: {member.name!r}")
+
+
+def _sanitize_image_tar(image_path: str, safe_repo: str, safe_tag: str) -> str:
+    """Rewrite manifest.json RepoTags in image.tar to a scoped tenant tag before docker images.load."""
+    import io
+
+    sanitized_path = image_path + '.sanitized'
+    target_tag = f"{safe_repo}:{safe_tag}"
+    manifest_seen = False
+    try:
+        with tarfile.open(image_path, 'r:*') as src, tarfile.open(sanitized_path, 'w') as dst:
+            for member in src.getmembers():
+                name = (member.name or '').replace('\\', '/')
+                if name.startswith('/') or '..' in name.split('/'):
+                    raise ValueError(f"Unsafe image.tar member path: {member.name!r}")
+                if member.issym() or member.islnk():
+                    link = (member.linkname or '').replace('\\', '/')
+                    if link.startswith('/') or '..' in link.split('/'):
+                        raise ValueError(f"Unsafe image.tar link target: {member.name!r}")
+                elif not (member.isfile() or member.isdir()):
+                    raise ValueError(f"Unsafe image.tar special member: {member.name!r}")
+
+                norm_name = os.path.normpath(name).replace('\\', '/')
+                if norm_name == 'repositories':
+                    continue
+                if member.isfile() and norm_name == 'manifest.json':
+                    manifest_seen = True
+                    raw = src.extractfile(member).read()
+                    manifest = json.loads(raw.decode('utf-8'))
+                    if not isinstance(manifest, list):
+                        raise ValueError("Invalid manifest.json inside image.tar")
+                    for idx, entry in enumerate(manifest):
+                        if isinstance(entry, dict):
+                            entry['RepoTags'] = [target_tag] if idx == 0 else []
+                    new_bytes = json.dumps(manifest).encode('utf-8')
+                    info = tarfile.TarInfo(name=member.name)
+                    info.size = len(new_bytes)
+                    info.mode = member.mode
+                    info.mtime = member.mtime
+                    dst.addfile(info, io.BytesIO(new_bytes))
+                elif member.isfile():
+                    file_obj = src.extractfile(member)
+                    dst.addfile(member, file_obj)
+                else:
+                    dst.addfile(member)
+        if not manifest_seen:
+            raise ValueError("image.tar is missing manifest.json")
+        os.replace(sanitized_path, image_path)
+        return image_path
+    except BaseException:
+        with contextlib.suppress(OSError):
+            if os.path.exists(sanitized_path):
+                os.unlink(sanitized_path)
+        raise
 
 
 def build_remote_restore_script(service_name: str, remote_tmp: str) -> str:
@@ -83,6 +157,10 @@ if [ -f volume_manifest.json ]; then
             echo "WARNING: no manifest entry for $vol_file, skipping"
             continue
         fi
+        if ! printf '%s' "$vol_name" | grep -Eq '^[a-zA-Z0-9][a-zA-Z0-9_.-]{{0,127}}$'; then
+            echo "ERROR: unsafe volume name '$vol_name' in manifest"
+            exit 1
+        fi
         docker volume create "$vol_name" 2>/dev/null || true
         docker run --rm -v "$vol_name":/v -v "{remote_tmp}":/backup alpine:latest tar -xzf "/backup/$vol_file" -C /v
     done
@@ -90,6 +168,10 @@ else
     for vol_file in vol_*.tar.gz; do
         [ -f "$vol_file" ] || continue
         vol_name=$(echo "$vol_file" | sed 's/^vol_//' | sed 's/\\.tar.gz$//' | tr '_' '/')
+        if ! printf '%s' "$vol_name" | grep -Eq '^[a-zA-Z0-9][a-zA-Z0-9_.-]{{0,127}}$'; then
+            echo "WARNING: skipping unsafe derived volume name '$vol_name'"
+            continue
+        fi
         docker volume create "$vol_name" 2>/dev/null || true
         docker run --rm -v "$vol_name":/v -v "{remote_tmp}":/backup alpine:latest tar -xzf "/backup/$vol_file" -C /v || true
     done
@@ -122,6 +204,10 @@ if [ -f addon_manifest.json ]; then
         if [ -z "$addon_ctr" ]; then
             echo "WARNING: no manifest entry for $addon_file, skipping"
             continue
+        fi
+        if ! printf '%s' "$addon_ctr" | grep -Eq '^smsly-addon-[a-z0-9-]+$'; then
+            echo "ERROR: unsafe addon container name '$addon_ctr' in manifest"
+            exit 1
         fi
         if ! docker inspect "$addon_ctr" >/dev/null 2>&1; then
             echo "ERROR: addon container $addon_ctr for $addon_file is missing — cannot restore"
@@ -194,7 +280,7 @@ def _addon_dump_slug(addon_name: str) -> str:
     return _re_mod.sub(r'[^a-z0-9]+', '-', (addon_name or 'addon').lower()).strip('-') or 'db'
 
 
-def build_remote_backup_script(service_name: str, addons: list, mask_secrets: bool = True) -> str:
+def build_remote_backup_script(service_name: str, addons: list, mask_secrets: bool = True, volume_names: list | None = None) -> str:
     """Render the node-side backup shell script (pure function, unit-tested).
 
     addons: [{name, container, type}]. mask_secrets=False only for
@@ -254,7 +340,8 @@ fi""")
             filename = f'addon_{slug}_dump.rdb'
             addon_blocks.append(f"""
 if docker inspect {_shlex.quote(container)} >/dev/null 2>&1; then
-    docker exec {_shlex.quote(container)} redis-cli SAVE >/dev/null 2>&1 || true
+    _RD_PW=$(docker inspect -f '{{{{range .Config.Env}}}}{{{{println .}}}}{{{{end}}}}' {_shlex.quote(container)} 2>/dev/null | grep '^REDIS_PASSWORD=' | cut -d= -f2- | head -n 1)
+    docker exec -e REDISCLI_AUTH="$_RD_PW" {_shlex.quote(container)} sh -c 'if [ -f /etc/redis/tls/ca.crt ]; then redis-cli --tls --cacert /etc/redis/tls/ca.crt ${{_RD_PW:+-a "$_RD_PW"}} SAVE; else redis-cli ${{_RD_PW:+-a "$_RD_PW"}} SAVE; fi' >/dev/null 2>&1 || true
     docker cp {_shlex.quote(container)}:/data/dump.rdb "{filename}" 2>/dev/null && echo "addon dump ok: {name}" || echo "WARNING: addon rdb copy failed for {name}"
 else
     echo "WARNING: addon container {name} missing on node — skipped"
@@ -264,6 +351,11 @@ fi""")
                 f'"filename":"{filename}","type":"{kind}"}}')
     manifest_json = "[" + ",".join(manifest_entries) + "]"
     addon_section = "\n".join(addon_blocks) if addon_blocks else 'echo "no addon DBs to dump"'
+    quoted_volume_checks = "\n".join(
+        f"docker volume inspect {_shlex.quote(vname)} >/dev/null 2>&1 || true"
+        for vname in (volume_names or [])
+        if vname
+    )
     return f"""set -e
 BACKUP_DIR=/tmp/smsly_backup_$(date +%s)
 mkdir -p "$BACKUP_DIR"
@@ -299,6 +391,7 @@ docker save "backup_{svc}_img" -o image.tar
 echo '{manifest_json}' > addon_manifest.json
 
 # Dump volumes
+{quoted_volume_checks}
 echo "[" > "$BACKUP_DIR/volume_manifest.json"
 FIRST_ENTRY=1
 for vol in $(docker inspect "$SERVICE_NAME" | python3 -c "
@@ -360,26 +453,36 @@ class BackupService:
 
     @staticmethod
     def _get_backups_dir(subdir: str) -> str:
-        primary = os.path.join('/app', 'backups', subdir)
-        os.makedirs(primary, exist_ok=True)
-        test_file = os.path.join(primary, '.write_test')
+        base_root = os.environ.get('SMSLY_BACKUPS_DIR') or getattr(settings, 'BACKUP_ROOT', None) or os.path.join('/app', 'backups')
+        primary = os.path.join(str(base_root), subdir)
         try:
+            os.makedirs(primary, exist_ok=True)
+            test_file = os.path.join(primary, '.write_test')
             with open(test_file, 'w') as f:
                 f.write('ok')
             os.remove(test_file)
             return primary
         except (PermissionError, OSError) as e:
+            if getattr(settings, 'IS_TESTING', False):
+                fallback = os.path.join(tempfile.gettempdir(), 'smsly-test-backups', subdir)
+                os.makedirs(fallback, exist_ok=True)
+                return fallback
             raise RuntimeError(
                 f"Cannot write to backup directory {primary}: {e}. "
                 "Check that the backups_data volume is mounted and writable."
             ) from e
 
     @staticmethod
-    def _attach_cryptd_backup_envelope(metadata: dict, service_id: str, project_id: str) -> None:
+    def _attach_cryptd_backup_envelope(
+        metadata: dict,
+        service_id: str,
+        project_id: str,
+        encryption_key: str | None = None,
+    ) -> None:
         """Bind backup DEK wrapping to grid-cryptd for opted-in services or control plane."""
         from apps.core.crypto_daemon import CryptdError, cryptd_client
 
-        raw_enc_key = BackupService._get_encryption_key()
+        raw_enc_key = (encryption_key or "").strip() or BackupService._get_encryption_key()
         key_raw_bytes = BackupService._decode_backup_key(raw_enc_key) if raw_enc_key else b""
         if not key_raw_bytes:
             raise BackupEncryptionRequired(
@@ -403,10 +506,16 @@ class BackupService:
 
     @staticmethod
     def _decode_backup_key(key: str) -> bytes:
+        if not key or not isinstance(key, (str, bytes)):
+            raise ValueError("Invalid backup key (expected non-empty base64 string)")
         try:
-            return base64.urlsafe_b64decode(key)
-        except (binascii.Error, ValueError) as exc:
-            raise ValueError(f"Invalid backup key (expected base64): {exc}") from exc
+            Fernet(key.encode() if isinstance(key, str) else key)
+            raw = base64.urlsafe_b64decode(key)
+        except (binascii.Error, ValueError, TypeError) as exc:
+            raise ValueError(f"Invalid backup key (expected 32-byte Fernet base64 key): {exc}") from exc
+        if len(raw) != 32:
+            raise ValueError(f"Invalid backup key length: expected 32 bytes, got {len(raw)}")
+        return raw
 
     @staticmethod
     def _read_exact(file_obj, size: int) -> bytes:
@@ -421,17 +530,27 @@ class BackupService:
     def get_encryption_header(filepath: str) -> dict | None:
         try:
             with open(filepath, 'rb') as f:
+                magic_v3 = f.read(len(_CHUNKED_BACKUP_V3_MAGIC))
+                if magic_v3 in (_CHUNKED_BACKUP_V2_MAGIC, _CHUNKED_BACKUP_V3_MAGIC):
+                    key_id_raw = f.read(_CHUNKED_BACKUP_KEY_ID_BYTES)
+                    fingerprint_raw = f.read(_CHUNKED_BACKUP_FINGERPRINT_BYTES)
+                    nonce_prefix = f.read(_CHUNKED_BACKUP_NONCE_PREFIX_BYTES)
+                    ver = 'v3' if magic_v3 == _CHUNKED_BACKUP_V3_MAGIC else 'v2'
+                    return {
+                        'format': ver,
+                        'magic': magic_v3.decode(),
+                        'key_id': key_id_raw.hex(),
+                        'fingerprint': fingerprint_raw.hex(),
+                        'nonce_prefix': nonce_prefix.hex(),
+                    }
+                f.seek(0)
                 magic = f.read(len(_CHUNKED_BACKUP_MAGIC))
                 if magic == _CHUNKED_BACKUP_MAGIC:
                     nonce_prefix = f.read(_CHUNKED_BACKUP_NONCE_PREFIX_BYTES)
-                    key_id_raw = f.read(_CHUNKED_BACKUP_KEY_ID_BYTES)
-                    fingerprint_raw = f.read(_CHUNKED_BACKUP_FINGERPRINT_BYTES)
                     header = {
                         'format': 'v1',
                         'magic': magic.decode(),
                         'nonce_prefix': nonce_prefix.hex(),
-                        'key_id': int.from_bytes(key_id_raw, 'big'),
-                        'fingerprint': fingerprint_raw.hex(),
                     }
                     return header
                 f.seek(0)
@@ -484,14 +603,20 @@ class BackupService:
             fingerprint=fingerprint,
         ).first()
         if existing:
-            return {'key_id': str(existing.id), 'fingerprint': fingerprint, 'created': False}
+            if not existing.is_active:
+                BackupEncryptionKey.objects.filter(is_active=True).exclude(pk=existing.pk).update(is_active=False)
+                existing.is_active = True
+                existing.save(update_fields=['is_active'])
+            return {'key_id': existing.key_id, 'fingerprint': fingerprint, 'created': False}
+        BackupEncryptionKey.objects.filter(is_active=True).update(is_active=False)
         obj = BackupEncryptionKey.objects.create(
             key_id=uuid.uuid4().hex[:8],
             fingerprint=fingerprint,
             key_material_encrypted=key_material,
+            source='AUTO',
             is_active=True,
         )
-        return {'key_id': str(obj.id), 'fingerprint': fingerprint, 'created': True}
+        return {'key_id': obj.key_id, 'fingerprint': fingerprint, 'created': True}
 
     @staticmethod
     def lookup_key_by_id(key_id: str | int) -> str | None:
@@ -526,16 +651,26 @@ class BackupService:
     def read_v2_header(path: str) -> dict:
         with open(path, 'rb') as f:
             magic = f.read(len(_CHUNKED_BACKUP_V2_MAGIC))
-            if magic != _CHUNKED_BACKUP_V2_MAGIC:
+            if magic == _CHUNKED_BACKUP_V3_MAGIC:
+                magic_tag = 'V3'
+            elif magic == _CHUNKED_BACKUP_V2_MAGIC:
+                magic_tag = 'V2'
+            else:
                 raise ValueError("Not a V2 backup format")
-            nonce_prefix = f.read(_CHUNKED_BACKUP_NONCE_PREFIX_BYTES)
             key_id_raw = f.read(_CHUNKED_BACKUP_KEY_ID_BYTES)
             fingerprint_raw = f.read(_CHUNKED_BACKUP_FINGERPRINT_BYTES)
-            key_id = int.from_bytes(key_id_raw, 'big')
+            nonce_prefix = f.read(_CHUNKED_BACKUP_NONCE_PREFIX_BYTES)
+            if (
+                len(key_id_raw) != _CHUNKED_BACKUP_KEY_ID_BYTES
+                or len(fingerprint_raw) != _CHUNKED_BACKUP_FINGERPRINT_BYTES
+                or len(nonce_prefix) != _CHUNKED_BACKUP_NONCE_PREFIX_BYTES
+            ):
+                raise ValueError("Truncated V2/V3 backup header")
             return {
-                'magic': magic.decode(),
+                'magic': magic_tag,
+                'format': f'CHUNKED_{magic_tag}',
                 'nonce_prefix': nonce_prefix.hex(),
-                'key_id': key_id,
+                'key_id': key_id_raw.hex(),
                 'fingerprint': fingerprint_raw.hex(),
             }
 
@@ -626,7 +761,7 @@ class BackupService:
         except Exception as exc:
             raise ValueError(f'Failed to import backup key: {exc}') from exc
 
-    def _prepare_archive_for_restore(self, backup) -> tuple[str, str | None]:
+    def _prepare_archive_for_restore(self, backup, encryption_key: str | None = None) -> tuple[str, str | None]:
         if isinstance(backup, str):
             path = backup
             expected_hash = None
@@ -659,22 +794,22 @@ class BackupService:
         if not path.endswith(".enc"):
             return path, None
 
-        key = BackupService._get_encryption_key()
+        key = (encryption_key or "").strip() or BackupService._get_encryption_key()
         if not key:
             raise ValueError("Encrypted backup detected but BACKUP_ENCRYPTION_KEY is not set.")
         decrypted_path = BackupService.decrypt_backup(path, key)
         return decrypted_path, decrypted_path
 
-    def backup_service(self, service_id, backup_id=None, backup_type='MANUAL', db_only=False) -> ServiceBackup:
+    def backup_service(self, service_id, backup_id=None, backup_type='MANUAL', db_only=False, encryption_key: str | None = None) -> ServiceBackup:
         lock_token = _acquire_service_lock(str(service_id), 'backup')
         if not lock_token:
             raise RuntimeError(f"Another backup/restore is already in progress for service {service_id}")
         try:
-            return self._backup_service_inner(service_id, backup_id, backup_type, db_only)
+            return self._backup_service_inner(service_id, backup_id, backup_type, db_only, encryption_key=encryption_key)
         finally:
             _release_service_lock(str(service_id), lock_token)
 
-    def _backup_service_inner(self, service_id, backup_id=None, backup_type='MANUAL', db_only=False) -> ServiceBackup:
+    def _backup_service_inner(self, service_id, backup_id=None, backup_type='MANUAL', db_only=False, encryption_key: str | None = None) -> ServiceBackup:
         service = Service.objects.get(id=service_id)
 
         if backup_id:
@@ -706,7 +841,10 @@ class BackupService:
                 'SERVER_TRANSFER',
                 'PRE_TRANSFER',
             }
-            return self._backup_remote_service(service, backup, server_obj, include_secret_values)
+            return self._backup_remote_service(
+                service, backup, server_obj, include_secret_values,
+                encryption_key=encryption_key,
+            )
 
         if not self.docker_client:
             backup.status = 'FAILED'
@@ -720,6 +858,7 @@ class BackupService:
             )
 
         temp_dir = None
+        image_tag = None
         try:
             include_secret_values = str(backup_type or '').upper() in {
                 'TRANSFER',
@@ -888,7 +1027,25 @@ class BackupService:
                     content_checksum.update(chunk)
             metadata['content_checksum_sha256'] = content_checksum.hexdigest()
 
-            filepath = self._maybe_encrypt(filepath)
+            filepath = self._maybe_encrypt(filepath, encryption_key=encryption_key)
+            try:
+                max_size_raw = os.environ.get('BACKUP_MAX_SIZE_BYTES')
+                if max_size_raw is None:
+                    from django.conf import settings as _dj_settings
+                    max_size_raw = getattr(_dj_settings, 'BACKUP_MAX_SIZE_BYTES', 50 * 1024 * 1024 * 1024)
+                max_size_bytes = int(max_size_raw)
+            except (TypeError, ValueError):
+                max_size_bytes = 50 * 1024 * 1024 * 1024
+            actual_size = os.path.getsize(filepath) if os.path.exists(filepath) else 0
+            if max_size_bytes > 0 and actual_size > max_size_bytes:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+                if tarball_path != filepath and os.path.exists(tarball_path):
+                    os.remove(tarball_path)
+                raise RuntimeError(
+                    f"Backup archive size ({actual_size} bytes) exceeds maximum "
+                    f"allowed size ({max_size_bytes} bytes, BACKUP_MAX_SIZE_BYTES)."
+                )
             try:
                 from apps.core.crypto_daemon import (
                     cryptd_client,
@@ -897,7 +1054,7 @@ class BackupService:
                 if cryptd_client.is_enabled() and is_service_encryption_enabled(service):
                     svc_proj_id = str(getattr(service, 'project_id', '') or 'default')
                     BackupService._attach_cryptd_backup_envelope(
-                        metadata, str(service.id), svc_proj_id
+                        metadata, str(service.id), svc_proj_id, encryption_key=encryption_key
                     )
             except (BackupEncryptionRequired, RuntimeError):
                 raise
@@ -959,7 +1116,7 @@ class BackupService:
             except Exception as exc:
                 logger.debug("Failed to remove backup image %s: %s", image_tag, exc)
 
-    def restore_service(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=True):
+    def restore_service(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=True, encryption_key: str | None = None):
         try:
             backup = ServiceBackup.objects.get(id=backup_id)
         except ServiceBackup.DoesNotExist:
@@ -969,11 +1126,11 @@ class BackupService:
         if not lock_token:
             raise RuntimeError(f"Another backup/restore is already in progress for service {service_id}")
         try:
-            return self._restore_service_inner(backup_id, target_service_id, requesting_user_id, raise_on_snapshot_failure)
+            return self._restore_service_inner(backup_id, target_service_id, requesting_user_id, raise_on_snapshot_failure, encryption_key=encryption_key)
         finally:
             _release_service_lock(str(service_id), lock_token)
 
-    def _restore_service_inner(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=True):
+    def _restore_service_inner(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=True, encryption_key: str | None = None):
         snapshot_for_rollback = None
         try:
             backup = ServiceBackup.objects.get(id=backup_id)
@@ -988,12 +1145,9 @@ class BackupService:
         is_remote, server_obj, _via = _resolve_backup_target(target_service)
 
         if is_remote:
-            self.backup_service(target_service.id, backup_type='PRE_TRANSFER')
+            self._backup_service_inner(target_service.id, backup_type='PRE_TRANSFER', encryption_key=encryption_key)
 
-        if not is_remote and not self.docker_client:
-            raise RuntimeError("Docker is not available. Restores require a running Docker daemon.")
-
-        archive_path, cleanup_archive = self._prepare_archive_for_restore(backup)
+        archive_path, cleanup_archive = self._prepare_archive_for_restore(backup, encryption_key=encryption_key)
         if is_remote:
             return self._restore_remote_service(backup, target_service, server_obj, tempfile.mkdtemp(), archive_path, cleanup_archive)
 
@@ -1008,7 +1162,12 @@ class BackupService:
 
             for fname in extracted_files:
                 if fname == 'image.tar':
+                    if not self.docker_client:
+                        raise RuntimeError("Docker is not available. Restores require a running Docker daemon.")
                     image_path = os.path.join(temp_dir, fname)
+                    safe_repo = f"restored/{slugify(target_service.name) or 'service'}"
+                    safe_tag = uuid.uuid4().hex[:8]
+                    _sanitize_image_tar(image_path, safe_repo=safe_repo, safe_tag=safe_tag)
                     with open(image_path, 'rb') as f:
                         images_loaded = self.docker_client.images.load(f)
                     logger.info(f"Loaded {len(images_loaded)} images from image.tar")
@@ -1030,6 +1189,8 @@ class BackupService:
                     db_dump_path = os.path.join(temp_dir, fname)
                     break
             if db_dump_path:
+                if not self.docker_client:
+                    raise RuntimeError("Docker is not available. Restores require a running Docker daemon.")
                 # NOTE: an earlier revision wrote target_service.container_count
                 # (a field that does not exist on Service — every DB restore
                 # crashed with AttributeError). The intended bookkeeping is
@@ -1085,6 +1246,7 @@ class BackupService:
                                if '=' in e}
                     pg_user = ctr_env.get('POSTGRES_USER', 'postgres')
                     pg_db = ctr_env.get('POSTGRES_DB', 'postgres')
+                    pg_pw = ctr_env.get('POSTGRES_PASSWORD', '')
                     # Validate against the container env to prevent injection
                     import re as _re
                     if not _re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', pg_user):
@@ -1093,23 +1255,35 @@ class BackupService:
                         pg_db = 'postgres'
 
                     result = ctr.exec_run(
-                        ['psql', '-U', pg_user, '-d', pg_db,
-                         '-f', db_dest]
-                        ,
+                        ['psql', '-U', pg_user, '-d', pg_db, '-f', db_dest],
+                        environment={'PGPASSWORD': pg_pw} if pg_pw else None,
                     )
                     logger.info(f"psql restore exit: {result.exit_code}, output: {result.output[:200] if result.output else '(none)'}")
+                    if result.exit_code != 0:
+                        raise RuntimeError(
+                            f"psql restore failed (exit {result.exit_code}): "
+                            f"{(result.output or b'')[:200]}"
+                        )
                 elif fname == 'redis_dump.rdb':
-                    ctr.exec_run(['redis-cli', 'FLUSHALL'])
-                    with open(db_dump_path, 'rb') as f:
-                        ctr.exec_run(['redis-cli', '--pipe'], data_input=f.read())
+                    ctr_env = {e.split('=', 1)[0]: e.split('=', 1)[1]
+                               for e in (ctr.attrs.get('Config', {}).get('Env', []))
+                               if '=' in e}
+                    redis_pw = ctr_env.get('REDIS_PASSWORD', '')
+                    _exec_redis_cli(ctr, ['FLUSHALL'], redis_pw=redis_pw)
+                    _copy_file_to_container(self.docker_client, ctr.id, db_dump_path, '/data/dump.rdb')
+                    ctr.restart(timeout=30)
 
             # Addon database dumps (metadata['addon_dumps'] manifest).
             # Restored into the same-named addon with live credentials;
             # missing file/addon fails loudly (silent skip = data loss).
-            from .operations import _restore_addon_dump
-            for entry in (backup.metadata or {}).get('addon_dumps', []):
-                _restore_addon_dump(
-                    self.docker_client, target_service, entry, temp_dir)
+            addon_dumps = (backup.metadata or {}).get('addon_dumps', [])
+            if addon_dumps:
+                if not self.docker_client:
+                    raise RuntimeError("Docker is not available. Restores require a running Docker daemon.")
+                from .operations import _restore_addon_dump
+                for entry in addon_dumps:
+                    _restore_addon_dump(
+                        self.docker_client, target_service, entry, temp_dir)
 
             restore_warnings: list = []
             vol_files = [f for f in extracted_files if f.startswith('volume_') and f.endswith('.tar.gz')]
@@ -1134,6 +1308,16 @@ class BackupService:
                     restore_warnings.append(f"volume:{vol_file}:no-matching-volume")
                     continue
 
+                vol_path = os.path.join(temp_dir, vol_file)
+                if not os.path.isfile(vol_path):
+                    raise RuntimeError(f"Volume backup archive missing for {target_vol.name}: {vol_path}")
+                if not _SAFE_DOCKER_VOLUME_RE.fullmatch(str(target_vol.name or '')):
+                    raise ValueError(f"Unsafe volume name rejected during restore: {target_vol.name!r}")
+                # Validate tar readability & safety BEFORE removing the live volume.
+                _validate_tar_members(vol_path)
+
+                if not self.docker_client:
+                    raise RuntimeError("Docker is not available. Restores require a running Docker daemon.")
                 try:
                     existing_vol = self.docker_client.volumes.get(target_vol.name)
                     existing_vol.remove(force=True)
@@ -1142,11 +1326,9 @@ class BackupService:
 
                 self.docker_client.volumes.create(name=target_vol.name)
 
-                vol_path = os.path.join(temp_dir, vol_file)
-
                 helper = self.docker_client.containers.run(
                     'alpine:latest',
-                    command=['tar', '-xzf', '/backup/volume.tar.gz', '-C', '/volume_data'],
+                    command=['tar', '-xzf', f'/backup/{vol_file}', '-C', '/volume_data'],
                     volumes={
                         target_vol.name: {'bind': '/volume_data', 'mode': 'rw'},
                         temp_dir: {'bind': '/backup', 'mode': 'ro'},
@@ -1218,12 +1400,6 @@ class BackupService:
                 except AttributeError:
                     pass
 
-            if cleanup_archive:
-                try:
-                    os.remove(cleanup_archive)
-                except OSError as exc:
-                    logger.debug("Failed to remove archive %s: %s", cleanup_archive, exc)
-
             # NOTE: the cloud object is deliberately KEPT. An earlier
             # revision deleted it here — a restore that destroys the
             # off-site copy defeats the purpose of cloud backups. Cloud
@@ -1240,13 +1416,18 @@ class BackupService:
             traceback.print_exc()
             raise
         finally:
+            if cleanup_archive:
+                try:
+                    os.remove(cleanup_archive)
+                except OSError as exc:
+                    logger.debug("Failed to remove archive %s: %s", cleanup_archive, exc)
             if temp_dir:
                 try:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                 except Exception:
                     pass  # best-effort cleanup in finally block
 
-    def _backup_remote_service(self, service, backup, server, include_secret_values) -> ServiceBackup:
+    def _backup_remote_service(self, service, backup, server, include_secret_values, encryption_key: str | None = None) -> ServiceBackup:
         logger.info("Starting remote backup for %s on server %s", service.name, server.host)
         from apps.deployments.services.ssh_client import SSHClient
         ssh = SSHClient(
@@ -1270,8 +1451,9 @@ class BackupService:
                               or f"smsly-addon-{(_a.addon_type or '').lower()}-{_a.id}"),
                 'type': _a.addon_type,
             })
+        _vol_names = [v.name for v in Volume.objects.filter(service=service)]
         remote_backup_script = build_remote_backup_script(
-            service.name, _specs, mask_secrets=not include_secret_values)
+            service.name, _specs, mask_secrets=not include_secret_values, volume_names=_vol_names)
         out, err, exit_status = ssh.exec_command(remote_backup_script, timeout=600)
         output = out or ''
         error_out = err or ''
@@ -1308,7 +1490,7 @@ class BackupService:
         # at rest too. Checksums are computed by _maybe_encrypt's caller
         # in the local path; here we record the encrypted-file checksum.
         try:
-            encrypted_path = self._maybe_encrypt(local_path)
+            encrypted_path = self._maybe_encrypt(local_path, encryption_key=encryption_key)
             if encrypted_path != local_path:
                 enc_checksum = hashlib.sha256()
                 with open(encrypted_path, 'rb') as f:
@@ -1353,7 +1535,7 @@ class BackupService:
                 if cryptd_client.is_enabled() and is_service_encryption_enabled(service):
                     svc_proj_id = str(getattr(service, 'project_id', '') or 'default')
                     BackupService._attach_cryptd_backup_envelope(
-                        metadata, str(service.id), svc_proj_id
+                        metadata, str(service.id), svc_proj_id, encryption_key=encryption_key
                     )
             except (BackupEncryptionRequired, RuntimeError):
                 if os.path.exists(encrypted_path):
@@ -1377,46 +1559,51 @@ class BackupService:
     def _restore_remote_service(self, backup, target_service, server, temp_dir, archive_path, cleanup_archive):
         logger.info("Starting remote restore for %s on server %s", target_service.name, server.host)
         from apps.deployments.services.ssh_client import SSHClient
-        ssh = SSHClient(
-            ip=server.host, password=server.ssh_password,
-            user=server.ssh_user, port=server.ssh_port,
-            key_content=server.ssh_key, wg_address=server.wg_address,
-        )
-        ssh.connect()
+        ssh = None
+        try:
+            ssh = SSHClient(
+                ip=server.host, password=server.ssh_password,
+                user=server.ssh_user, port=server.ssh_port,
+                key_content=server.ssh_key, wg_address=server.wg_address,
+            )
+            ssh.connect()
 
-        remote_tmp = f"/tmp/smsly_restore_{uuid.uuid4().hex}"
-        ssh.exec_command(f"mkdir -p {remote_tmp}", raise_on_error=False)
+            remote_tmp = f"/tmp/smsly_restore_{uuid.uuid4().hex}"
+            ssh.exec_command(f"mkdir -p {remote_tmp}", raise_on_error=False)
 
-        remote_archive = f"{remote_tmp}/backup_archive.tar.gz"
-        ssh.upload_file(archive_path, remote_archive)
+            remote_archive = f"{remote_tmp}/backup_archive.tar.gz"
+            ssh.upload_file(archive_path, remote_archive)
 
-        remote_restore_script = build_remote_restore_script(
-            target_service.name, remote_tmp)
-        out, err, exit_status = ssh.exec_command(remote_restore_script, timeout=600)
-        error_out = err or ''
-        if exit_status != 0:
-            raise RuntimeError(
-                f"Remote restore failed for {target_service.name}: node "
-                f"script exit {exit_status}: {(error_out or out)[:500]}")
-        if error_out:
-            logger.info("Remote restore stderr: %s", error_out[:500])
-        ssh.close()
+            remote_restore_script = build_remote_restore_script(
+                target_service.name, remote_tmp)
+            out, err, exit_status = ssh.exec_command(remote_restore_script, timeout=600)
+            error_out = err or ''
+            if exit_status != 0:
+                raise RuntimeError(
+                    f"Remote restore failed for {target_service.name}: node "
+                    f"script exit {exit_status}: {(error_out or out)[:500]}")
+            if error_out:
+                logger.info("Remote restore stderr: %s", error_out[:500])
 
-        if cleanup_archive:
-            try:
-                os.remove(archive_path)
-                if cleanup_archive != archive_path:
-                    os.remove(cleanup_archive)
-            except OSError as exc:
-                logger.debug("Failed to remove archive files: %s", exc)
+            # NOTE: cloud object deliberately KEPT (see service restore).
 
-        # NOTE: cloud object deliberately KEPT (see service restore).
+            backup.restored_at = timezone.now()
+            backup.restore_count = (backup.restore_count or 0) + 1
+            backup.save(update_fields=['restored_at', 'restore_count'])
 
-        backup.restored_at = timezone.now()
-        backup.restore_count = (backup.restore_count or 0) + 1
-        backup.save(update_fields=['restored_at', 'restore_count'])
-
-        return {'service_id': str(target_service.id), 'status': 'restored_remote'}
+            return {'service_id': str(target_service.id), 'status': 'restored_remote'}
+        finally:
+            if ssh is not None:
+                with contextlib.suppress(Exception):
+                    ssh.close()
+            if temp_dir and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            if cleanup_archive:
+                with contextlib.suppress(OSError):
+                    if os.path.exists(archive_path):
+                        os.remove(archive_path)
+                    if cleanup_archive != archive_path and os.path.exists(cleanup_archive):
+                        os.remove(cleanup_archive)
 
     @staticmethod
     def _split_image_reference(image_ref):
@@ -1427,7 +1614,7 @@ class BackupService:
             return parts[0], parts[1]
         return image_ref, 'latest'
 
-    def backup_server(self, backup_id=None, db_only=False, backup_type='SERVER'):
+    def backup_server(self, backup_id=None, db_only=False, backup_type='SERVER', encryption_key: str | None = None):
         from apps.deployments.models import Service as Svc
 
         # TRANSFER backups include real secret values (the target node
@@ -1597,15 +1784,17 @@ class BackupService:
                 _res = _primary.exec_run(
                     ['pg_dumpall', '-U', _du, '--clean', '--if-exists',
                      '--no-role-passwords', '--lock-wait-timeout=5000'],
-                    environment={'PGPASSWORD': _dp}
-                    ,
+                    environment={'PGPASSWORD': _dp},
+                    demux=True,
                 )
+                from .operations import _unpack_exec_demux
+                _stdout_b, _stderr_b = _unpack_exec_demux(_res.output)
                 if _res.exit_code != 0:
                     raise RuntimeError(
                         f"pg_dumpall exit {_res.exit_code}: "
-                        f"{(_res.output or b'')[:200]}")
+                        f"{(_stderr_b or _stdout_b)[:200]}")
                 with open(os.path.join(temp_dir, 'controlplane_dump.sql'), 'wb') as f:
-                    f.write(_res.output)
+                    f.write(_stdout_b)
                 metadata['controlplane_dump'] = 'controlplane_dump.sql'
                 logger.info("Server backup: control-plane dump successful")
             except Exception as ce:
@@ -1657,7 +1846,7 @@ class BackupService:
             metadata['content_checksum_sha256'] = content_checksum.hexdigest()
 
             try:
-                filepath = self._maybe_encrypt(filepath)
+                filepath = self._maybe_encrypt(filepath, encryption_key=encryption_key)
                 from apps.core.crypto_daemon import _parse_bool, cryptd_client, is_service_encryption_enabled
                 wrap_control_plane = _parse_bool(os.environ.get('CRYPTD_CONTROL_PLANE_BACKUP_ENCRYPT'), default=False)
                 has_opted_service = any(is_service_encryption_enabled(svc) for svc in services)
@@ -1666,6 +1855,7 @@ class BackupService:
                         metadata,
                         cryptd_client.CONTROL_PLANE_SERVICE_ID,
                         cryptd_client.CONTROL_PLANE_PROJECT_ID,
+                        encryption_key=encryption_key,
                     )
             except Exception:
                 if os.path.exists(tarball_path):
@@ -1715,7 +1905,7 @@ class BackupService:
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-    def restore_server(self, backup_id, requesting_user_id=None, raise_on_snapshot_failure=False):
+    def restore_server(self, backup_id, requesting_user_id=None, raise_on_snapshot_failure=False, encryption_key: str | None = None):
         try:
             backup = ServerBackup.objects.get(id=backup_id)
         except ServerBackup.DoesNotExist:
@@ -1727,7 +1917,7 @@ class BackupService:
         if not self.docker_client:
             raise RuntimeError("Docker is not available. Restores require a running Docker daemon.")
 
-        archive_path, cleanup_archive = self._prepare_archive_for_restore(backup)
+        archive_path, cleanup_archive = self._prepare_archive_for_restore(backup, encryption_key=encryption_key)
         temp_dir = tempfile.mkdtemp()
 
         try:
@@ -1758,11 +1948,17 @@ class BackupService:
                     vol_name = _ventry.get('volume', '')
                     if not vol_file or not vol_name:
                         continue
+                    if not _SAFE_DOCKER_VOLUME_RE.fullmatch(str(vol_name)):
+                        raise ValueError(f"Server restore: unsafe volume name {vol_name!r}")
                     if vol_file not in extracted:
                         raise RuntimeError(
                             f"Server restore: volume file {vol_file} for service {svc_name} "
                             "listed in manifest but missing from archive")
                     vol_path = os.path.join(temp_dir, vol_file)
+                    if not os.path.isfile(vol_path):
+                        raise RuntimeError(
+                            f"Server restore: volume archive {vol_file} is not a file")
+                    _validate_tar_members(vol_path)
                     try:
                         vol = Volume.objects.get(service=svc, name=vol_name)
                         try:
@@ -1781,18 +1977,33 @@ class BackupService:
                             detach=True, remove=False,
                         )
                         try:
-                            helper.wait(timeout=120)
+                            res_exit = helper.wait(timeout=120)
+                            if res_exit.get('StatusCode', 1) != 0:
+                                raise RuntimeError(f"Volume restore failed for {vol.name} (exit {res_exit.get('StatusCode')})")
                         finally:
                             helper.remove(force=True)
                     except Volume.DoesNotExist:
                         logger.warning(f"Volume {vol_name} not found in DB")
 
             # Addon data volumes (real Docker volume names from manifest).
+            from apps.deployments.models.addons import Addon as _AddonModel
+            _known_addon_vols = {
+                f"smsly-addon-{(a.addon_type or '').lower()}-{a.id}-data"
+                for a in _AddonModel.objects.only('id', 'addon_type')
+            }
             for aventry in metadata.get('addon_volumes', []):
                 _afile = aventry.get('filename', '')
                 _avol = aventry.get('volume', '')
                 if not _afile or _afile not in extracted or not _avol:
                     continue
+                if not _SAFE_DOCKER_VOLUME_RE.fullmatch(str(_avol)) or (
+                    _known_addon_vols and _avol not in _known_addon_vols and not _avol.startswith('smsly-addon-')
+                ):
+                    raise ValueError(f"Server restore: unsafe or unowned addon volume {_avol!r}")
+                _apath = os.path.join(temp_dir, _afile)
+                if not os.path.isfile(_apath):
+                    raise RuntimeError(f"Server restore: addon volume archive {_afile} missing")
+                _validate_tar_members(_apath)
                 try:
                     try:
                         docker_vol = self.docker_client.volumes.get(_avol)
@@ -1810,7 +2021,9 @@ class BackupService:
                         detach=True, remove=False,
                     )
                     try:
-                        helper.wait(timeout=180)
+                        res_exit = helper.wait(timeout=180)
+                        if res_exit.get('StatusCode', 1) != 0:
+                            raise RuntimeError(f"Addon volume restore failed for {_avol} (exit {res_exit.get('StatusCode')})")
                     finally:
                         helper.remove(force=True)
                     logger.info("Server restore: addon volume %s restored", _avol)
@@ -1873,15 +2086,49 @@ class BackupService:
     def _restore_platform_config(self, config_path):
         pass
 
-    def _restore_service_from_file(self, filepath, owner=None):
+    def _restore_service_from_file(self, filepath, owner=None, target_service=None):
         temp_dir = tempfile.mkdtemp()
+        decrypted_tmp = None
         try:
-            with tarfile.open(filepath, 'r:gz') as tar:
+            archive_path, decrypted_tmp = self._prepare_archive_for_restore(filepath)
+            with tarfile.open(archive_path, 'r:gz') as tar:
                 _safe_tar_extractall(tar, temp_dir)
             extracted = os.listdir(temp_dir)
-            logger.info(f"Restoring service from file: {extracted}")
-            return {'status': 'restored', 'files': extracted}
+
+            svc = target_service
+            meta = {}
+            meta_path = os.path.join(temp_dir, 'metadata.json')
+            if os.path.isfile(meta_path):
+                with open(meta_path, 'r', encoding='utf-8') as mf:
+                    meta = json.load(mf)
+            if svc is None:
+                svc_id = meta.get('service_id')
+                svc_name = meta.get('service_name')
+                qs = Service.objects.filter(owner=owner) if owner is not None else Service.objects.all()
+                if svc_id:
+                    svc = qs.filter(id=svc_id).first()
+                if svc is None and svc_name:
+                    svc = qs.filter(name=svc_name).first()
+            if svc is None:
+                raise ValueError("Target service could not be resolved for uploaded backup")
+
+            backup = ServiceBackup.objects.create(
+                service=svc,
+                status='COMPLETED',
+                file_path=filepath,
+                backup_type='MANUAL',
+                metadata=meta,
+                size_bytes=os.path.getsize(filepath) if os.path.exists(filepath) else 0,
+            )
+            return self.restore_service(
+                backup.id,
+                target_service_id=svc.id,
+                requesting_user_id=getattr(owner, 'id', None),
+            )
         finally:
+            if decrypted_tmp and os.path.exists(decrypted_tmp):
+                with contextlib.suppress(OSError):
+                    os.remove(decrypted_tmp)
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     @staticmethod
@@ -1948,9 +2195,27 @@ class BackupService:
             except Exception as exc:
                 raise ValueError(f"Backup locked or refused by grid-cryptd: {exc}") from exc
 
+        is_chunked_file = False
+        try:
+            with open(path, 'rb') as _mf:
+                _head = _mf.read(len(_CHUNKED_BACKUP_V3_MAGIC))
+                is_chunked_file = _head in (
+                    _CHUNKED_BACKUP_MAGIC,
+                    _CHUNKED_BACKUP_V2_MAGIC,
+                    _CHUNKED_BACKUP_V3_MAGIC,
+                )
+        except OSError:
+            pass
+
         try:
             return BackupService._decrypt_chunked_backup(path, key)
+        except UnknownBackupKeyIdError:
+            raise
         except (ValueError, InvalidToken, Exception) as e1:
+            if is_chunked_file:
+                if isinstance(e1, ValueError):
+                    raise
+                raise ValueError(f"Chunked backup decryption failed: {e1}") from e1
             logger.info("Chunked decryption failed, trying legacy Fernet: %s", e1)
             try:
                 return BackupService._decrypt_legacy_fernet_backup(path, key)
@@ -1965,64 +2230,70 @@ class BackupService:
         if not key:
             return False
         try:
-            BackupService.decrypt_backup(path, key)
+            dec_path = BackupService.decrypt_backup(path, key)
+            BackupService.cleanup_decrypted_path(dec_path)
             return True
         except Exception:
             return False
 
     @staticmethod
     def _resolve_key_for_v2(path: str, passed_key: str) -> tuple[bytes, str]:
-        raw_key = BackupService._decode_backup_key(passed_key)
         header = BackupService.read_v2_header(path)
-        key_id = header.get('key_id', '')
+        header_key_id = str(header.get('key_id', '') or '').strip().lower()
+        header_fp = str(header.get('fingerprint', '') or '').strip().lower()
+
+        if passed_key:
+            try:
+                passed_fp = BackupService.compute_backup_key_fingerprint(passed_key)
+                if passed_fp == header_fp:
+                    return BackupService._decode_backup_key(passed_key), header_fp
+            except Exception:
+                pass
+
         try:
-            key_material = BackupService.lookup_key_by_id(str(key_id))
+            key_material = (
+                BackupService.lookup_key_by_id(header_key_id)
+                or BackupService.lookup_key_by_id(header_fp)
+            )
             if key_material:
-                raw_key = BackupService._decode_backup_key(key_material)
-                expected_fp = BackupService.compute_backup_key_fingerprint(key_material)
-                return raw_key, expected_fp
+                resolved_fp = BackupService.compute_backup_key_fingerprint(key_material)
+                if not header_fp or resolved_fp == header_fp:
+                    return BackupService._decode_backup_key(key_material), resolved_fp
         except Exception as exc:
-            logger.debug("Key lookup by id %s failed, falling back to passed key: %s", key_id, exc)
-        expected_fp = BackupService.compute_backup_key_fingerprint(passed_key)
-        return raw_key, expected_fp
+            logger.debug("Key lookup by id %s failed: %s", header_key_id, exc)
+
+        raise UnknownBackupKeyIdError(key_id=header_key_id, fingerprint=header_fp)
 
     @staticmethod
     def _decrypt_v2_chunked_backup(path: str, key: str) -> str:
         with open(path, 'rb') as f:
-            magic = f.read(len(_CHUNKED_BACKUP_MAGIC))
-            if magic != _CHUNKED_BACKUP_MAGIC:
-                f.seek(0)
-                magic = f.read(len(_CHUNKED_BACKUP_V2_MAGIC))
-                if magic != _CHUNKED_BACKUP_V2_MAGIC:
-                    raise ValueError("Not a chunked backup format")
-                is_v2 = True
-            else:
-                is_v2 = False
-
-            key_raw, _ = BackupService._resolve_key_for_v2(path, key) if is_v2 else (BackupService._decode_backup_key(key), '')
-            nonce_prefix = f.read(_CHUNKED_BACKUP_NONCE_PREFIX_BYTES)
+            magic = f.read(len(_CHUNKED_BACKUP_V2_MAGIC))
+            if magic != _CHUNKED_BACKUP_V2_MAGIC:
+                raise ValueError("Not a V2 chunked backup format")
+            key_raw, _ = BackupService._resolve_key_for_v2(path, key)
             f.read(_CHUNKED_BACKUP_KEY_ID_BYTES)
             f.read(_CHUNKED_BACKUP_FINGERPRINT_BYTES)
-            if is_v2:
-                pass
+            nonce_prefix = f.read(_CHUNKED_BACKUP_NONCE_PREFIX_BYTES)
 
             decrypted_path, cleanup = BackupService._make_private_decrypted_path()
             try:
                 aesgcm = AESGCM(key_raw)
-                chunk_size = BackupService._crypto_chunk_size()
-                total = 0
-                while True:
-                    ct_len_bytes = f.read(4)
-                    if not ct_len_bytes:
-                        break
-                    ct_len = struct.unpack('>I', ct_len_bytes)[0]
-                    ct = BackupService._read_exact(f, ct_len)
-                    nonce = nonce_prefix + ct[:12]
-                    ciphertext = ct[12:]
-                    plaintext = aesgcm.decrypt(nonce, ciphertext, None)
-                    with open(decrypted_path, 'ab') as out:
+                chunk_index = 0
+                with open(decrypted_path, 'wb') as out:
+                    while True:
+                        ct_len_bytes = f.read(4)
+                        if not ct_len_bytes:
+                            break
+                        if len(ct_len_bytes) != 4:
+                            raise ValueError("Truncated V2 backup: incomplete chunk length")
+                        ct_len = struct.unpack('>I', ct_len_bytes)[0]
+                        if ct_len == 0:
+                            break
+                        ct = BackupService._read_exact(f, ct_len)
+                        nonce = nonce_prefix + struct.pack('>I', chunk_index)
+                        chunk_index += 1
+                        plaintext = aesgcm.decrypt(nonce, ct, None)
                         out.write(plaintext)
-                    total += len(plaintext)
                 return decrypted_path
             except Exception:
                 BackupService.cleanup_decrypted_path(decrypted_path)
@@ -2034,32 +2305,36 @@ class BackupService:
             magic = f.read(len(_CHUNKED_BACKUP_V3_MAGIC))
             if magic != _CHUNKED_BACKUP_V3_MAGIC:
                 raise ValueError("Not a V3 backup format")
-            f.read(_CHUNKED_BACKUP_NONCE_PREFIX_BYTES)
+            key_raw, _ = BackupService._resolve_key_for_v2(path, key)
             f.read(_CHUNKED_BACKUP_KEY_ID_BYTES)
             f.read(_CHUNKED_BACKUP_FINGERPRINT_BYTES)
-            key_raw = BackupService._decode_backup_key(key)
-            aad_len_bytes = f.read(4)
-            aad_len = struct.unpack('>I', aad_len_bytes)[0]
-            aad = b''
-            if aad_len > 0:
-                aad = f.read(aad_len)
+            nonce_prefix = f.read(_CHUNKED_BACKUP_NONCE_PREFIX_BYTES)
             decrypted_path, cleanup = BackupService._make_private_decrypted_path()
             try:
                 aesgcm = AESGCM(key_raw)
-                chunk_size = BackupService._crypto_chunk_size()
-                total = 0
-                while True:
-                    ct_len_bytes = f.read(4)
-                    if not ct_len_bytes:
-                        break
-                    ct_len = struct.unpack('>I', ct_len_bytes)[0]
-                    ct = BackupService._read_exact(f, ct_len)
-                    nonce = ct[:12]
-                    ciphertext = ct[12:]
-                    plaintext = aesgcm.decrypt(nonce, ciphertext, aad)
-                    with open(decrypted_path, 'ab') as out:
-                        out.write(plaintext)
-                    total += len(plaintext)
+                chunk_index = 0
+                prev_plaintext = None
+                saw_terminal_zero = False
+                with open(decrypted_path, 'wb') as out:
+                    while True:
+                        ct_len_bytes = f.read(4)
+                        if not ct_len_bytes:
+                            break
+                        if len(ct_len_bytes) != 4:
+                            raise ValueError("Truncated V3 backup: incomplete chunk length before EOF")
+                        ct_len = struct.unpack('>I', ct_len_bytes)[0]
+                        if ct_len == 0:
+                            saw_terminal_zero = True
+                            break
+                        ct = BackupService._read_exact(f, ct_len)
+                        nonce = nonce_prefix + struct.pack('>I', chunk_index)
+                        chunk_index += 1
+                        plaintext = aesgcm.decrypt(nonce, ct, None)
+                        if prev_plaintext is not None:
+                            out.write(prev_plaintext)
+                        prev_plaintext = plaintext
+                if not saw_terminal_zero or prev_plaintext != b"EOF":
+                    raise ValueError("Truncated or corrupted V3 backup: missing encrypted EOF marker")
                 return decrypted_path
             except Exception:
                 BackupService.cleanup_decrypted_path(decrypted_path)
@@ -2070,12 +2345,26 @@ class BackupService:
         # 0o700 dir / 0o600 file: decrypted backups contain full service
         # state (DB dumps, env vars) and must not be readable by other
         # users on the host. Matches the design the cleanup tests assert.
-        decrypted_dir = os.path.join('/app', 'backups', 'decrypted')
-        os.makedirs(decrypted_dir, mode=0o700, exist_ok=True)
-        try:
-            os.chmod(decrypted_dir, 0o700)
-        except OSError:
-            pass
+        candidates = []
+        custom_root = getattr(settings, 'BACKUP_ROOT', None) or os.environ.get('SMSLY_BACKUP_DIR')
+        if custom_root:
+            candidates.append(os.path.join(str(custom_root), 'decrypted'))
+        candidates.append(os.path.join('/app', 'backups', 'decrypted'))
+        candidates.append(tempfile.gettempdir())
+
+        decrypted_dir = None
+        last_err = None
+        for cand in candidates:
+            try:
+                os.makedirs(cand, mode=0o700, exist_ok=True)
+                decrypted_dir = tempfile.mkdtemp(prefix="smsly-decrypted-", dir=cand)
+                os.chmod(decrypted_dir, 0o700)
+                break
+            except OSError as exc:
+                last_err = exc
+        if not decrypted_dir:
+            raise OSError(f"Cannot create private decrypted backup directory: {last_err}")
+
         fname = f"{uuid.uuid4().hex}{suffix}"
         path = os.path.join(decrypted_dir, fname)
         with open(path, 'wb'):
@@ -2085,11 +2374,19 @@ class BackupService:
 
     @staticmethod
     def cleanup_decrypted_path(path: str) -> None:
-        if path and os.path.exists(path):
+        if not path:
+            return
+        parent = os.path.dirname(os.path.abspath(path))
+        if os.path.exists(path):
             try:
                 os.remove(path)
             except OSError as exc:
                 logger.debug("Failed to remove decrypted path %s: %s", path, exc)
+        if os.path.isdir(parent) and os.path.basename(parent).startswith("smsly-decrypted-"):
+            try:
+                shutil.rmtree(parent, ignore_errors=True)
+            except OSError as exc:
+                logger.debug("Failed to remove decrypted dir %s: %s", parent, exc)
 
     @staticmethod
     def _decrypt_chunked_backup(path: str, key: str) -> str:
@@ -2098,24 +2395,25 @@ class BackupService:
             if magic == _CHUNKED_BACKUP_MAGIC:
                 key_raw = BackupService._decode_backup_key(key)
                 nonce_prefix = f.read(_CHUNKED_BACKUP_NONCE_PREFIX_BYTES)
-                f.read(_CHUNKED_BACKUP_KEY_ID_BYTES)
-                f.read(_CHUNKED_BACKUP_FINGERPRINT_BYTES)
                 decrypted_path, cleanup = BackupService._make_private_decrypted_path()
                 try:
                     aesgcm = AESGCM(key_raw)
-                    total = 0
-                    while True:
-                        ct_len_bytes = f.read(4)
-                        if not ct_len_bytes:
-                            break
-                        ct_len = struct.unpack('>I', ct_len_bytes)[0]
-                        ct = BackupService._read_exact(f, ct_len)
-                        nonce = nonce_prefix + ct[:8]
-                        ciphertext = ct[8:]
-                        plaintext = aesgcm.decrypt(nonce, ciphertext, None)
-                        with open(decrypted_path, 'ab') as out:
+                    chunk_index = 0
+                    with open(decrypted_path, 'wb') as out:
+                        while True:
+                            ct_len_bytes = f.read(4)
+                            if not ct_len_bytes:
+                                break
+                            if len(ct_len_bytes) != 4:
+                                raise ValueError("Truncated V1 backup: incomplete chunk length")
+                            ct_len = struct.unpack('>I', ct_len_bytes)[0]
+                            if ct_len == 0:
+                                break
+                            ct = BackupService._read_exact(f, ct_len)
+                            nonce = nonce_prefix + struct.pack('>I', chunk_index)
+                            chunk_index += 1
+                            plaintext = aesgcm.decrypt(nonce, ct, None)
                             out.write(plaintext)
-                        total += len(plaintext)
                     return decrypted_path
                 except Exception:
                     BackupService.cleanup_decrypted_path(decrypted_path)
@@ -2177,6 +2475,67 @@ class BackupService:
 
     @staticmethod
     def _prune_old_backups(model_cls, service_id=None):
+        try:
+            _field_names = {f.name for f in model_cls._meta.get_fields()}
+            _attnames = {getattr(f, 'attname', None) for f in model_cls._meta.get_fields()}
+            has_service_field = 'service' in _field_names or 'service_id' in _field_names or 'service_id' in _attnames
+        except Exception:
+            has_service_field = service_id is not None
+
+        retain_env = os.environ.get('BACKUP_RETENTION_COUNT')
+        retain_count = None
+        if retain_env is not None and str(retain_env).strip() != '':
+            try:
+                retain_count = max(int(str(retain_env).strip()), 1)
+            except (TypeError, ValueError):
+                retain_count = None
+
+        ids_to_delete = []
+        if retain_count is not None:
+            all_qs = model_cls.objects.all()
+            completed_qs = model_cls.objects.filter(status='COMPLETED')
+            if service_id and has_service_field:
+                groups = [service_id]
+            elif has_service_field:
+                groups = list(all_qs.values_list('service_id', flat=True).distinct())
+            else:
+                groups = [None]
+
+            for sid in groups:
+                if has_service_field and sid is not None:
+                    all_completed = list(completed_qs.filter(service_id=sid).order_by('-created_at'))
+                    group_all = list(all_qs.filter(service_id=sid).order_by('-created_at'))
+                else:
+                    all_completed = list(completed_qs.order_by('-created_at'))
+                    group_all = list(all_qs.order_by('-created_at'))
+                if len(all_completed) < retain_count:
+                    continue
+                cutoff_dt = all_completed[retain_count - 1].created_at
+                keep_ids = {b.id for b in all_completed[:retain_count]}
+                for backup in group_all:
+                    if backup.id in keep_ids or (cutoff_dt and backup.created_at and backup.created_at > cutoff_dt):
+                        continue
+                    ids_to_delete.append(backup.id)
+                    if backup.file_path:
+                        try:
+                            if os.path.exists(backup.file_path):
+                                os.remove(backup.file_path)
+                        except OSError as exc:
+                            logger.debug("Failed to remove backup file %s: %s", backup.file_path, exc)
+                        try:
+                            _meta_path = backup.file_path + '.meta'
+                            if os.path.exists(_meta_path):
+                                os.remove(_meta_path)
+                        except OSError as exc:
+                            logger.debug("Failed to remove backup sidecar %s: %s", backup.file_path, exc)
+                        try:
+                            _delete_backup_cloud_object(backup)
+                        except Exception as exc:
+                            logger.warning("Failed to delete cloud object for backup %s: %s", getattr(backup, 'id', '?'), exc)
+            if ids_to_delete:
+                model_cls.objects.filter(id__in=ids_to_delete).delete()
+            return
+
         retention_days = getattr(settings, 'BACKUP_RETENTION_DAYS', 7)
         if service_id:
             try:
@@ -2187,57 +2546,36 @@ class BackupService:
             except Exception as exc:
                 logger.debug("Failed to resolve per-schedule retention: %s", exc)
         cutoff = timezone.now() - timezone.timedelta(days=retention_days)
-        try:
-            _field_names = {f.name for f in model_cls._meta.get_fields()}
-            _attnames = {getattr(f, 'attname', None) for f in model_cls._meta.get_fields()}
-            has_service_field = 'service' in _field_names or 'service_id' in _field_names or 'service_id' in _attnames
-        except Exception:
-            has_service_field = service_id is not None
-        filters = {'created_at__lt': cutoff, 'status': 'COMPLETED'}
+        filters = {'created_at__lt': cutoff}
         if service_id and has_service_field:
             filters['service_id'] = service_id
         stale = list(model_cls.objects.filter(**filters).order_by('created_at'))
-        # Keep at least one backup per service — don't delete the last restorable copy
-        # even if it's older than cutoff (fix for PAAS_INFRA_PRODUCTION_AUDIT:33).
-        from collections import defaultdict
-        by_service: dict = defaultdict(list)
-        for b in stale:
-            by_service[getattr(b, 'service_id', None)].append(b)
-        ids_to_delete = []
-        for sid, backups in by_service.items():
-            if has_service_field:
-                all_completed = list(model_cls.objects.filter(service_id=sid, status='COMPLETED').order_by('-created_at'))
-            else:
-                all_completed = list(model_cls.objects.filter(status='COMPLETED').order_by('-created_at'))
-            if len(all_completed) <= 1:
-                continue
-            # If all completed are stale, keep the most recent stale one
-            latest_id = all_completed[0].id
-            for backup in backups:
-                if backup.id == latest_id:
-                    continue
-                ids_to_delete.append(backup.id)
-                if backup.file_path:
-                    try:
-                        if os.path.exists(backup.file_path):
-                            os.remove(backup.file_path)
-                    except OSError as exc:
-                        logger.debug("Failed to remove backup file %s: %s", backup.file_path, exc)
-                    try:
-                        _meta_path = backup.file_path + '.meta'
-                        if os.path.exists(_meta_path):
-                            os.remove(_meta_path)
-                    except OSError as exc:
-                        logger.debug("Failed to remove backup sidecar %s: %s", backup.file_path, exc)
-                    try:
-                        _delete_backup_cloud_object(backup)
-                    except Exception as exc:
-                        logger.warning("Failed to delete cloud object for backup %s: %s", getattr(backup, 'id', '?'), exc)
+        for backup in stale:
+            ids_to_delete.append(backup.id)
+            if backup.file_path:
+                try:
+                    if os.path.exists(backup.file_path):
+                        os.remove(backup.file_path)
+                except OSError as exc:
+                    logger.debug("Failed to remove backup file %s: %s", backup.file_path, exc)
+                try:
+                    _meta_path = backup.file_path + '.meta'
+                    if os.path.exists(_meta_path):
+                        os.remove(_meta_path)
+                except OSError as exc:
+                    logger.debug("Failed to remove backup sidecar %s: %s", backup.file_path, exc)
+                try:
+                    _delete_backup_cloud_object(backup)
+                except Exception as exc:
+                    logger.warning("Failed to delete cloud object for backup %s: %s", getattr(backup, 'id', '?'), exc)
         if ids_to_delete:
             model_cls.objects.filter(id__in=ids_to_delete).delete()
 
-    def _maybe_encrypt(self, path: str) -> str:
-        if BackupService._backup_encryption_required():
+    def _maybe_encrypt(self, path: str, encryption_key: str | None = None) -> str:
+        explicit_key = (encryption_key or "").strip()
+        if explicit_key:
+            key = explicit_key
+        elif BackupService._backup_encryption_required():
             key = BackupService._get_encryption_key()
             if not key:
                 raise BackupEncryptionRequired(
@@ -2252,34 +2590,64 @@ class BackupService:
         aesgcm = AESGCM(key_raw)
         chunk_size = BackupService._crypto_chunk_size()
         enc_path = path + '.enc'
+        fp_raw = hashlib.sha256(key_raw).digest()[:_CHUNKED_BACKUP_FINGERPRINT_BYTES]
+        key_id_hex = fp_raw.hex()
+        if explicit_key:
+            # Per-request override key: do NOT overwrite global active key in DB.
+            try:
+                from apps.cloud.models.backup import BackupEncryptionKey
+                existing_key = BackupEncryptionKey.objects.filter(
+                    fingerprint=BackupService.compute_backup_key_fingerprint(key),
+                ).only('key_id').first()
+                if existing_key and len(str(existing_key.key_id or '')) == _CHUNKED_BACKUP_KEY_ID_BYTES * 2:
+                    key_id_hex = str(existing_key.key_id)
+            except Exception as exc:
+                logger.debug("Read-only lookup for explicit backup key skipped: %s", exc)
+        else:
+            try:
+                info = BackupService.resolve_or_register_active_key(key)
+                if info and len(str(info.get('key_id', ''))) == _CHUNKED_BACKUP_KEY_ID_BYTES * 2:
+                    key_id_hex = str(info['key_id'])
+            except Exception as exc:
+                logger.debug("Failed to register active backup key: %s", exc)
+        key_id_bytes = bytes.fromhex(key_id_hex)
 
-        with open(path, 'rb') as fin, open(enc_path, 'wb') as fout:
-            fout.write(_CHUNKED_BACKUP_MAGIC)
-            nonce_prefix = os.urandom(_CHUNKED_BACKUP_NONCE_PREFIX_BYTES)
-            fout.write(nonce_prefix)
-            fp_raw = hashlib.sha256(key_raw).digest()[:_CHUNKED_BACKUP_FINGERPRINT_BYTES]
-            fout.write(struct.pack('>I', int(fp_raw.hex()[:8], 16)))
-            fout.write(fp_raw)
+        try:
+            with open(path, 'rb') as fin, open(enc_path, 'wb') as fout:
+                fout.write(_CHUNKED_BACKUP_V3_MAGIC)
+                fout.write(key_id_bytes)
+                fout.write(fp_raw)
+                nonce_prefix = os.urandom(_CHUNKED_BACKUP_NONCE_PREFIX_BYTES)
+                fout.write(nonce_prefix)
 
-            total = 0
-            while True:
-                plaintext = fin.read(chunk_size)
-                if not plaintext:
-                    break
-                nonce_suffix = os.urandom(8)
-                nonce = nonce_prefix + nonce_suffix
-                ct = aesgcm.encrypt(nonce, plaintext, None)
-                chunk_data = nonce_suffix + ct
-                ct_len = len(chunk_data)
-                fout.write(struct.pack('>I', ct_len))
-                fout.write(chunk_data)
-                total += len(plaintext)
+                total = 0
+                chunk_index = 0
+                while True:
+                    plaintext = fin.read(chunk_size)
+                    if not plaintext:
+                        break
+                    nonce = nonce_prefix + struct.pack('>I', chunk_index)
+                    chunk_index += 1
+                    ct = aesgcm.encrypt(nonce, plaintext, None)
+                    fout.write(struct.pack('>I', len(ct)))
+                    fout.write(ct)
+                    total += len(plaintext)
 
-            logger.info("Encrypted backup (%d bytes plaintext) -> %s", total, enc_path)
+                eof_nonce = nonce_prefix + struct.pack('>I', chunk_index)
+                eof_ct = aesgcm.encrypt(eof_nonce, b"EOF", None)
+                fout.write(struct.pack('>I', len(eof_ct)))
+                fout.write(eof_ct)
+                fout.write(struct.pack('>I', 0))
+
+                logger.info("Encrypted backup (%d bytes plaintext) -> %s", total, enc_path)
+        except Exception as exc:
+            for victim in (enc_path, path):
+                try:
+                    if os.path.exists(victim):
+                        os.remove(victim)
+                except OSError:
+                    pass
+            raise BackupEncryptionRequired(f"Encryption failed: {exc}") from exc
 
         os.remove(path)
-        try:
-            BackupService.resolve_or_register_active_key(key)
-        except Exception as exc:
-            logger.debug("Failed to register active backup key: %s", exc)
         return enc_path

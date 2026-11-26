@@ -71,3 +71,33 @@ class LokiQueryResolutionTests(TestCase):
             _called_args, called_kwargs = mock_get.call_args
             called_params = called_kwargs.get('params', {})
             self.assertIn(expected_substring, called_params.get('query', ''))
+
+    @patch('apps.core.views.observability.requests.get')
+    def test_loki_query_scopes_cross_tenant_uuid_to_caller_services(self, mock_get):
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {
+            'status': 'success',
+            'data': {'resultType': 'streams', 'result': []},
+        }
+        other = User.objects.create_user(
+            username='otheruser', email='other@example.com', password='password123'
+        )
+        other_project = Project.objects.create(name='Other Project', owner=other)
+        other_svc = Service.objects.create(
+            name='Other Secret Service',
+            project=other_project,
+            deploy_mode='SINGLE',
+        )
+
+        from rest_framework.test import APIClient
+        client = APIClient()
+        client.force_authenticate(user=self.user)
+
+        url = reverse('observability-loki-query')
+        response = client.get(url, {'query': f'{{compose_service="{other_svc.id}"}}'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        _called_args, called_kwargs = mock_get.call_args
+        sent_query = called_kwargs.get('params', {}).get('query', '')
+        self.assertNotIn('Other Secret Service', sent_query)
+        self.assertNotIn(str(other_svc.id), sent_query)
+        self.assertIn('My Single Service', sent_query)

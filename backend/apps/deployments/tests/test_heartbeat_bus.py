@@ -170,8 +170,14 @@ class _FakeRedis:
             return [k for k in self.store if k.startswith(prefix)]
         return [k for k in self.store if k == pattern]
 
+    def scan_iter(self, match='*', count=None):
+        return iter(self.keys(match))
+
     def get(self, key):
         entry = self.store.get(key)
         if entry is None:
             return None
         return entry[0]
+
+    def mget(self, keys):
+        return [self.get(k) for k in keys]

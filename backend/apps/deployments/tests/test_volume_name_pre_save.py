@@ -36,7 +36,7 @@ class VolumeNamePreSaveSignalTests(TestCase):
 
     def test_regex_constant_matches_finding(self):
         regex = Volume._VOLUME_NAME_RE.pattern
-        self.assertEqual(regex, r"^[a-zA-Z0-9_-]{1,64}$")
+        self.assertEqual(regex, r"^[a-z0-9][a-z0-9_.-]{0,62}$")
 
     def test_save_rejects_empty_name(self):
         v = Volume(service=self.service, name="", mount_path="/data")
@@ -45,18 +45,18 @@ class VolumeNamePreSaveSignalTests(TestCase):
 
     def test_save_rejects_too_long_name(self):
         v = Volume(
-            service=self.service, name="a" * 65, mount_path="/data",
+            service=self.service, name="a" * 64, mount_path="/data",
         )
         with self.assertRaises(ValidationError):
             v.save()
 
     def test_save_rejects_dot_in_name(self):
-        v = Volume(service=self.service, name="bad.name", mount_path="/data")
+        v = Volume(service=self.service, name=".badname", mount_path="/data")
         with self.assertRaises(ValidationError):
             v.save()
 
     def test_save_rejects_special_chars(self):
-        for bad in ("vol!name", "vol name", "vol/name", "vol*name"):
+        for bad in ("vol!name", "vol name", "vol/name", "vol*name", "UPPER"):
             v = Volume(service=self.service, name=bad, mount_path="/data")
             with self.assertRaises(ValidationError):
                 v.save()
@@ -68,13 +68,13 @@ class VolumeNamePreSaveSignalTests(TestCase):
 
     def test_save_accepts_underscore_and_caps(self):
         v = Volume(
-            service=self.service, name="Data_Vol_1", mount_path="/data",
+            service=self.service, name="data_vol.1", mount_path="/data",
         )
         v.save()
-        self.assertEqual(Volume.objects.filter(name="Data_Vol_1").count(), 1)
+        self.assertEqual(Volume.objects.filter(name="data_vol.1").count(), 1)
 
     def test_save_accepts_max_length(self):
-        name = "a" * 64
+        name = "a" * 63
         v = Volume(service=self.service, name=name, mount_path="/data")
         v.save()
         self.assertEqual(Volume.objects.filter(name=name).count(), 1)

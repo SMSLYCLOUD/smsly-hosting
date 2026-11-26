@@ -75,17 +75,24 @@ def ensure_verification_token(domain_obj) -> str:
     return token or ""
 
 
-def verify_cloudflare_dns_proof(domain: str, expected_cnames: set[str], acceptable_ips: set[str]) -> tuple:
+def verify_cloudflare_dns_proof(
+    domain: str,
+    expected_cnames: set[str],
+    acceptable_ips: set[str],
+    verification_token: str = "",
+    allow_shared_zone_auto: bool = False,
+) -> tuple:
     """Best-effort Cloudflare API proof (conditional — never fails closed).
 
     When a Cloudflare API token is configured, checks whether the zone
     has a DNS record for ``domain`` pointing at the platform (A to origin
-    IP or CNAME into the platform). Returns (ok, detail). Any error,
-    missing token, or missing zone returns (False, reason) — callers must
-    treat this as an additional PASS path only, never as a fail condition.
-    Deep third-level names (slug.nodeN.zone) are expected grey/DNS-only
-    on free plans, so a grey A record here is a PASS, not a failure.
+    IP or CNAME into the platform). Unless ``allow_shared_zone_auto`` is
+    explicitly enabled (superuser-only), also requires a matching
+    ``_smsly-challenge.<domain>`` TXT record carrying ``verification_token``
+    so dangling records in shared zones cannot be claimed.
     """
+    import hmac
+
     host = _clean_hostname(domain or "")
     if not host:
         return False, "invalid domain"
@@ -111,6 +118,7 @@ def verify_cloudflare_dns_proof(domain: str, expected_cnames: set[str], acceptab
         zone_id = _get_zone_id(token, zone)
         if not zone_id:
             return False, "zone not found"
+        matched_detail = ""
         for rtype in ("A", "AAAA", "CNAME"):
             try:
                 records = _get_records(token, zone_id, host, rtype) or []
@@ -119,13 +127,39 @@ def verify_cloudflare_dns_proof(domain: str, expected_cnames: set[str], acceptab
             for rec in records:
                 content = str((rec or {}).get("content", "") or "").strip().lower().rstrip(".")
                 if rtype == "CNAME" and content and content in {c.lower() for c in expected_cnames}:
-                    return True, f"CF {rtype} {content}"
+                    matched_detail = f"CF {rtype} {content}"
+                    break
                 if rtype in ("A", "AAAA") and content and content in {i.lower() for i in acceptable_ips}:
                     proxied = bool((rec or {}).get("proxied", False))
-                    return True, f"CF {rtype} {content} ({'proxied' if proxied else 'dns-only'})"
-        return False, "no matching CF record"
+                    matched_detail = f"CF {rtype} {content} ({'proxied' if proxied else 'dns-only'})"
+                    break
+            if matched_detail:
+                break
+        if not matched_detail:
+            return False, "no matching CF record"
+
+        if allow_shared_zone_auto:
+            return True, matched_detail
+
+        expected_tok = str(verification_token or "").strip()
+        if not expected_tok:
+            return False, "missing verification token for CF TXT proof"
+        txt_records = _get_records(token, zone_id, f"_smsly-challenge.{host}", "TXT") or []
+        for rec in txt_records:
+            raw_txt = str((rec or {}).get("content", "") or "").strip().strip('"').strip()
+            if raw_txt and hmac.compare_digest(raw_txt, expected_tok):
+                return True, f"{matched_detail} + CF TXT"
+        return False, "CF record found without matching _smsly-challenge TXT proof"
     except Exception as exc:
         return False, f"cf check skipped: {str(exc)[:80]}"
+
+
+def _is_global_ip(ip_value: str) -> bool:
+    """Return True iff *ip_value* parses as a globally routable IP address."""
+    try:
+        return bool(ipaddress.ip_address(str(ip_value or "").strip()).is_global)
+    except ValueError:
+        return False
 
 
 def verify_http_proof(domain_obj, timeout: float = 10, attempts: int = 3) -> tuple:
@@ -148,6 +182,13 @@ def verify_http_proof(domain_obj, timeout: float = 10, attempts: int = 3) -> tup
     token = str(getattr(domain_obj, "verification_token", "") or "").strip()
     if not host or not token:
         return False, "no token"
+
+    # SSRF guard: reject if public DNS resolves the host to any non-global IP
+    # (RFC1918, CGNAT 100.64/10, link-local 169.254/16, loopback, reserved).
+    for resolved_ip in resolve_host_ips(host):
+        if not _is_global_ip(resolved_ip):
+            return False, f"rejected non-global IP: {resolved_ip}"
+
     url = f"http://{host}/.well-known/smsly-verify/{token}"
     last_detail = "no attempt"
     for attempt in range(max(1, int(attempts or 1))):
@@ -169,11 +210,28 @@ def _fetch_http_proof_once(url: str, token: str, timeout: float, host: str = "")
     """
     headers = {"User-Agent": "smsly-domain-verify/1.0"}
     resp = None
+    clean_host = host or (_clean_hostname(url.split("/")[2]) if "/" in url else "")
+
+    # Reject literal non-global IP hosts and non-global libc resolutions before fetching.
+    if clean_host:
+        try:
+            if not ipaddress.ip_address(clean_host).is_global:
+                return False, f"rejected non-global host IP: {clean_host}", False
+        except ValueError:
+            pass
+        try:
+            addr_infos = socket.getaddrinfo(clean_host, None)
+            libc_ips = {info[4][0] for info in addr_infos if len(info) > 4 and info[4]}
+            if any(not _is_global_ip(ip) for ip in libc_ips):
+                return False, "rejected non-global resolved IP", False
+        except OSError:
+            pass
+
     try:
         import requests
         resp = requests.get(
             url,
-            timeout=timeout, allow_redirects=True,
+            timeout=timeout, allow_redirects=False,
             headers=headers,
         )
         if resp.status_code == 200 and (resp.text or "").strip() == token:
@@ -187,20 +245,19 @@ def _fetch_http_proof_once(url: str, token: str, timeout: float, host: str = "")
     # or container loopback 127.0.0.1 where port 80 is refused), query public
     # resolvers (1.1.1.1, 8.8.8.8) to get the authoritative public edge IPs
     # and fetch directly with Host header over the public internet.
-    clean_host = host or (_clean_hostname(url.split("/")[2]) if "/" in url else "")
     if clean_host and clean_host not in ("localhost", "127.0.0.1", "::1"):
         try:
             import requests
             public_ips = resolve_host_ips(clean_host)
             for pub_ip in sorted(public_ips):
-                if pub_ip.startswith("127.") or pub_ip in ("::1", "0.0.0.0"):
-                    continue
+                if not _is_global_ip(pub_ip):
+                    return False, f"rejected non-global IP: {pub_ip}", False
                 ip_url = f"http://{pub_ip}/.well-known/smsly-verify/{token}"
                 try:
                     resp_ip = requests.get(
                         ip_url,
                         timeout=timeout,
-                        allow_redirects=True,
+                        allow_redirects=False,
                         headers={
                             "Host": clean_host,
                             "User-Agent": "smsly-domain-verify/1.0",
@@ -493,7 +550,19 @@ def verify_custom_domain_dns(domain_obj, config) -> DnsVerificationResult:
         return verify_http_proof(domain_obj)
 
     def _run_cf():
-        return verify_cloudflare_dns_proof(domain, expected_cnames, acceptable_ips)
+        svc = getattr(domain_obj, "service", None)
+        owner = getattr(svc, "owner", None)
+        is_superuser_owner = bool(getattr(owner, "is_superuser", False))
+        allow_shared_zone_auto = (
+            bool(getattr(config, "allow_shared_zone_auto", False)) and is_superuser_owner
+        )
+        return verify_cloudflare_dns_proof(
+            domain,
+            expected_cnames,
+            acceptable_ips,
+            verification_token=token,
+            allow_shared_zone_auto=allow_shared_zone_auto,
+        )
 
     pool = _futures.ThreadPoolExecutor(
         max_workers=3, thread_name_prefix="verify",

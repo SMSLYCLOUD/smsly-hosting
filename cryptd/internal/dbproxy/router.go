@@ -17,6 +17,7 @@ type ServiceTarget struct {
 	RedisPrefixes    []string `json:"redis_prefixes,omitempty"`
 	UpstreamPG       string   `json:"upstream_pg,omitempty"`
 	UpstreamRedis    string   `json:"upstream_redis,omitempty"`
+	UpstreamTLS      bool     `json:"upstream_tls"`
 	OptedIn          bool     `json:"opted_in"`
 	EncryptRedisVals bool     `json:"encrypt_redis_vals"`
 }
@@ -59,53 +60,7 @@ func NewRouter(defaultTarget ServiceTarget) *Router {
 	}
 }
 
-// Register binds DB roles, DB names, Redis ACL users, and key prefixes to target.ServiceID.
-func (r *Router) Register(target ServiceTarget) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if target.ProjectID == "" {
-		target.ProjectID = "default"
-	}
-	r.byService[target.ServiceID] = target
-	for _, u := range target.DBRoles {
-		u = strings.TrimSpace(u)
-		if u != "" {
-			r.byPGUser[u] = target.ServiceID
-		}
-	}
-	for _, d := range target.DBNames {
-		d = strings.TrimSpace(d)
-		if d != "" {
-			r.byPGDB[d] = target.ServiceID
-		}
-	}
-	for _, ru := range target.RedisUsers {
-		ru = strings.TrimSpace(ru)
-		if ru != "" {
-			r.byRedisUser[ru] = target.ServiceID
-		}
-	}
-	// Replace any existing prefix bindings belonging to this service.
-	filtered := r.redisPrefixes[:0]
-	for _, pb := range r.redisPrefixes {
-		if pb.serviceID != target.ServiceID {
-			filtered = append(filtered, pb)
-		}
-	}
-	for _, p := range target.RedisPrefixes {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			filtered = append(filtered, prefixBinding{prefix: p, serviceID: target.ServiceID})
-		}
-	}
-	r.redisPrefixes = filtered
-}
-
-// Unregister removes service routing entries.
-func (r *Router) Unregister(serviceID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (r *Router) purgeServiceLocked(serviceID string) {
 	delete(r.byService, serviceID)
 	for k, v := range r.byPGUser {
 		if v == serviceID {
@@ -129,6 +84,49 @@ func (r *Router) Unregister(serviceID string) {
 		}
 	}
 	r.redisPrefixes = filtered
+}
+
+// Register binds DB roles, DB names, Redis ACL users, and key prefixes to target.ServiceID.
+func (r *Router) Register(target ServiceTarget) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.purgeServiceLocked(target.ServiceID)
+	if target.ProjectID == "" {
+		target.ProjectID = "default"
+	}
+	r.byService[target.ServiceID] = target
+	for _, u := range target.DBRoles {
+		u = strings.TrimSpace(u)
+		if u != "" {
+			r.byPGUser[u] = target.ServiceID
+		}
+	}
+	for _, d := range target.DBNames {
+		d = strings.TrimSpace(d)
+		if d != "" {
+			r.byPGDB[d] = target.ServiceID
+		}
+	}
+	for _, ru := range target.RedisUsers {
+		ru = strings.TrimSpace(ru)
+		if ru != "" {
+			r.byRedisUser[ru] = target.ServiceID
+		}
+	}
+	for _, p := range target.RedisPrefixes {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			r.redisPrefixes = append(r.redisPrefixes, prefixBinding{prefix: p, serviceID: target.ServiceID})
+		}
+	}
+}
+
+// Unregister removes service routing entries.
+func (r *Router) Unregister(serviceID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.purgeServiceLocked(serviceID)
 }
 
 // ResolvePostgres returns the ServiceTarget for a Postgres StartupMessage user/database pair.

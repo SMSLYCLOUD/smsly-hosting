@@ -322,7 +322,7 @@ class RepoScanner:
 
         # 1. Parse .env files for variable names AND their default values (always scanned)
         for root, dirs, files in os.walk(self.source_dir):
-            dirs[:] = [d for d in SKIP_DIRS]
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
 
             for f in files:
                 if f in ENV_FILES or f.startswith('.env'):

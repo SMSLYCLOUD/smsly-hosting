@@ -12,8 +12,10 @@ from celery import shared_task
 
 from apps.deployments.constants import TASK_TIME_LIMIT_MEDIUM, TASK_TIME_LIMIT_STANDARD
 from apps.core.tasks.coalesce import skip_if_recent
+from django.core.cache import cache
 from django.db import IntegrityError
 from django.db.models import F
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -114,15 +116,41 @@ def _clean_domain(domain: str) -> str:
     return domain
 
 
-def _upsert_traffic_row(ip: str, domain: str) -> None:
-    """Insert or increment traffic count for an IP+domain combination."""
+SABLIER_ACTIVITY_CACHE_PREFIX = "sablier:last_activity:"
+SABLIER_ACTIVITY_TTL_SECONDS = 86400
+_NODE_HOST_RE = __import__("re").compile(
+    r"^([a-z0-9-]+?)(?:-|\.)(?:node|grid)(\d+)\.(.+)$"
+)
+
+
+def record_sablier_activity(service_id, ts: float | None = None) -> None:
+    """Record recent request activity for *service_id* (used by sleeper)."""
+    sid = str(service_id or "").strip()
+    if not sid:
+        return
+    try:
+        cache.set(
+            f"{SABLIER_ACTIVITY_CACHE_PREFIX}{sid}",
+            float(ts if ts is not None else time.time()),
+            timeout=SABLIER_ACTIVITY_TTL_SECONDS,
+        )
+    except Exception:
+        pass
+
+
+def _resolve_service_for_host(clean_domain: str):
+    """Map an access-log hostname (public, custom, .internal, or node/grid) to Service."""
     from apps.deployments.models import Service
-    from apps.deployments.models.traffic import ServiceTrafficLog
     from apps.domains.models import Domain
 
-    clean_domain = _clean_domain(domain)
     if not clean_domain:
-        return
+        return None
+
+    if clean_domain.endswith(".internal"):
+        svc_name = clean_domain[:-len(".internal")].strip()
+        if svc_name:
+            return Service.objects.filter(name__iexact=svc_name).first()
+        return None
 
     service = Service.objects.filter(public_domain__iexact=clean_domain).first()
     if not service:
@@ -133,11 +161,39 @@ def _upsert_traffic_row(ip: str, domain: str) -> None:
                 service = candidate
                 break
     if not service:
-        domain_obj = Domain.objects.filter(domain_name__iexact=clean_domain, verified=True).select_related('service').first()
+        domain_obj = (
+            Domain.objects.filter(domain_name__iexact=clean_domain, verified=True)
+            .select_related('service')
+            .first()
+        )
         if domain_obj:
             service = domain_obj.service
     if not service:
+        match = _NODE_HOST_RE.match(clean_domain)
+        if match:
+            slug_part = match.group(1)
+            service = (
+                Service.objects.filter(slug__iexact=slug_part).first()
+                or Service.objects.filter(name__iexact=slug_part).first()
+            )
+    return service
+
+
+def _upsert_traffic_row(ip: str, domain: str, *, write_geo: bool = True) -> None:
+    """Record service traffic activity and optionally upsert GeoIP log rows."""
+    from apps.deployments.models.traffic import ServiceTrafficLog
+
+    clean_domain = _clean_domain(domain)
+    if not clean_domain:
+        return
+
+    service = _resolve_service_for_host(clean_domain)
+    if not service:
         logger.debug("traffic.drop: no service for domain=%s ip=%s", clean_domain, ip)
+        return
+
+    record_sablier_activity(service.id)
+    if not write_geo or clean_domain.endswith(".internal"):
         return
 
     is_private = _is_private_ip(ip)
@@ -160,7 +216,8 @@ def _upsert_traffic_row(ip: str, domain: str) -> None:
         )
         if not created:
             ServiceTrafficLog.objects.filter(pk=log_entry.pk).update(
-                request_count=F('request_count') + 1
+                request_count=F('request_count') + 1,
+                last_seen=timezone.now(),
             )
     except IntegrityError:
         pass
@@ -209,6 +266,51 @@ def _extract_log_fields(entry: dict) -> tuple[str, str, str, int]:
     return client_ip.strip(), request_host.strip(), request_uri.strip(), status
 
 
+def _tail_sablier_internal_log(primary_log_path: Path | None) -> None:
+    """Scan Traefik's access log for internal `.internal` wake traffic.
+
+    Records Sablier activity timestamps without double-counting external
+    Caddy traffic rows into ServiceTrafficLog.
+    """
+    traefik_log = Path('/var/log/traefik/access.log')
+    if not traefik_log.exists() or traefik_log == primary_log_path:
+        return
+    try:
+        offset = _read_offset(traefik_log)
+        file_size = traefik_log.stat().st_size
+        if file_size < offset:
+            offset = 0
+        if offset == file_size:
+            return
+        with open(traefik_log, 'r', buffering=8192) as fh:
+            fh.seek(offset)
+            while True:
+                line = fh.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                _ip, request_host, request_uri, status = _extract_log_fields(entry)
+                if not request_host or status >= 400:
+                    continue
+                path = request_uri.split('?')[0] if request_uri else ''
+                if path in SKIP_PATHS:
+                    continue
+                clean_host = _clean_domain(request_host)
+                if clean_host.endswith('.internal'):
+                    svc = _resolve_service_for_host(clean_host)
+                    if svc is not None:
+                        record_sablier_activity(svc.id)
+            _write_offset(traefik_log, fh.tell())
+    except Exception as exc:
+        logger.debug("Traefik internal log tail skipped: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Task 1: Collect Traefik / Caddy access log entries
 # ---------------------------------------------------------------------------
@@ -216,10 +318,10 @@ def _extract_log_fields(entry: dict) -> tuple[str, str, str, int]:
 @skip_if_recent("coalesce:traefik-logs", TASK_TIME_LIMIT_STANDARD[0])
 def collect_traefik_logs(self) -> None:
     """Tail Traefik / Caddy access.log (JSON format), map RequestHost -> Service,
-    and upsert ServiceTrafficLog rows. Runs every ~15 seconds."""
+    and upsert ServiceTrafficLog + Sablier activity rows. Runs every ~60 seconds."""
+    log_path = None
     try:
-        if not _is_traffic_geo_enabled():
-            return
+        geo_enabled = _is_traffic_geo_enabled()
         log_path = _get_active_access_log()
         if not log_path:
             return
@@ -260,7 +362,7 @@ def collect_traefik_logs(self) -> None:
                     if status >= 400:
                         continue
 
-                    _upsert_traffic_row(client_ip, request_host)
+                    _upsert_traffic_row(client_ip, request_host, write_geo=geo_enabled)
                     new_lines += 1
 
                     if new_lines % 100 == 0:
@@ -275,11 +377,13 @@ def collect_traefik_logs(self) -> None:
             logger.warning("Access log collector error: %s", exc, exc_info=True)
             raise self.retry(countdown=5, exc=exc)
     finally:
+        _tail_sablier_internal_log(log_path)
         # Single remote fan-out per tick (not per early-return branch).
-        try:
-            collect_remote_traffic()
-        except Exception:
-            pass
+        if _is_traffic_geo_enabled():
+            try:
+                collect_remote_traffic()
+            except Exception:
+                pass
 
 
 def collect_remote_traffic() -> None:

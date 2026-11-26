@@ -2,6 +2,7 @@ import ipaddress
 import re
 
 _LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_UNSAFE_HOST_PATH_RE = re.compile(r'[\s\x00-\x1f\x7f{}"`#;\\]')
 
 
 def normalize_domain(value: str, allow_wildcard: bool = False, allow_ip: bool = False) -> str:
@@ -31,11 +32,12 @@ def split_host_and_path(value: str) -> tuple[str, str]:
     Only the host portion is lowercased (hosts are case-insensitive);
     the path preserves case (URL paths are case-sensitive).
     """
-    raw = str(value or "").strip()
+    raw_input = str(value or "")
+    if _UNSAFE_HOST_PATH_RE.search(raw_input):
+        raise ValueError("Host/path contains invalid whitespace, control, or special characters")
+    raw = raw_input.strip()
     if "://" in raw:
         raise ValueError("Host must not include a URL scheme")
-    if " " in raw:
-        raise ValueError("Host must not include spaces")
     if "/" not in raw:
         return raw.lower(), ""
     host, _, path = raw.partition("/")

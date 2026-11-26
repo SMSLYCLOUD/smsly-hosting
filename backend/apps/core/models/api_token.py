@@ -273,10 +273,8 @@ class RemoteSyncHMACAuthentication(BaseAuthentication):
         signature = str(request.headers.get("X-Gateway-Signature-V2", "")).strip()
         timestamp = str(request.headers.get("X-Request-Timestamp", "")).strip()
         nonce = str(request.headers.get("X-Request-Nonce", "")).strip()
-        if not signature and not timestamp and not nonce:
-            return None
         if not signature or not timestamp or not nonce:
-            raise AuthenticationFailed("Incomplete remote sync signature.")
+            raise AuthenticationFailed("Missing or incomplete remote sync signature.")
 
         try:
             request_ts = int(timestamp)
@@ -286,8 +284,11 @@ class RemoteSyncHMACAuthentication(BaseAuthentication):
         if abs(int(time.time()) - request_ts) > 300:
             raise AuthenticationFailed("Remote sync timestamp expired.")
 
+        import sys as _sys
+        _dep_tok_mod = _sys.modules.get("apps.deployments.models.api_token")
+        _active_settings = getattr(_dep_tok_mod, "settings", None) or settings
         gateway_secret = str(
-            getattr(settings, "GATEWAY_SECRET", "")
+            getattr(_active_settings, "GATEWAY_SECRET", "")
         ).strip()
         if not gateway_secret:
             raise AuthenticationFailed("Remote sync gateway secret is not configured.")

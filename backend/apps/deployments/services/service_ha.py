@@ -115,9 +115,13 @@ class ServiceHAManager:
             status=Service.Status.ACTIVE,
             ha_mode='local',
             auto_restart=True,
+        ).exclude(
+            sablier_enabled=True,
         )
 
         for svc in services:
+            if getattr(svc, 'sablier_enabled', False) is True:
+                continue
             # Cooldown per service
             key = f"ha:local_reconcile:{svc.id}"
             if self.cache.get(key):
@@ -139,33 +143,67 @@ class ServiceHAManager:
         return {"reconciled": reconciled}
 
     def _count_running_containers(self, service) -> int:
-        """Count running containers by smsly.service_id label."""
+        """Count running primary + replica containers for *service*."""
         try:
             from apps.cloud.docker_client import get_docker_client
             client = get_docker_client()
-            containers = client.containers.list(
-                filters={
-                    'label': f'smsly.service_id={service.id}',
-                    'status': 'running',
-                },
-            )
-            return len(containers)
+            seen_ids: set[str] = set()
+            for flt in (
+                {'label': f'smsly.service_id={service.id}', 'status': 'running'},
+                {'label': f'smsly.blue_green.canonical_name={service.name}', 'status': 'running'},
+            ):
+                for c in client.containers.list(filters=flt):
+                    cname = str(getattr(c, 'name', '') or '')
+                    if any(tag in cname for tag in ('-rollback-', '-green-', '-promoting-')):
+                        continue
+                    cid = str(getattr(c, 'id', '') or cname)
+                    seen_ids.add(cid)
+            return len(seen_ids)
         except Exception as exc:
             logger.debug("HA: container count failed for %s: %s", service.name, exc)
             return 0
 
     def _spawn_local_replica(self, service, count_needed: int) -> bool:
-        """Spawn a replacement replica container on the same node.
+        """Spawn replacement replica container(s) on the local host.
 
-        Uses the service's current docker_image + env vars. The existing
-        _deploy_container task handles the full pipeline (env, health
-        check, Traefik labels). We just queue a new deployment that
-        will create a container.
+        When a primary container is already running, spawn true parallel
+        replicas via ``SpawningService.spawn_local`` rather than triggering a
+        blue-green primary replacement. Falls back to full deployment only
+        when no primary container exists yet.
         """
         try:
+            from apps.autoscaler.models.replica import ServiceReplica
+            from apps.cloud.docker_client import get_docker_client
             from apps.deployments.models import Deployment
+            from apps.deployments.services.spawning_service import SpawningService
 
-            # Don't spawn if there's already an in-flight deployment
+            primary_up = False
+            try:
+                c = get_docker_client().containers.get(service.name)
+                primary_up = str(getattr(c, 'status', '')).lower() == 'running'
+            except Exception:
+                primary_up = False
+
+            if primary_up:
+                spawner = SpawningService()
+                spawned_any = False
+                for _ in range(max(1, int(count_needed))):
+                    replica = ServiceReplica.objects.create(
+                        service=service,
+                        node=None,
+                        status='SPAWNING',
+                        spawn_reason='HA local replica reconcile',
+                    )
+                    try:
+                        spawner.spawn_local(service, replica)
+                        spawned_any = True
+                    except Exception:
+                        replica.status = 'DESTROYED'
+                        replica.save(update_fields=['status'])
+                if spawned_any:
+                    return True
+
+            # Don't trigger full deploy if there's already an in-flight deployment
             in_flight = Deployment.objects.filter(
                 service=service,
                 status__in=[
@@ -362,9 +400,10 @@ class ServiceHAManager:
                 skip_review=True,
             )
 
-            replica.container_id = str(deployment.id)
-            replica.status = 'RUNNING'
-            replica.save(update_fields=['container_id', 'status'])
+            # Leave status SPAWNING until the queued deployment actually starts
+            # and transitions the container live (never falsely report RUNNING).
+            replica.container_id = f"ha-deploy:{deployment.id}"
+            replica.save(update_fields=['container_id'])
             return True
 
         except Exception as exc:

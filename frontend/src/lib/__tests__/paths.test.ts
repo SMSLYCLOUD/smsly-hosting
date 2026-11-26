@@ -7,10 +7,12 @@ import {
   AUTH_REDIRECT_GUARD_KEY,
   PROTECTED_PREFIXES,
   canRedirectToLogin,
+  getSafeRedirectUrl,
   isAuthPage,
   isCallbackPage,
   isProtectedPath,
   resetRedirectGuard,
+  safeAssignUrl,
 } from '@/lib/paths';
 
 describe('isProtectedPath', () => {
@@ -131,5 +133,29 @@ describe('resetRedirectGuard', () => {
     } finally {
       (globalThis as { sessionStorage?: Storage }).sessionStorage = saved;
     }
+  });
+});
+
+describe('getSafeRedirectUrl / safeAssignUrl', () => {
+  it('allows http and https URLs and same-origin relative paths', () => {
+    expect(getSafeRedirectUrl('https://github.com/login/oauth/authorize?client_id=1')).toBe(
+      'https://github.com/login/oauth/authorize?client_id=1',
+    );
+    expect(getSafeRedirectUrl('http://localhost:8000/download?signed=1')).toBe(
+      'http://localhost:8000/download?signed=1',
+    );
+    expect(getSafeRedirectUrl('/settings?tab=git')).toBe('/settings?tab=git');
+  });
+
+  it('rejects javascript:, data:, protocol-relative //, and control characters', () => {
+    expect(getSafeRedirectUrl('javascript:alert(1)')).toBeNull();
+    expect(getSafeRedirectUrl('JaVaScRiPt:alert(1)')).toBeNull();
+    expect(getSafeRedirectUrl('data:text/html,<script>alert(1)</script>')).toBeNull();
+    expect(getSafeRedirectUrl('//evil.example/phish')).toBeNull();
+    expect(getSafeRedirectUrl('/\\evil.example/phish')).toBeNull();
+    expect(getSafeRedirectUrl('https:evil.example')).toBeNull();
+    expect(getSafeRedirectUrl('https://ok.example/\nSet-Cookie:a=b')).toBeNull();
+    expect(getSafeRedirectUrl('')).toBeNull();
+    expect(safeAssignUrl('javascript:alert(1)')).toBe(false);
   });
 });

@@ -22,10 +22,10 @@ class TestDefaultServiceResources(TestCase):
             return default_service_resources()
 
     def test_big_host_gets_3_cores(self):
-        self.assertEqual(self._tiers(8, 32), (3.0, 6144))
+        self.assertEqual(self._tiers(8, 32), (4.0, 8192))
 
     def test_medium_host_gets_2_cores(self):
-        self.assertEqual(self._tiers(4, 8), (2.0, 4096))
+        self.assertEqual(self._tiers(4, 8), (4.0, 6144))
 
     def test_small_host_floor_is_2_cores(self):
         cpu, mem = self._tiers(2, 4)

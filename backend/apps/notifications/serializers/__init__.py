@@ -21,6 +21,8 @@ class ResourceAlertSerializer(serializers.ModelSerializer):
 
 
 class NotificationSerializer(serializers.ModelSerializer):
+    is_read = serializers.BooleanField(source='read', read_only=True)
+
     class Meta:
         model = Notification
         fields = (
@@ -29,16 +31,31 @@ class NotificationSerializer(serializers.ModelSerializer):
             'message',
             'event_type',
             'read',
+            'is_read',
             'created_at',
         )
-        read_only_fields = ('id', 'title', 'message', 'event_type', 'created_at')
+        read_only_fields = ('id', 'title', 'message', 'event_type', 'is_read', 'created_at')
 
 
 class NotificationPreferenceSerializer(serializers.ModelSerializer):
+    VALID_CHANNELS = {'email', 'sms', 'webhook', 'slack', 'discord', 'in_app'}
+
     class Meta:
         model = NotificationPreference
         fields = ('id', 'user', 'event_type', 'channels')
         read_only_fields = ('id', 'user')
+
+    def validate_channels(self, value):
+        if not isinstance(value, list):
+            raise serializers.ValidationError("channels must be a list of channel names.")
+        cleaned = []
+        for item in value:
+            ch = str(item or '').strip().lower()
+            if ch not in self.VALID_CHANNELS:
+                raise serializers.ValidationError(f"Unsupported notification channel: {item!r}")
+            if ch not in cleaned:
+                cleaned.append(ch)
+        return cleaned
 
 
 class NotificationChannelSerializer(serializers.ModelSerializer):

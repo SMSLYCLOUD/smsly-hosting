@@ -601,7 +601,10 @@ class DomainActionsMixin:
             )
             if created:
                 from apps.domains.tasks import verify_dns_and_provision_ssl_task
-                verify_dns_and_provision_ssl_task.delay(domain_obj.id)
+                try:
+                    verify_dns_and_provision_ssl_task.delay(domain_obj.id)
+                except Exception as exc:
+                    logger.warning("Failed to queue DNS verification for %s: %s", d, exc)
 
 
         cfg = PlatformConfig.load()
@@ -612,7 +615,12 @@ class DomainActionsMixin:
         # (generate_caddyfile + apply_caddyfile + push_caddy_to_nodes)
         # can take 30+ seconds and causes HTTP timeouts on slow nodes.
         from apps.deployments.tasks.deploy.caddy import sync_caddy_task
-        sync_caddy_task.delay()
+        caddy_synced = True
+        try:
+            sync_caddy_task.delay()
+        except Exception as exc:
+            logger.warning("Failed to queue Caddy sync after domain add: %s", exc)
+            caddy_synced = False
 
         from ...utils import log_event
         log_event(
@@ -622,7 +630,7 @@ class DomainActionsMixin:
             metadata={
                 'service_id': str(service.id),
                 'domain': domain,
-                'caddy_synced': True,
+                'caddy_synced': caddy_synced,
             },
         )
 
@@ -631,7 +639,7 @@ class DomainActionsMixin:
             'domains': domains,
             'cname_target': cname_target,
             'server_ip': server_ip,
-            'caddy_synced': True,
+            'caddy_synced': caddy_synced,
             'routing_sync_deployment_id': None,
             'requires_redeploy': False,
             'dns_synced': False,
@@ -688,12 +696,20 @@ class DomainActionsMixin:
             )
             if created:
                 from apps.domains.tasks import verify_dns_and_provision_ssl_task
-                verify_dns_and_provision_ssl_task.delay(domain_obj.id)
+                try:
+                    verify_dns_and_provision_ssl_task.delay(domain_obj.id)
+                except Exception as exc:
+                    logger.warning("Failed to queue DNS verification for %s: %s", d, exc)
 
 
         # Dispatch Caddy sync to background (same as add_domain).
         from apps.deployments.tasks.deploy.caddy import sync_caddy_task
-        sync_caddy_task.delay()
+        caddy_synced = True
+        try:
+            sync_caddy_task.delay()
+        except Exception as exc:
+            logger.warning("Failed to queue Caddy sync after domain delete: %s", exc)
+            caddy_synced = False
 
         from ...utils import log_event
         log_event(
@@ -703,13 +719,13 @@ class DomainActionsMixin:
             metadata={
                 'service_id': str(service.id),
                 'domain': domain,
-                'caddy_synced': True,
+                'caddy_synced': caddy_synced,
             },
         )
 
         return Response({
             'domains': domains,
-            'caddy_synced': True,
+            'caddy_synced': caddy_synced,
             'routing_sync_deployment_id': None,
             'requires_redeploy': False,
             'message': f'{domain} removed. Routing sync dispatched in background.',

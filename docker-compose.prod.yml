@@ -17,6 +17,7 @@ services:
     image: postgres:16-alpine
     container_name: smsly-postgres-primary
     restart: unless-stopped
+    oom_score_adj: -500
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
       POSTGRES_USER: ${POSTGRES_USER:-smsly_admin}
@@ -34,7 +35,7 @@ services:
       -c max_replication_slots=10
       -c wal_log_hints=on
       -c hot_standby=on
-      -c wal_keep_size=1GB
+      -c wal_keep_size=${PG_WAL_KEEP_SIZE:-1GB}
       -c max_slot_wal_keep_size=${PG_MAX_SLOT_WAL_KEEP_SIZE:-5GB}
       -c wal_sender_timeout=60s
       -c archive_mode=on
@@ -48,7 +49,7 @@ services:
       test:
       - CMD-SHELL
       - PGPASSWORD="$${POSTGRES_PASSWORD}" pg_isready -U "$${POSTGRES_USER:-smsly_admin}" -d "$${POSTGRES_DB:-smsly_hosting}"
-      interval: 10s
+      interval: 20s
       timeout: 10s
       retries: 10
       start_period: 60s
@@ -66,7 +67,7 @@ services:
           memory: ${DB_PRIMARY_LIMIT:-8G}
 
   postgres-replica:
-    profiles: ["local-ha"]
+    profiles: ["local-ha-replica"]
     security_opt:
       - apparmor:docker-default
     image: postgres:16-alpine
@@ -125,12 +126,12 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
       PGCAT_ADMIN_PASSWORD: ${PGCAT_ADMIN_PASSWORD:?PGCAT_ADMIN_PASSWORD must be set in .env}
-      DB_REPLICA_HOSTS: ${DB_REPLICA_HOSTS:-postgres-replica:5432}
+      DB_REPLICA_HOSTS: ${DB_REPLICA_HOSTS:-}
     healthcheck:
       test:
       - CMD-SHELL
       - python3 -c "import socket; s=socket.socket(); s.settimeout(5); s.connect(('127.0.0.1', 6432)); s.close()"
-      interval: 10s
+      interval: 20s
       timeout: 10s
       retries: 10
       start_period: 60s
@@ -239,7 +240,7 @@ services:
       # Patroni connect_address. A hardcoded value breaks after re-creation.
     volumes:
       - patroni1-data:/var/lib/postgresql/data
-      - patroni-wal:/var/lib/postgresql/wal
+      - patroni1-wal:/var/lib/postgresql/wal
     networks:
       - smsly-net
     depends_on:
@@ -280,7 +281,7 @@ services:
       PGPASSWORD_STANDBY: ${REPLICATION_PASSWORD}
     volumes:
       - patroni2-data:/var/lib/postgresql/data
-      - patroni-wal:/var/lib/postgresql/wal
+      - patroni2-wal:/var/lib/postgresql/wal
     networks:
       - smsly-net
     depends_on:
@@ -321,7 +322,7 @@ services:
       PGPASSWORD_STANDBY: ${REPLICATION_PASSWORD}
     volumes:
       - patroni3-data:/var/lib/postgresql/data
-      - patroni-wal:/var/lib/postgresql/wal
+      - patroni3-wal:/var/lib/postgresql/wal
     networks:
       - smsly-net
     depends_on:
@@ -350,9 +351,9 @@ services:
     volumes:
       - ./infrastructure/docker/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     ports:
-      - "${HAPROXY_WRITE_BIND:-127.0.0.1}:5000:5000"
-      - "${HAPROXY_READ_BIND:-127.0.0.1}:5001:5001"
-      - "127.0.0.1:7000:7000"
+      - "${HAPROXY_WRITE_BIND:-127.0.0.1}:15432:5000"
+      - "${HAPROXY_READ_BIND:-127.0.0.1}:15433:5001"
+      - "127.0.0.1:17000:7000"
     networks:
       - smsly-net
     depends_on:
@@ -423,6 +424,7 @@ services:
     image: redis:7-alpine
     container_name: smsly-redis-primary
     restart: unless-stopped
+    oom_score_adj: -500
     command: >
       redis-server
       --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
@@ -440,7 +442,7 @@ services:
       test:
       - CMD-SHELL
       - redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping | grep PONG
-      interval: 10s
+      interval: 20s
       timeout: 5s
       retries: 5
       start_period: 10s
@@ -456,6 +458,7 @@ services:
           memory: ${REDIS_PRIMARY_LIMIT:-1G}
 
   redis-replica:
+    profiles: ["redis-ha"]
     security_opt:
       - apparmor:docker-default
     read_only: true
@@ -482,7 +485,7 @@ services:
       test:
       - CMD-SHELL
       - redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping | grep PONG
-      interval: 10s
+      interval: 20s
       timeout: 5s
       retries: 5
       start_period: 30s
@@ -498,6 +501,7 @@ services:
           memory: ${REDIS_REPLICA_LIMIT:-512M}
 
   redis-sentinel-1:
+    profiles: ["redis-ha"]
     security_opt:
       - apparmor:docker-default
     read_only: true
@@ -532,7 +536,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG"]
-      interval: 10s
+      interval: 20s
       timeout: 5s
       retries: 5
       start_period: 15s
@@ -546,6 +550,7 @@ services:
           memory: ${SENTINEL_MEMORY_LIMIT:-32M}
 
   redis-sentinel-2:
+    profiles: ["redis-ha"]
     security_opt:
       - apparmor:docker-default
     read_only: true
@@ -580,7 +585,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG"]
-      interval: 10s
+      interval: 20s
       timeout: 5s
       retries: 5
       start_period: 15s
@@ -594,6 +599,7 @@ services:
           memory: ${SENTINEL_MEMORY_LIMIT:-32M}
 
   redis-sentinel-3:
+    profiles: ["redis-ha"]
     security_opt:
       - apparmor:docker-default
     read_only: true
@@ -628,7 +634,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG"]
-      interval: 10s
+      interval: 20s
       timeout: 5s
       retries: 5
       start_period: 15s
@@ -670,7 +676,7 @@ services:
     # only supported topology, enforced fail-closed by fresh_deploy.sh.
     - "${REGISTRY_BIND_IP:-127.0.0.1}:5000:5000"
     - "${REGISTRY_MESH_BIND_IP:-10.100.0.1}:5000:5000"
-    - "${REGISTRY_PUBLIC_BIND_IP:-127.0.0.1}:5000:5000"
+    - "${REGISTRY_PUBLIC_BIND_IP:-127.0.0.3}:5000:5000"
     environment:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
       REGISTRY_STORAGE_DELETE_ENABLED: "true"
@@ -685,12 +691,16 @@ services:
       - ./certs:/certs:ro,z
       - ./auth:/auth:ro,z
     healthcheck:
-      # registry:2.8.3 is scratch-based (no shell, no curl/wget).
-      # The Docker restart policy handles crash recovery.
-      # For active health monitoring, run the registry-health.sh script
-      # from the host or use an external monitoring container.
-      test: ["NONE"]
-      disable: true
+      # registry:2.8.3 is Alpine-based (wget present). Probe HTTPS /v2/ on
+      # loopback; 200 or 401 (when htpasswd auth is active) proves the TLS
+      # listener and registry process are healthy.
+      test:
+      - CMD-SHELL
+      - wget --no-check-certificate -S -O /dev/null https://127.0.0.1:5000/v2/ 2>&1 | grep -qE "HTTP/[0-9.]+ (200|401)" || exit 1
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     labels:
     - managed_by=smsly-hosting
     # SECURITY: No public Traefik route — registry is accessed via
@@ -852,7 +862,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     image: smsly-hosting-backend:latest
-    command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers ${GUNICORN_WORKERS:-4} --worker-class
+    command: gunicorn config.asgi:application -c /app/gunicorn.conf.py --bind 0.0.0.0:8000 --workers ${GUNICORN_WORKERS:-4} --worker-class
       uvicorn.workers.UvicornWorker --timeout ${GUNICORN_TIMEOUT:-600}
     restart: unless-stopped
     # SECURITY: NET_ADMIN was used for iptables in dev; in prod the host should
@@ -860,6 +870,7 @@ services:
     # specific feature requires it and document why.
     env_file: .env
     environment:
+      MALLOC_ARENA_MAX: "${MALLOC_ARENA_MAX:-2}"
       REDIS_HOST: ${REDIS_HOST:-redis-primary}
       UVICORN_WS_PING_INTERVAL: 20
       UVICORN_WS_PING_TIMEOUT: 20
@@ -887,8 +898,8 @@ services:
     depends_on:
       pgcat:
         condition: service_healthy
-      redis-sentinel-1:
-        condition: service_started
+      redis-primary:
+        condition: service_healthy
       socket-proxy:
         condition: service_healthy
       rabbitmq:
@@ -929,6 +940,7 @@ services:
     # SPIRE stack (up/down for spire-server / spire-agent) without
     # exposing the whole host repo. Read-only: the backend never edits it.
     - /opt/smsly-hosting/docker-compose.spire.yml:/opt/smsly-hosting/docker-compose.spire.yml:ro,z
+    - ./infrastructure/spire:/opt/smsly-hosting/infrastructure/spire:ro,z
     - backups_data:/app/backups
     - caddy_logs:/var/log/caddy:ro
     - traefik_logs:/var/log/traefik:ro
@@ -1007,6 +1019,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      MALLOC_ARENA_MAX: "${MALLOC_ARENA_MAX:-2}"
       REDIS_HOST: ${REDIS_HOST:-redis-primary}
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
@@ -1030,8 +1043,8 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-      redis-sentinel-1:
-        condition: service_started
+      redis-primary:
+        condition: service_healthy
       socket-proxy:
         condition: service_healthy
       rabbitmq:
@@ -1061,6 +1074,7 @@ services:
     # platform registry lacks the sidecar image). Read-only: workers
     # only read the Dockerfile + template from here.
     - ./infrastructure/envoy:/opt/envoy-build:ro,z
+    - ./infrastructure/spire:/opt/smsly-hosting/infrastructure/spire:ro,z
     healthcheck:
       test:
       - CMD-SHELL
@@ -1111,6 +1125,7 @@ services:
     stop_grace_period: 60s
     env_file: .env
     environment:
+      MALLOC_ARENA_MAX: "${MALLOC_ARENA_MAX:-2}"
       REDIS_HOST: ${REDIS_HOST:-redis-primary}
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
@@ -1128,8 +1143,8 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-      redis-sentinel-1:
-        condition: service_started
+      redis-primary:
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
     volumes:
@@ -1145,7 +1160,7 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1
+      - test -f /app/celerybeat.pid && kill -0 $$(cat /app/celerybeat.pid)
       # Stretched 60s->120s (2026-09-16): same ping pileup class as the
       # workers above; halves steady healthcheck burn fleet-wide.
       interval: 120s
@@ -1178,11 +1193,13 @@ services:
         NODE_BUILD_MEMORY_MB: ${FRONTEND_BUILD_MEMORY_MB:-2048}
     restart: unless-stopped
     env_file: .env
+    environment:
+      NODE_OPTIONS: "--max-old-space-size=${FRONTEND_MAX_OLD_SPACE_MB:-256}"
     healthcheck:
       test:
       - CMD-SHELL
       - wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1
-      interval: 10s
+      interval: 30s
       timeout: 5s
       retries: 5
       start_period: 20s
@@ -1226,7 +1243,7 @@ services:
     # the worst-case processes and memory.
     command: >
       celery -A config worker -l WARNING --pool=prefork
-      --autoscale=${CELERY_FAST_AUTOSCALE:-2,1}
+      --autoscale=${CELERY_FAST_AUTOSCALE:-2,0}
       --prefetch-multiplier=1
       --max-tasks-per-child=${CELERY_FAST_MAX_TASKS_PER_CHILD:-100}
       --max-memory-per-child=${CELERY_FAST_MAX_MEMORY_PER_CHILD:-393216}
@@ -1234,6 +1251,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      MALLOC_ARENA_MAX: "${MALLOC_ARENA_MAX:-2}"
       REDIS_HOST: ${REDIS_HOST:-redis-primary}
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
@@ -1254,8 +1272,8 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-      redis-sentinel-1:
-        condition: service_started
+      redis-primary:
+        condition: service_healthy
       socket-proxy:
         condition: service_healthy
       rabbitmq:
@@ -1279,6 +1297,7 @@ services:
     # platform registry lacks the sidecar image). Read-only: workers
     # only read the Dockerfile + template from here.
     - ./infrastructure/envoy:/opt/envoy-build:ro,z
+    - ./infrastructure/spire:/opt/smsly-hosting/infrastructure/spire:ro,z
     healthcheck:
       test:
       - CMD-SHELL
@@ -1329,6 +1348,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      MALLOC_ARENA_MAX: "${MALLOC_ARENA_MAX:-2}"
       REDIS_HOST: ${REDIS_HOST:-redis-primary}
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
@@ -1352,8 +1372,8 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-      redis-sentinel-1:
-        condition: service_started
+      redis-primary:
+        condition: service_healthy
       socket-proxy:
         condition: service_healthy
       rabbitmq:
@@ -1378,6 +1398,7 @@ services:
     # platform registry lacks the sidecar image). Read-only: workers
     # only read the Dockerfile + template from here.
     - ./infrastructure/envoy:/opt/envoy-build:ro,z
+    - ./infrastructure/spire:/opt/smsly-hosting/infrastructure/spire:ro,z
     healthcheck:
       test:
       - CMD-SHELL
@@ -1440,7 +1461,7 @@ services:
       test:
       - CMD-SHELL
       - wget -q -O /dev/null http://127.0.0.1:2375/version || exit 1
-      interval: 5s
+      interval: 20s
       timeout: 3s
       retries: 5
       start_period: 5s
@@ -1471,7 +1492,7 @@ services:
     - /var/run/docker.sock:/var/run/docker.sock:ro,z
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2375/version || exit 1"]
-      interval: 10s
+      interval: 30s
       timeout: 5s
       retries: 5
       start_period: 10s
@@ -1496,7 +1517,7 @@ services:
     command: caddy run --config /etc/rb-fallback/Caddyfile --adapter caddyfile
     volumes:
     - ./infrastructure/route-fallback:/etc/rb-fallback:ro,z
-    - caddy_data:/data
+    - route_fallback_data:/data
     labels:
     - traefik.enable=true
     - traefik.http.routers.route-fallback.rule=PathPrefix(`/`)
@@ -1508,7 +1529,7 @@ services:
       test:
       - CMD-SHELL
       - wget -q -O /dev/null http://127.0.0.1:80/health || exit 1
-      interval: 10s
+      interval: 30s
       timeout: 5s
       retries: 5
       start_period: 10s
@@ -1519,6 +1540,7 @@ services:
         limits:
           memory: ${ROUTE_FALLBACK_MEMORY_LIMIT:-128M}
   crowdsec:
+    profiles: ["medium", "full"]
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
@@ -1559,6 +1581,7 @@ services:
           memory: ${CROWDSEC_MEMORY_LIMIT:-512M}
 
   crowdsec-cloudflare-bouncer:
+    profiles: ["medium", "full"]
     # Pushes CrowdSec bans to Cloudflare account IP lists & Rulesets API (edge blocking).
     # Uses Cloudflare Rulesets API v4 (replaces upstream v0.3.0 which calls deprecated Firewall Rules API 10020).
     image: python:3.12-alpine
@@ -1664,11 +1687,9 @@ services:
     depends_on:
       traefik-socket-proxy:
         condition: service_healthy
-      crowdsec:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
-      interval: 10s
+      interval: 20s
       timeout: 5s
       retries: 5
       start_period: 10s
@@ -1761,7 +1782,7 @@ services:
     - /var/run/docker.sock:/var/run/docker.sock:ro,z
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2375/version || exit 1"]
-      interval: 10s
+      interval: 30s
       timeout: 5s
       retries: 5
       start_period: 10s
@@ -1821,6 +1842,7 @@ services:
     security_opt:
       - apparmor:docker-default
     image: rabbitmq:3-management-alpine
+    oom_score_adj: -500
     ports:
       # SECURITY: AMQP broker on loopback; producers/consumers talk to it
       # through the smsly-net overlay only.
@@ -1830,18 +1852,19 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-smsly_user}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set in .env}
       RABBITMQ_MEMORY_WATERMARK: ${RABBITMQ_MEMORY_WATERMARK:-0.6}
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "${RABBITMQ_ERL_ARGS:-+S 2:2 +sbwt none +sbwtdcpu none +sbwtdio none}"
     volumes:
     - rabbitmq_data:/var/lib/rabbitmq
     # consumer_timeout (ms) must exceed the longest Celery task limit
     # (TASK_TIME_LIMIT_HEAVY = 7500s). The broker default (1800000ms = 30m)
     # kills the channel of any deploy/backup task running longer, causing
     # PRECONDITION_FAILED + ConnectionResetError ack storms (2026-09-09).
-    command: sh -c 'printf "vm_memory_high_watermark.relative = $${RABBITMQ_MEMORY_WATERMARK:-0.6}\nconsumer_timeout = $${RABBITMQ_CONSUMER_TIMEOUT:-10800000}\n" > /etc/rabbitmq/conf.d/10-smsly.conf && exec docker-entrypoint.sh rabbitmq-server'
+    command: sh -c 'printf "vm_memory_high_watermark.relative = $${RABBITMQ_MEMORY_WATERMARK:-0.6}\nconsumer_timeout = $${RABBITMQ_CONSUMER_TIMEOUT:-10800000}\nmanagement_agent.disable_metrics_collector = true\n" > /etc/rabbitmq/conf.d/10-smsly.conf && exec docker-entrypoint.sh rabbitmq-server'
     healthcheck:
       test:
       - CMD-SHELL
       - rabbitmq-diagnostics -q check_running
-      interval: 10s
+      interval: 30s
       timeout: 10s
       retries: 10
       start_period: 60s
@@ -1867,6 +1890,7 @@ services:
       context: .
       dockerfile: infrastructure/caddy/Dockerfile
     restart: unless-stopped
+    oom_score_adj: -500
     command: sh -c "umask 0022 && caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"
     ports:
       - "80:80"
@@ -1889,7 +1913,7 @@ services:
       test:
       - CMD-SHELL
       - wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1
-      interval: 10s
+      interval: 20s
       timeout: 5s
       retries: 5
       start_period: 15s
@@ -1910,12 +1934,12 @@ services:
   # and forwards byte-identically before any 80/443 cutover.
   # Phase 2 (cutover): envoy takes 80/443, Caddy drops to loopback
   # high ports (Caddy WAF-mode generation + SNI map) — separate change.
-  # Containers are full-gated (default profiles start them) AND
+  # Containers are appsec-gated (only active when OPENAPPSEC_ENABLED=1) AND
   # env-gated: lib/harden_openappsec.sh seeds policy and waits for the
   # shadow port only when OPENAPPSEC_ENABLED=1. A plain `up` without the
-  # full profile never touches them. NEVER --remove-orphans here.
+  # appsec profile never touches them. NEVER --remove-orphans here.
   appsec-agent:
-    profiles: ["full"]
+    profiles: ["appsec"]
     image: ghcr.io/openappsec/agent:${OPENAPPSEC_VERSION:-1.1.9}
     container_name: smsly-appsec-agent
     restart: unless-stopped
@@ -1952,7 +1976,7 @@ services:
         limits:
           memory: ${OPENAPPSEC_AGENT_MEMORY_LIMIT:-2G}
   appsec-envoy:
-    profiles: ["full"]
+    profiles: ["appsec"]
     image: ghcr.io/openappsec/envoy-attachment:${OPENAPPSEC_ENVOY_VERSION:-1.34.4}
     container_name: smsly-appsec-envoy
     restart: unless-stopped
@@ -1989,7 +2013,7 @@ services:
           memory: ${OPENAPPSEC_ENVOY_MEMORY_LIMIT:-512M}
           cpus: "0.50"
   appsec-shared-storage:
-    profiles: ["full"]
+    profiles: ["appsec"]
     image: ghcr.io/openappsec/smartsync-shared-files:${OPENAPPSEC_VERSION:-1.1.9}
     container_name: smsly-appsec-shared-storage
     restart: unless-stopped
@@ -2006,7 +2030,7 @@ services:
         limits:
           memory: ${OPENAPPSEC_STORAGE_MEMORY_LIMIT:-512M}
   appsec-smartsync:
-    profiles: ["full"]
+    profiles: ["appsec"]
     image: ghcr.io/openappsec/smartsync:${OPENAPPSEC_VERSION:-1.1.9}
     container_name: smsly-appsec-smartsync
     restart: unless-stopped
@@ -2023,13 +2047,13 @@ services:
         limits:
           memory: ${OPENAPPSEC_SMARTSYNC_MEMORY_LIMIT:-1G}
   appsec-tuning-svc:
-    profiles: ["full"]
+    profiles: ["appsec"]
     image: ghcr.io/openappsec/smartsync-tuning:${OPENAPPSEC_VERSION:-1.1.9}
     container_name: smsly-appsec-tuning-svc
     restart: unless-stopped
     environment:
       - SHARED_STORAGE_HOST=appsec-shared-storage
-      - QUERY_DB_PASSWORD=${OPENAPPSEC_DB_PASSWORD:-appsec-tuning-pw}
+      - QUERY_DB_PASSWORD=${OPENAPPSEC_DB_PASSWORD:-}
       - QUERY_DB_HOST=appsec-db
       - QUERY_DB_USER=postgres
     volumes:
@@ -2046,12 +2070,12 @@ services:
         limits:
           memory: ${OPENAPPSEC_TUNING_MEMORY_LIMIT:-1G}
   appsec-db:
-    profiles: ["full"]
+    profiles: ["appsec"]
     image: postgres:${OPENAPPSEC_POSTGRES_VERSION:-18}
     container_name: smsly-appsec-db
     restart: unless-stopped
     environment:
-      - POSTGRES_PASSWORD=${OPENAPPSEC_DB_PASSWORD:-appsec-tuning-pw}
+      - POSTGRES_PASSWORD=${OPENAPPSEC_DB_PASSWORD:-}
       - POSTGRES_USER=postgres
     volumes:
       - appsec_postgres_data:/var/lib/postgresql
@@ -2150,7 +2174,7 @@ services:
     environment:
       LOKI_URL: http://smsly-loki:3100
       CROWDSEC_LOG_DIR: /var/log/crowdsec/nodes
-      POLL_INTERVAL: "2"
+      POLL_INTERVAL: "${LOKI_BRIDGE_POLL_INTERVAL:-10}"
       LOOKBACK: "5m"
     volumes:
       - node_logs:/var/log/crowdsec/nodes
@@ -2256,6 +2280,12 @@ services:
     security_opt: [no-new-privileges:true, apparmor:docker-default]
     command:
       - --containerd=unix:///var/run/containerd/containerd.sock
+      - --docker_only=true
+      - --housekeeping_interval=30s
+      - --max_housekeeping_interval=35s
+      - --event_storage_event_limit=default=0
+      - --event_storage_age_limit=default=0
+      - --disable_metrics=percpu,sched,tcp,udp,disk,diskIO,hugetlb,referenced_memory,cpu_topology,resctrl,process,advtcp,memory_numa
     volumes:
       - /:/rootfs:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -2319,7 +2349,7 @@ services:
       - NODE_NAME=local
       - REFRESH_INTERVAL=60
       - STATS_TIMEOUT=50
-      - MAX_WORKERS=8
+      - MAX_WORKERS=${DOCKER_LABELS_WORKERS:-4}
       - DOCKER_SOCK=/var/run/docker.sock
     volumes:
       - ./infrastructure/monitoring/docker-labels-exporter.py:/app/exporter.py:ro
@@ -2352,7 +2382,7 @@ services:
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=${GRAFANA_SERVER_ROOT_URL:-https://${DOMAIN:-localhost}/grafana/}
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
-      - GF_AUTH_ANONYMOUS_ENABLED=${GRAFANA_ANON_ENABLED:-true}
+      - GF_AUTH_ANONYMOUS_ENABLED=${GRAFANA_ANON_ENABLED:-false}
       - GF_AUTH_ANONYMOUS_ORG_NAME=${GRAFANA_ANON_ORG:-Main Org.}
       - GF_AUTH_ANONYMOUS_ORG_ROLE=${GRAFANA_ANON_ROLE:-Viewer}
       - GF_AUTH_ANONYMOUS_HIDE_VERSION=true
@@ -2380,7 +2410,7 @@ services:
       - "traefik.http.routers.grafana.entrypoints=websecure"
       - "traefik.http.routers.grafana.tls=true"
       - "traefik.http.services.grafana.loadbalancer.server.port=3000"
-      - "traefik.docker.network=smsly-proxy"
+      - "traefik.docker.network=smsly-net"
       - "managed_by=smsly-hosting"
     deploy:
       resources:
@@ -2610,7 +2640,9 @@ volumes:
   patroni1-data:
   patroni2-data:
   patroni3-data:
-  patroni-wal:
+  patroni1-wal:
+  patroni2-wal:
+  patroni3-wal:
   redis-primary-data:
   redis-replica-data:
   registry_data: null
@@ -2637,6 +2669,7 @@ volumes:
       device: /opt/smsly-hosting/traefik-dynamic
   caddy_data:
     driver: local
+  route_fallback_data: null
   backups_data: null
   rabbitmq_data: null
   letsencrypt_data: null
@@ -2651,7 +2684,7 @@ volumes:
   pgbouncer_tenants_config: null
   crowdsec_data: null
   crowdsec_config: null
-  
+
   # SPIRE mTLS volumes
   spire-server-data: null
   spire-agent-socket: null

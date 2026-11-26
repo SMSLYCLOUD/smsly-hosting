@@ -101,10 +101,11 @@ class MeshMixin:
     def get_wg_status(cls, iface: str = "wg0") -> dict:
         import docker
         try:
-            client = docker.from_env()
+            iface = cls.validate_interface_name(iface)
+            client = docker.from_env(timeout=30)
             container = client.containers.run(
-                "alpine",
-                command=["sh", "-c", f"apk add wireguard-tools >/dev/null 2>&1 && wg show {shlex.quote(iface)}"],
+                "alpine:3.20",
+                command=["sh", "-c", f"timeout 30 sh -c {shlex.quote(f'apk add wireguard-tools >/dev/null 2>&1 && wg show {shlex.quote(iface)}')}"],
                 privileged=True,
                 network_mode="host",
                 volumes={"/lib/modules": {"bind": "/lib/modules", "mode": "ro"}},

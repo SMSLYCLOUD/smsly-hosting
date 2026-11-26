@@ -24,7 +24,7 @@ class IntelligenceAuditLogTimestampTests(TestCase):
     """All Intelligence readers/writers must use AuditLog.timestamp."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username="intel-user", password="x")
+        self.user = User.objects.create_user(username="intel-user", password="x", is_superuser=True, is_staff=True)
         self.token = Token.objects.create(user=self.user)
 
     def _report_row(self, **meta):

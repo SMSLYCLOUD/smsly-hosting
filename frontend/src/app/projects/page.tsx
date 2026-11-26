@@ -11,8 +11,16 @@ import { projectsApi, Project } from '@/lib/api';
 import { PROJECT_EMOJI_OPTIONS, PROJECT_COLOR_OPTIONS } from '@/lib/project-constants';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Button } from '@/components/ui/button';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, FolderOpen, Settings2, Trash2, X, Palette } from 'lucide-react';
+import { Label } from '@/components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { motion } from 'framer-motion';
+import { Plus, FolderOpen, Settings2, Trash2, Palette } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
@@ -78,7 +86,13 @@ export default function ProjectsPage() {
 
   const handleDelete = async (e: React.MouseEvent, project: Project) => {
     e.stopPropagation();
-    if (!await confirm({ title: 'Delete project?', message: `Delete project "${project.name}"? All services in this project will be deleted.`, variant: 'destructive', confirmText: 'Delete' })) return;
+    if (!await confirm({
+      title: 'Delete project?',
+      message: `Delete project "${project.name}"? All services in this project will be deleted.`,
+      variant: 'destructive',
+      confirmText: 'Delete',
+      requireMatchText: project.name,
+    })) return;
     try {
       await projectsApi.delete(project.id);
       setProjects(prev => prev.filter(p => p.id !== project.id));
@@ -118,115 +132,117 @@ export default function ProjectsPage() {
         </div>
 
         {/* Create Modal */}
-        <AnimatePresence>
-          {showCreate && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-              onClick={() => setShowCreate(false)}
-            >
-              <motion.div
-                initial={{ scale: 0.9, y: 20 }}
-                animate={{ scale: 1, y: 0 }}
-                exit={{ scale: 0.9, y: 20 }}
-                onClick={e => e.stopPropagation()}
-                className="w-full max-w-md rounded-2xl border border-zinc-700/50 bg-zinc-900 p-6 shadow-2xl"
-              >
-                <div className="flex items-center justify-between mb-6">
-                  <h2 className="text-lg font-bold text-white">Create Project</h2>
-                  <button onClick={() => setShowCreate(false)} className="text-zinc-400 hover:text-white">
-                    <X className="w-5 h-5" />
-                  </button>
-                </div>
+        <Dialog open={showCreate} onOpenChange={setShowCreate}>
+          <DialogContent className="sm:max-w-md rounded-2xl border-border bg-card text-card-foreground p-6 shadow-2xl">
+            <DialogHeader className="mb-2">
+              <DialogTitle className="text-lg font-bold text-foreground">Create Project</DialogTitle>
+              <DialogDescription className="text-xs text-muted-foreground">
+                Configure a name, icon, and accent color for your new project.
+              </DialogDescription>
+            </DialogHeader>
 
-                {/* Name */}
-                <label className="block text-sm font-medium text-zinc-400 mb-1.5">Name</label>
-                <input
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                  placeholder="My Awesome Project"
-                  autoFocus
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2.5 text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-4"
-                />
+            {/* Name */}
+            <div>
+              <Label htmlFor="create-project-name" className="block text-sm font-medium text-muted-foreground mb-1.5">
+                Name
+              </Label>
+              <input
+                id="create-project-name"
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                placeholder="My Awesome Project"
+                autoFocus
+                className="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+            </div>
 
-                {/* Description */}
-                <label className="block text-sm font-medium text-zinc-400 mb-1.5">Description <span className="text-zinc-600">(optional)</span></label>
-                <input
-                  value={newDesc}
-                  onChange={e => setNewDesc(e.target.value)}
-                  placeholder="What is this project about?"
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2.5 text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-4"
-                />
+            {/* Description */}
+            <div>
+              <Label htmlFor="create-project-desc" className="block text-sm font-medium text-muted-foreground mb-1.5">
+                Description <span className="text-muted-foreground/70">(optional)</span>
+              </Label>
+              <input
+                id="create-project-desc"
+                value={newDesc}
+                onChange={e => setNewDesc(e.target.value)}
+                placeholder="What is this project about?"
+                className="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+            </div>
 
-                {/* Emoji picker */}
-                <label className="block text-sm font-medium text-zinc-400 mb-1.5">Icon</label>
-                <div className="flex flex-wrap gap-2 mb-4">
-                  {PROJECT_EMOJI_OPTIONS.map(emoji => (
-                    <button
-                      key={emoji}
-                      type="button"
-                      onClick={() => setNewEmoji(emoji)}
-                      className={`text-xl w-10 h-10 rounded-lg flex items-center justify-center transition-all ${
-                        newEmoji === emoji
-                          ? 'bg-indigo-500/20 ring-2 ring-indigo-500 scale-110'
-                          : 'bg-zinc-800 hover:bg-zinc-700'
-                      }`}
-                    >
-                      {emoji}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Color picker */}
-                <label className="flex items-center gap-1.5 text-sm font-medium text-zinc-400 mb-1.5">
-                  <Palette className="w-3.5 h-3.5" /> Accent Color
-                </label>
-                <div className="flex flex-wrap gap-2 mb-6">
-                  {PROJECT_COLOR_OPTIONS.map(color => (
-                    <button
-                      key={color}
-                      type="button"
-                      onClick={() => setNewColor(color)}
-                      className={`w-8 h-8 rounded-full transition-all ${
-                        newColor === color ? 'ring-2 ring-white scale-110' : 'hover:scale-105'
-                      }`}
-                      style={{ backgroundColor: color }}
-                    />
-                  ))}
-                </div>
-
-                {/* Preview */}
-                <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-4 mb-6 flex items-center gap-3">
-                  <span className="text-2xl">{newEmoji}</span>
-                  <div>
-                    <div className="font-semibold text-white">{newName || 'Project Name'}</div>
-                    <div className="text-xs text-zinc-500">{newDesc || 'No description'}</div>
-                  </div>
-                  <div className="ml-auto w-3 h-3 rounded-full" style={{ backgroundColor: newColor }} />
-                </div>
-
-                <div className="flex gap-3">
-                  <Button variant="ghost" onClick={() => setShowCreate(false)} className="flex-1">Cancel</Button>
-                  <Button
-                    onClick={handleCreate}
-                    disabled={!newName.trim() || creating}
-                    className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
+            {/* Emoji picker */}
+            <div>
+              <span className="block text-sm font-medium text-muted-foreground mb-1.5">Icon</span>
+              <div className="flex flex-wrap gap-2" role="group" aria-label="Project icon">
+                {PROJECT_EMOJI_OPTIONS.map(emoji => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    aria-label={`Select icon ${emoji}`}
+                    aria-pressed={newEmoji === emoji}
+                    onClick={() => setNewEmoji(emoji)}
+                    className={`text-xl w-10 h-10 rounded-lg flex items-center justify-center transition-all ${
+                      newEmoji === emoji
+                        ? 'bg-primary/20 ring-2 ring-primary scale-110'
+                        : 'bg-muted hover:bg-muted/80'
+                    }`}
                   >
-                    {creating ? 'Creating...' : 'Create Project'}
-                  </Button>
-                </div>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Color picker */}
+            <div>
+              <span className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground mb-1.5">
+                <Palette className="w-3.5 h-3.5" aria-hidden="true" /> Accent Color
+              </span>
+              <div className="flex flex-wrap gap-2" role="group" aria-label="Project accent color">
+                {PROJECT_COLOR_OPTIONS.map(color => (
+                  <button
+                    key={color}
+                    type="button"
+                    aria-label={`Select color ${color}`}
+                    aria-pressed={newColor === color}
+                    onClick={() => setNewColor(color)}
+                    className={`w-8 h-8 rounded-full transition-all ${
+                      newColor === color ? 'ring-2 ring-foreground scale-110' : 'hover:scale-105'
+                    }`}
+                    style={{ backgroundColor: color }}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Preview */}
+            <div className="rounded-xl border border-border bg-muted/50 p-4 flex items-center gap-3">
+              <span className="text-2xl">{newEmoji}</span>
+              <div className="min-w-0">
+                <div className="font-semibold text-foreground truncate">{newName || 'Project Name'}</div>
+                <div className="text-xs text-muted-foreground truncate">{newDesc || 'No description'}</div>
+              </div>
+              <div className="ml-auto w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: newColor }} />
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <Button variant="ghost" onClick={() => setShowCreate(false)} className="flex-1">Cancel</Button>
+              <Button
+                onClick={handleCreate}
+                disabled={!newName.trim() || creating}
+                className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
+              >
+                {creating ? 'Creating...' : 'Create Project'}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {/* Loading state */}
         {loading && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {[...Array(6)].map((_, i) => (
-              <div key={i} className="h-40 rounded-2xl bg-zinc-800/40 animate-pulse border border-zinc-800" />
+              <div key={i} className="h-40 rounded-2xl bg-muted/40 animate-pulse border border-border" />
             ))}
           </div>
         )}
@@ -239,7 +255,7 @@ export default function ProjectsPage() {
             className="flex flex-col items-center justify-center py-24 text-center"
           >
             <div className="text-6xl mb-4">📂</div>
-            <h2 className="text-xl font-bold text-white mb-2">No Projects Yet</h2>
+            <h2 className="text-xl font-bold text-foreground mb-2">No Projects Yet</h2>
             <p className="text-muted-foreground mb-6 max-w-md">
               Projects help you organize related services together. Create your first project to get started.
             </p>
@@ -265,7 +281,7 @@ export default function ProjectsPage() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.05 }}
                   onClick={() => router.push(`/projects/${project.id}`)}
-                  className="group relative rounded-2xl border border-zinc-800/80 bg-zinc-900/60 backdrop-blur-sm p-5 cursor-pointer transition-all duration-200 hover:border-zinc-600 hover:bg-zinc-800/60 hover:shadow-xl hover:shadow-black/20 hover:-translate-y-0.5"
+                  className="group relative rounded-2xl border border-border bg-card/80 backdrop-blur-sm p-5 cursor-pointer transition-all duration-200 hover:border-primary/40 hover:bg-card hover:shadow-xl hover:shadow-black/10 hover:-translate-y-0.5"
                 >
                   {/* Color accent bar */}
                   <div
@@ -283,22 +299,26 @@ export default function ProjectsPage() {
                         {project.icon_emoji}
                       </div>
                       <div>
-                        <h3 className="font-semibold text-white group-hover:text-indigo-300 transition-colors">
+                        <h3 className="font-semibold text-foreground group-hover:text-primary transition-colors">
                           {project.name}
                         </h3>
-                        <div className="text-xs text-zinc-500">{project.slug}</div>
+                        <div className="text-xs text-muted-foreground">{project.slug}</div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                       <button
+                        type="button"
+                        aria-label={`Project settings for ${project.name}`}
                         onClick={e => { e.stopPropagation(); router.push(`/projects/${project.id}?tab=settings`); }}
-                        className="p-1.5 rounded-md text-zinc-400 hover:text-white hover:bg-zinc-700"
+                        className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted"
                       >
                         <Settings2 className="w-3.5 h-3.5" />
                       </button>
                       <button
+                        type="button"
+                        aria-label={`Delete project ${project.name}`}
                         onClick={e => handleDelete(e, project)}
-                        className="p-1.5 rounded-md text-zinc-400 hover:text-red-400 hover:bg-red-500/10"
+                        className="p-1.5 rounded-md text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -307,18 +327,18 @@ export default function ProjectsPage() {
 
                   {/* Description */}
                   {project.description && (
-                    <p className="text-xs text-zinc-500 mb-3 line-clamp-2">{project.description}</p>
+                    <p className="text-xs text-muted-foreground mb-3 line-clamp-2">{project.description}</p>
                   )}
 
                   {/* Stats row */}
-                  <div className="flex items-center justify-between border-t border-zinc-800 pt-3 mt-auto">
-                    <div className="flex items-center gap-3 text-xs text-zinc-400">
+                  <div className="flex items-center justify-between border-t border-border pt-3 mt-auto">
+                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
                       <span className="flex items-center gap-1">
                         <FolderOpen className="w-3.5 h-3.5" />
                         {project.services_count} service{project.services_count !== 1 ? 's' : ''}
                       </span>
                     </div>
-                    <div className="flex items-center gap-2 text-xs text-zinc-500">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       {project.latest_deploy_status && (
                         <>
                           <div className="w-2 h-2 rounded-full" style={{ backgroundColor: deployColor }} />

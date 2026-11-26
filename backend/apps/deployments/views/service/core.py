@@ -143,7 +143,34 @@ class ServiceViewSet(DeployActionsMixin, MtlsActionsMixin, TrafficSplitMixin, Do
         if server:
             ServerGuard.assert_user_workload_allowed(server)
 
-        service = serializer.save(owner=self.request.user, server=server)
+        from django.conf import settings as _settings
+        from django.db import transaction as _transaction
+        from rest_framework.exceptions import PermissionDenied
+
+        with _transaction.atomic():
+            if not bool(getattr(_settings, 'SMSLY_DISABLE_TIER_GATES', False)) and not self._is_remote_sync_request():
+                from apps.billing.services.metering import UsageMeter
+                meter = UsageMeter()
+                allowed, _ = meter.check_quota(self.request.user, 'SERVICE', requested_amount=1)
+                if not allowed:
+                    raise PermissionDenied(
+                        "Service quota exceeded for your current subscription plan. "
+                        "Upgrade your plan to create more services."
+                    )
+                req_data = getattr(self.request, 'data', {}) or {}
+                replicas = max(1, int(serializer.validated_data.get('min_replicas') or 1))
+                if 'cpu_cores' in req_data and serializer.validated_data.get('cpu_cores') is not None:
+                    cpu_req = serializer.validated_data['cpu_cores'] * replicas
+                    cpu_ok, _ = meter.check_quota(self.request.user, 'CPU', requested_amount=cpu_req)
+                    if not cpu_ok:
+                        raise PermissionDenied("CPU quota exceeded for your current subscription plan.")
+                if 'memory_mb' in req_data and serializer.validated_data.get('memory_mb') is not None:
+                    mem_req = int(serializer.validated_data['memory_mb']) * replicas
+                    mem_ok, _ = meter.check_quota(self.request.user, 'MEMORY', requested_amount=mem_req)
+                    if not mem_ok:
+                        raise PermissionDenied("Memory quota exceeded for your current subscription plan.")
+
+            service = serializer.save(owner=self.request.user, server=server)
 
         # Inherit the project's identity (mTLS trust/sidecar posture).
         # Network, registry and shared-addon URLs resolve from the project
@@ -198,12 +225,27 @@ class ServiceViewSet(DeployActionsMixin, MtlsActionsMixin, TrafficSplitMixin, Do
         old_enc_opt_in = bool(
             getattr(serializer.instance, 'encryption_at_rest_enabled', False)
         ) if serializer.instance else False
+        old_sablier_enabled = bool(
+            getattr(serializer.instance, 'sablier_enabled', False)
+        ) if serializer.instance else False
+        old_sablier_session = str(
+            getattr(serializer.instance, 'sablier_session', '10m') or '10m'
+        ) if serializer.instance else '10m'
+        old_edge_jwt_required = bool(
+            getattr(serializer.instance, 'edge_jwt_required', False)
+        ) if serializer.instance else False
         routing_fields = {
             'public_domain_hidden', 'wildcard_url_enabled', 'node_url_enabled',
             'wildcard_redirect_custom_domain', 'wildcard_internal_only', 'is_public',
             'public_domain', 'custom_domains', 'path_redirects', 'host_aliases',
+            'sablier_enabled', 'sablier_session', 'edge_jwt_required',
         }
         routing_changed = routing_fields.intersection(serializer.validated_data)
+
+        if 'project' in serializer.validated_data:
+            new_project = serializer.validated_data.get('project')
+            if new_project and str(getattr(new_project, 'id', '')) != old_project_id:
+                assert_can_write(self.request.user, new_project, action='move service to')
 
         if 'server' in serializer.validated_data:
             server = serializer.validated_data.get('server')
@@ -240,6 +282,13 @@ class ServiceViewSet(DeployActionsMixin, MtlsActionsMixin, TrafficSplitMixin, Do
         # Reload Caddy when routing-related fields change
         if routing_changed and not self._is_remote_sync_request():
             self._sync_caddy()
+        new_edge_jwt_required = bool(getattr(service, 'edge_jwt_required', False))
+        if new_edge_jwt_required != old_edge_jwt_required and not self._is_remote_sync_request():
+            try:
+                from apps.deployments.tasks.deploy.caddy import sync_caddy_task
+                sync_caddy_task.delay()
+            except Exception as exc:
+                logger.warning("Failed to queue sync_caddy_task on edge_jwt_required change: %s", exc)
 
         # Project changed via PATCH — same inheritance as move-project
         # (dedicated action stays the audited path for explicit moves).
@@ -264,6 +313,86 @@ class ServiceViewSet(DeployActionsMixin, MtlsActionsMixin, TrafficSplitMixin, Do
                     register_and_unlock_service(service, unlock_now=new_enc_opt_in)
             except Exception as exc:
                 logger.warning("Failed to sync cryptd opt-in on PATCH for %s: %s", service.name, exc)
+
+        # Sync Sablier toggle / session changes to remote nodes and wake stopped
+        # containers immediately when Sablier scale-to-zero is turned off.
+        new_sablier_enabled = bool(getattr(service, 'sablier_enabled', False))
+        new_sablier_session = str(getattr(service, 'sablier_session', '10m') or '10m')
+        sablier_changed = (
+            new_sablier_enabled != old_sablier_enabled
+            or new_sablier_session != old_sablier_session
+        )
+        if sablier_changed and not self._is_remote_sync_request():
+            is_manually_stopped = str(getattr(service, 'status', '') or '').upper() == 'STOPPED'
+            # Sync updated Sablier config to remote nodes FIRST so a remote
+            # in-place container recreate reads the latest DB flags.
+            try:
+                svr = getattr(service, 'server', None)
+                if svr and not getattr(svr, 'is_primary', True):
+                    from ...services.remote_orchestrator import RemoteOrchestrator
+                    orch = RemoteOrchestrator(svr)
+                    remote_id = orch._search_remote_service(service, "/api/v1/services/")
+                    if remote_id:
+                        orch._sync_remote_service_config(service, remote_id)
+            except Exception as exc:
+                logger.debug("Remote Sablier config sync skipped for %s: %s", service.name, exc)
+
+            if old_sablier_enabled and not new_sablier_enabled and not is_manually_stopped:
+                try:
+                    from apps.cloud.docker_client import get_docker_client
+                    client = get_docker_client()
+                    seen_cids = set()
+                    candidates = []
+                    try:
+                        candidates.append(client.containers.get(service.name))
+                    except Exception:
+                        pass
+                    try:
+                        candidates.extend(
+                            client.containers.list(
+                                all=True,
+                                filters={'label': f'smsly.service_id={service.id}'},
+                            )
+                        )
+                    except Exception:
+                        pass
+                    for ctr in candidates:
+                        cid = getattr(ctr, 'id', None) or id(ctr)
+                        if cid in seen_cids:
+                            continue
+                        seen_cids.add(cid)
+                        if str(getattr(ctr, 'status', '') or '').lower() != 'running':
+                            ctr.start()
+                    if getattr(service, 'health_status', '') in ('unhealthy', 'standby'):
+                        service.health_status = 'unknown'
+                        service.save(update_fields=['health_status'])
+                except Exception as exc:
+                    logger.debug("Wake-on-disable skipped for %s: %s", service.name, exc)
+            elif not old_sablier_enabled and new_sablier_enabled:
+                svr_local = getattr(service, 'server', None)
+                if svr_local is None or getattr(svr_local, 'is_primary', True):
+                    try:
+                        from apps.cloud.docker_client import get_docker_client
+                        from ...services.internal_wake import ensure_internal_wake_alias
+                        client = get_docker_client()
+                        ctr = client.containers.get(service.name)
+                        ctr.reload()
+                        nets = ((ctr.attrs or {}).get("NetworkSettings") or {}).get("Networks") or {}
+                        for net_name in nets:
+                            if net_name and net_name != "bridge":
+                                ensure_internal_wake_alias(service.name, net_name, client=client)
+                    except Exception as exc:
+                        logger.debug("Toggle-on internal alias skipped for %s: %s", service.name, exc)
+
+            # Docker container labels are immutable after `docker create`, so
+            # recreate the live/sleeping container in-place to apply or strip
+            # Sablier middlewares and updated sessionDuration.
+            if not is_manually_stopped:
+                try:
+                    from ...tasks import refresh_service_sablier_task
+                    refresh_service_sablier_task.delay(str(service.id))
+                except Exception as exc:
+                    logger.debug("Queue refresh_service_sablier_task skipped for %s: %s", service.name, exc)
 
 
     def destroy(self, request, *args, **kwargs):
@@ -353,6 +482,24 @@ class ServiceViewSet(DeployActionsMixin, MtlsActionsMixin, TrafficSplitMixin, Do
             from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
             logger.info("Force-purging service %s from database synchronously.", instance.name)
             try:
+                server = getattr(instance, 'server', None)
+                if server and not getattr(server, 'is_primary', False):
+                    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+                    RemoteOrchestrator(server).delete_service_for_local(instance, force=True)
+            except Exception as exc:
+                logger.error("Remote cleanup failed during force-purge of %s: %s", instance.id, exc)
+            try:
+                from apps.addons.services.addon_provisioner import addon_provisioner
+                for addon in instance.addons.all():
+                    addon_provisioner.deprovision_dispatch(addon, retain_volume=False)
+            except Exception as exc:
+                logger.error("Addon cleanup failed during force-purge of %s: %s", instance.id, exc)
+            try:
+                from apps.cloud.services.backup_service import purge_service_backups
+                purge_service_backups(instance.id)
+            except Exception as exc:
+                logger.error("Backup cleanup failed during force-purge of %s: %s", instance.id, exc)
+            try:
                 orchestrator = DeletionOrchestrator()
                 orchestrator.delete_service_resources(instance, force=True)
             except Exception as exc:
@@ -383,6 +530,24 @@ class ServiceViewSet(DeployActionsMixin, MtlsActionsMixin, TrafficSplitMixin, Do
         if force:
             from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
             logger.info("Force-purging service %s via retry-delete.", instance.id)
+            try:
+                server = getattr(instance, 'server', None)
+                if server and not getattr(server, 'is_primary', False):
+                    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+                    RemoteOrchestrator(server).delete_service_for_local(instance, force=True)
+            except Exception as exc:
+                logger.error("Remote cleanup failed during retry force-purge of %s: %s", instance.id, exc)
+            try:
+                from apps.addons.services.addon_provisioner import addon_provisioner
+                for addon in instance.addons.all():
+                    addon_provisioner.deprovision_dispatch(addon, retain_volume=False)
+            except Exception as exc:
+                logger.error("Addon cleanup failed during retry force-purge of %s: %s", instance.id, exc)
+            try:
+                from apps.cloud.services.backup_service import purge_service_backups
+                purge_service_backups(instance.id)
+            except Exception as exc:
+                logger.error("Backup cleanup failed during retry force-purge of %s: %s", instance.id, exc)
             try:
                 orchestrator = DeletionOrchestrator()
                 orchestrator.delete_service_resources(instance, force=True)
@@ -667,6 +832,13 @@ class ServiceViewSet(DeployActionsMixin, MtlsActionsMixin, TrafficSplitMixin, Do
                     containers_removed += 1
                 except Exception:
                     logger.debug("Service prune: addon container %s already absent", name)
+
+        if containers_removed:
+            try:
+                from apps.deployments.services.mesh_dns import sync_dns_now
+                sync_dns_now(client=client)
+            except Exception:
+                pass
 
         # Dangling layers are not attributable to another active tenant and
         # are safe for a service-level cleanup request.

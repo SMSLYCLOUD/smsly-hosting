@@ -16,7 +16,7 @@ class RemoteLifecycleTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username='lifecycle', email='life@example.com', password='password123')
         self.project = Project.objects.create(name='Lifecycle Project', owner=self.user)
-        self.server = ManagedServer.objects.create(name='Life Node', owner=self.user, private_ip='10.0.0.2', project=self.project)
+        self.server = ManagedServer.objects.create(name='Life Node', owner=self.user, host='203.0.113.10', private_ip='10.0.0.2', project=self.project)
         self.service = Service.objects.create(name='Life Service', project=self.project, server=self.server)
 
     def test_clean_remote_deployment(self):
@@ -31,7 +31,7 @@ class RemoteLifecycleTests(TestCase):
         self.assertEqual(deployment.status, Deployment.Status.ACTIVE)
 
     def test_remote_transfer_lifecycle(self):
-        ManagedServer.objects.create(name='Target Node', owner=self.user, private_ip='10.0.0.3', project=self.project)
+        ManagedServer.objects.create(name='Target Node', owner=self.user, host='203.0.113.11', private_ip='10.0.0.3', project=self.project)
         transfer = ServerTransfer.objects.create(
             owner=self.user,
             source_server_ip='10.0.0.2',

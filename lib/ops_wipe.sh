@@ -25,19 +25,19 @@ wipe_existing_install() {
         docker compose -f "$COMPOSE_FILE" down -v --remove-orphans || echo -e "${YELLOW}    ⚠ docker compose down failed${NC}"
     fi
 
-    SMSLY_CONTAINERS=$(docker ps -a --filter "name=smsly-hosting" -q  || true)
+    SMSLY_CONTAINERS=$( { docker ps -a --filter "name=smsly-hosting" -q; docker ps -a --filter "name=smsly-" -q; } 2>/dev/null | sort -u || true )
     if [ -n "$SMSLY_CONTAINERS" ]; then
         docker rm -f $SMSLY_CONTAINERS || echo -e "${YELLOW}    ⚠ docker rm containers failed${NC}"
     fi
 
-    SMSLY_VOLUMES=$(docker volume ls --filter "name=smsly-hosting" -q  || true)
+    SMSLY_VOLUMES=$( { docker volume ls --filter "name=smsly-hosting" -q; docker volume ls --filter "name=smsly-" -q; } 2>/dev/null | sort -u || true )
     if [ -n "$SMSLY_VOLUMES" ]; then
         for vol in $SMSLY_VOLUMES; do
             docker volume rm "$vol"  || true
         done
     fi
 
-    SMSLY_NETWORKS=$(docker network ls --filter "name=smsly-hosting" -q  || true)
+    SMSLY_NETWORKS=$( { docker network ls --filter "name=smsly-hosting" -q; docker network ls --filter "name=smsly-" -q; } 2>/dev/null | sort -u || true )
     if [ -n "$SMSLY_NETWORKS" ]; then
         for net in $SMSLY_NETWORKS; do
             docker network rm "$net"  || true
@@ -79,10 +79,9 @@ fix_env_permissions() {
     fi
 
     # The backend container runs as UID 1000 (smsly user).
-    # .env must be group-writable by GID 1000 so the domain-config
-    # signal can persist DOMAIN/USE_SSL changes back to .env.
+    # .env must be readable by GID 1000 without world-read or group-write.
     chown root:1000 "$env_file"  || true
-    chmod 664 "$env_file"  || true
+    chmod 640 "$env_file"  || true
 
     local owner="" mode=""
     owner="$(stat -c '%u:%g' "$env_file"  || echo "?")"
@@ -110,12 +109,28 @@ fix_env_permissions() {
     # every config reload fails validation with "permission denied" and
     # Caddy keeps serving a STALE config — new domains get no cert and
     # Cloudflare reports SSL handshake failure (2026-09-10 incident).
-    local caddy_log_dir
+    local caddy_log_dir=""
     caddy_log_dir="$(docker volume inspect smsly-hosting_caddy_logs --format '{{.Mountpoint}}' 2>/dev/null || true)"
     if [ -n "$caddy_log_dir" ] && [ -d "$caddy_log_dir" ]; then
-        chown 1000:1000 "$caddy_log_dir"  || true
+        chown -R 1000:1000 "$caddy_log_dir"  || true
         chmod u+rwx "$caddy_log_dir"  || true
         echo -e "${GREEN}  ✓ caddy_logs permissions fixed${NC}"
+    fi
+    if command -v docker >/dev/null 2>&1; then
+        local _vol=""
+        local _caddy_pat='(^|_)(caddy_data|caddy_logs)$'
+        if command -v is_node_mode >/dev/null 2>&1 && is_node_mode; then
+            _caddy_pat='(^|_)(caddy_data|caddy_logs|caddy_config)$'
+        fi
+        for _vol in $(docker volume ls -q 2>/dev/null | grep -E "$_caddy_pat" || true); do
+            timeout 90 docker run --rm -v "${_vol}:/data" alpine chown -R 1000:1000 /data >/dev/null 2>&1 || true
+        done
+        for _vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)postgres-archive$' || true); do
+            timeout 90 docker run --rm -v "${_vol}:/data" alpine chown -R 70:70 /data >/dev/null 2>&1 || true
+        done
+        for _vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)verdaccio_data$' || true); do
+            timeout 90 docker run --rm -v "${_vol}:/data" alpine chown -R 10001:65533 /data >/dev/null 2>&1 || true
+        done
     fi
 
     # Fix builds and prometheus-targets directories

@@ -81,6 +81,7 @@ def _harden_master_firewall(server: ManagedServer) -> str:
         )
 
     wg_address = getattr(server, "wg_address", None) or ""
+    validated_wg = ""
     if wg_address:
         try:
             validated_wg = str(ipaddress.ip_address(str(wg_address)))
@@ -101,13 +102,12 @@ def _harden_master_firewall(server: ManagedServer) -> str:
                     server,
                     f"✅ iptables: Allowed mesh IP {validated_wg} -> registry port 5000",
                 )
-            _append_log(server, "✅ Master firewall rules synchronized for this node.")
-            return validated_wg
         except (ValueError, Exception) as exc:
             logger.debug("Skipping WireGuard IP iptables rule: %s", exc)
+            validated_wg = ""
 
     _append_log(server, "✅ Master firewall rules synchronized for this node.")
-    return ""
+    return validated_wg
 
 
 def _prepare_remote_install_lock(ssh, server: ManagedServer) -> None:

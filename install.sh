@@ -36,12 +36,39 @@ _CLI_MODE_CONFLICT=false
 RESUME_MODE=false
 COMPOSE_FILE="${COMPOSE_FILE:-/opt/smsly-hosting/docker-compose.prod.yml}"
 NO_SCREEN="${NO_SCREEN:-false}"
+_CLI_FORCE_WIPE=false
 
-# Read and export all variables from .env early if it exists
+# Safe line-by-line .env reader (no shell execution; lib/env.sh is not sourced yet)
+_install_load_env_safe() {
+    local env_file="$1"
+    [ -f "$env_file" ] || return 0
+    local _line="" _key="" _val=""
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        _line="${_line%$'\r'}"
+        [[ -z "$_line" || "$_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$_line" == export[[:space:]]* ]] && _line="${_line#export }"
+        [[ "$_line" == *=* ]] || continue
+        _key="${_line%%=*}"
+        _key="${_key#"${_key%%[![:space:]]*}"}"
+        _key="${_key%"${_key##*[![:space:]]}"}"
+        [[ "$_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        _val="${_line#*=}"
+        if [[ "$_val" == \"*\" && "$_val" == *\" && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+            _val="${_val//\\\"/\"}"
+            _val="${_val//\\\$/\$}"
+            _val="${_val//\\\`/\`}"
+            _val="${_val//\\\\/\\}"
+        elif [[ "$_val" == \'*\' && "$_val" == *\' && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+        fi
+        export "$_key=$_val"
+    done < "$env_file"
+}
+
+# Read and export all variables from .env early if it exists (without shell eval)
 if [ -f "/opt/smsly-hosting/.env" ]; then
-    set -a
-    source /opt/smsly-hosting/.env
-    set +a
+    _install_load_env_safe "/opt/smsly-hosting/.env"
     case "${NODE_TYPE:-}" in
         agent-lite|agent) _DETECTED_INSTALL_MODE="agent-lite" ;;
         node) _DETECTED_INSTALL_MODE="node" ;;
@@ -107,7 +134,8 @@ for arg in "$@"; do
     --resume)          RESUME_MODE=true ;;
     --no-screen|--skip-screen) NO_SCREEN=true ;;
     --wipe)            NO_SCREEN=true; rm -f "/opt/smsly-hosting/.smsly_install_state" "/opt/smsly-hosting/.smsly_install_state.mode" ;;
-    --fix-domain)      NO_SCREEN=true ;;
+    --force|--yes|-y)  _CLI_FORCE_WIPE=true ;;
+    --fix-domain|--fix-domain=*) NO_SCREEN=true ;;
     --fix-permissions) NO_SCREEN=true ;;
     --with-replica)    REPLICA_MODE="true" ;;
     --recover|--refresh|--debug|--verify|--clear|--help|-h|--recreate-traefik)
@@ -263,6 +291,7 @@ if [ -n "${SMSLY_SELF_COPY:-}" ] && [ -n "${SMSLY_LIVE_SCRIPT_DIR:-}" ]; then
     # Re-exec'd from /tmp (self-rewrite guard below): lib/ still comes
     # from the live checkout, never the temp copy.
     SCRIPT_DIR="$SMSLY_LIVE_SCRIPT_DIR"
+    SCRIPT_PATH="${SMSLY_ORIG_SCRIPT_DIR:-$SMSLY_LIVE_SCRIPT_DIR}/install.sh"
 fi
 
 # ─── Bootstrap lib/ when running from a standalone install.sh ──────────────────
@@ -277,7 +306,7 @@ if [ ! -d "$SCRIPT_DIR/lib" ] && [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
     _lib_branch="${SMSLY_BRANCH:-master}"
     _lib_tar_url="${SMSLY_GIT_REMOTE%.git}/archive/refs/heads/${_lib_branch}.tar.gz"
     if command -v curl; then
-        if curl -fsSL "$SMSLY_GIT_REMOTE/archive/refs/heads/${_lib_branch}.tar.gz" -o "/tmp/smsly-repo-${$}.tar.gz" \
+        if curl -fsSL --max-time 60 "$_lib_tar_url" -o "/tmp/smsly-repo-${$}.tar.gz" \
             && tar -xzf "/tmp/smsly-repo-${$}.tar.gz" -C /tmp; then
             _extracted_dir=$(tar -tzf "/tmp/smsly-repo-${$}.tar.gz" | head -1 | cut -d/ -f1)
             if [ -d "/tmp/$_extracted_dir/lib" ]; then
@@ -288,9 +317,9 @@ if [ ! -d "$SCRIPT_DIR/lib" ] && [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
         fi
     fi
     # Fallback: try git clone if tarball failed
-    if [ ! -d "$BOOTSTRAP_LIB_DIR/common.sh" ] && command -v git; then
+    if [ ! -f "$BOOTSTRAP_LIB_DIR/common.sh" ] && command -v git; then
         _tmp_clone=$(mktemp -d)
-        if git clone --depth 1 --branch "${SMSLY_BRANCH:-master}" "$SMSLY_GIT_REMOTE" "$_tmp_clone"; then
+        if timeout 180 git clone --depth 1 --branch "${SMSLY_BRANCH:-master}" "$SMSLY_GIT_REMOTE" "$_tmp_clone"; then
             if [ -d "$_tmp_clone/lib" ]; then
                 cp -r "$_tmp_clone/lib/"* "$BOOTSTRAP_LIB_DIR/" && \
                     echo -e "\033[0;32m  ✓ lib/ bootstrapped via git clone\033[0m"
@@ -347,6 +376,7 @@ DEBUG_MODE="false"
 VERIFY_MODE="false"
 CLEAR_MODE="false"
 FIX_DOMAIN_MODE="false"
+FIX_DOMAIN_TARGET=""
 FIX_PERMISSIONS_MODE="false"
 FORCE_REDEPLOY="false"
 RECREATE_TRAEFIK="false"
@@ -381,20 +411,30 @@ SMSLY_GIT_REMOTE="${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hostin
 
 # ─── Second argument parser ────────────────────────────────────────────────────
 
+_EXPECT_FIX_DOMAIN=false
 for arg in "$@"; do
+    if [ "$_EXPECT_FIX_DOMAIN" = "true" ]; then
+        _EXPECT_FIX_DOMAIN=false
+        case "$arg" in
+            -*) ;;
+            *) FIX_DOMAIN_TARGET="$arg"; continue ;;
+        esac
+    fi
     case "$arg" in
         --update)          UPDATE_MODE="full" ;;
         --update-half)     UPDATE_MODE="half" ;;
         --update-frontend) UPDATE_MODE="frontend" ;;
         --update-backend)  UPDATE_MODE="backend" ;;
         --wipe)            WIPE_MODE="true" ;;
+        --force|--yes|-y)  _CLI_FORCE_WIPE=true ;;
         --recover)         RECOVER_MODE="true" ;;
         --refresh)         REFRESH_MODE="true" ;;
         --debug)           DEBUG_MODE="true" ;;
         --verify)          VERIFY_MODE="true" ;;
         --mode=agent-lite|--agent-lite|--mode=node|--node|--mode=master|--master) : ;;
         --clear)           CLEAR_MODE="true" ;;
-        --fix-domain)      FIX_DOMAIN_MODE="true" ;;
+        --fix-domain)      FIX_DOMAIN_MODE="true"; _EXPECT_FIX_DOMAIN=true ;;
+        --fix-domain=*)    FIX_DOMAIN_MODE="true"; FIX_DOMAIN_TARGET="${arg#--fix-domain=}" ;;
         --fix-permissions) FIX_PERMISSIONS_MODE="true" ;;
         --force-redeploy)  FORCE_REDEPLOY="true" ;;
         --recreate-traefik) RECREATE_TRAEFIK="true" ;;
@@ -435,9 +475,12 @@ if [ -z "${SMSLY_SELF_COPY:-}" ] && [ -f "${SCRIPT_PATH:-}" ]; then
     _self_copy="/tmp/smsly-install-$$.sh"
     if cp -f "$SCRIPT_PATH" "$_self_copy" 2>/dev/null; then
         export SMSLY_SELF_COPY=1 SMSLY_LIVE_SCRIPT_DIR="$SCRIPT_DIR"
+        export SMSLY_ORIG_SCRIPT_DIR="${SMSLY_ORIG_SCRIPT_DIR:-$SCRIPT_DIR}"
         export SMSLY_SELF_COPY_FILE="$_self_copy"
         exec bash "$_self_copy" "$@"
     fi
+elif [ -n "${SMSLY_ORIG_SCRIPT_DIR:-}" ]; then
+    SCRIPT_PATH="$SMSLY_ORIG_SCRIPT_DIR/install.sh"
 fi
 
 # ─── Log setup + lock + traps ──────────────────────────────────────────────────
@@ -523,14 +566,16 @@ echo -e "${BLUE}═════════════════════�
 
 # ─── Wipe Mode ────────────────────────────────────────────────────────────────
 if [ "$WIPE_MODE" = "true" ]; then
-    FORCE_WIPE=1
+    if [ "${_CLI_FORCE_WIPE:-false}" = "true" ]; then
+        FORCE_WIPE=1
+    fi
     wipe_existing_install
     exit 0
 fi
 
 # ─── Fix Domain Mode ──────────────────────────────────────────────────────────
 if [ "${FIX_DOMAIN_MODE:-false}" = "true" ]; then
-    fix_domain_sync
+    fix_domain_sync "${FIX_DOMAIN_TARGET:-}"
     exit 0
 fi
 

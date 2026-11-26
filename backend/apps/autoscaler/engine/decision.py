@@ -169,15 +169,10 @@ class DecisionEngine:
             )
             return r
 
-        if at_capacity:
-            r.reason = 'At max_replicas — no further scaling.'
-            return r
-
-        if cooldown_active:
-            r.reason = 'Cooldown active — waiting before next scale.'
-            return r
-
         # ── Scale up ────────────────────────────────────────────────────────
+        # Checked BEFORE scale-down. Note: at_capacity and cooldown_active
+        # must only guard scale-up — never return early before scale-down,
+        # otherwise hitting max_replicas deadlocks scale-down forever.
         cpu = self.metrics.cpu_percent or 0.0
         mem_trend = self.metrics.memory_trend_mb_per_min or 0.0
 
@@ -185,26 +180,32 @@ class DecisionEngine:
         cpu_high_eff = max(self.cpu_high, cpu_target_eff)
         cpu_critical_eff = max(self.cpu_critical, cpu_high_eff + 10)
 
-        # Use the per-service target for the simple, stable rule (mirrors the
-        # legacy services.autoscaler behaviour). Use cpu_high_eff for the
-        # formula-based multiplier rule (mirrors scaling_ai).
         if cpu >= cpu_target_eff or cpu >= cpu_high_eff or mem_trend > self.mem_growth_mb_min:
-            # Formula: aim for ~50% per instance. If per-service target
-            # is meaningfully higher than the global default, use it.
-            per_instance_target = min(TARGET_CPU_PER_INSTANCE, cpu_target_eff)
+            if at_capacity:
+                r.reason = 'At max_replicas — no further scaling.'
+                return r
+            if cooldown_active:
+                r.reason = 'Cooldown active — waiting before next scale.'
+                return r
+
+            per_instance_target = (
+                float(self.cpu_target)
+                if self.cpu_target and self.cpu_target > 0
+                else float(TARGET_CPU_PER_INSTANCE)
+            )
             total_instances = self.running_replicas + 1  # home + replicas
             if cpu > 0:
                 needed = max(0, int(cpu / per_instance_target) - total_instances + 1)
             else:
                 needed = 0
-            if needed <= 0 and (cpu >= cpu_target_eff or mem_trend > self.mem_growth_mb_min):
+            if needed <= 0:
                 needed = 1  # at least one if above threshold
             # Elongate under pressure: high urgency jumps by 2, critical
             # by 4 — the formula still wins when it demands even more.
             if cpu >= cpu_critical_eff:
                 r.urgency = 'critical'
                 needed = max(needed, SCALE_UP_STEP_CRITICAL)
-            elif cpu >= 80:
+            elif cpu >= max(80.0, cpu_high_eff):
                 r.urgency = 'high'
                 needed = max(needed, SCALE_UP_STEP_HIGH)
             else:
@@ -253,7 +254,7 @@ class DecisionEngine:
         if (
             scale_down_cooldown
             and self.metrics.cpu_percent is not None
-            and self.running_replicas > 0
+            and self.running_replicas > self.min_replicas
             and cpu <= self.cpu_low
         ):
             r.reason = 'Scale-down cooldown active.'
@@ -261,6 +262,10 @@ class DecisionEngine:
 
         if self.metrics.cpu_percent is None:
             r.reason = 'Metrics unavailable — holding steady.'
+            return r
+
+        if at_capacity:
+            r.reason = 'At max_replicas — no further scaling.'
             return r
 
         r.reason = 'Metrics within normal range.'

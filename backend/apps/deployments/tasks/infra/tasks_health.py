@@ -336,8 +336,8 @@ def node_watchdog_task(self):
 @shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.refresh_managed_server_health")
 def refresh_managed_server_health(self, server_id: str):
     """Refresh the health/status of a single managed server."""
-    from .models.servers import ManagedServer
-    from .views.server.helpers import _refresh_managed_server_health
+    from apps.deployments.models.platform import ManagedServer
+    from apps.deployments.views.server.helpers import _refresh_managed_server_health
     try:
         server = ManagedServer.objects.get(id=server_id)
         _refresh_managed_server_health(server)
@@ -358,7 +358,7 @@ def sync_master_db_to_agents_task():
     Runs every 6 hours via Celery beat.
     """
 
-    from .models.servers import ManagedServer
+    from apps.deployments.models.platform import ManagedServer
 
     agents = ManagedServer.objects.filter(
         is_lite_agent=True,

@@ -15,11 +15,11 @@ from ..views import (
 )
 
 router = DefaultRouter()
-router.register(r'notifications', NotificationViewSet, basename='notifications')
 router.register(r'preferences', NotificationPreferenceViewSet, basename='preferences')
 router.register(r'resource-alerts', ResourceAlertViewSet, basename='resource-alerts')
 router.register(r'channels', NotificationChannelViewSet, basename='notification-channel')
 router.register(r'rules', AlertRuleViewSet, basename='alert-rule')
+router.register(r'', NotificationViewSet, basename='notification')
 
 urlpatterns = [
     path('', include(router.urls)),

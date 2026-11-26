@@ -29,20 +29,22 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "smsly-hosting.fullname" . }}-frontend
+      {{- if or .Values.frontend.serviceAccount.create .Values.frontend.serviceAccount.name }}
+      serviceAccountName: {{ default (printf "%s-frontend" (include "smsly-hosting.fullname" .)) .Values.frontend.serviceAccount.name }}
+      {{- end }}
       automountServiceAccountToken: false
       securityContext:
-        {{- include "smsly.podSecurityContext" . | nindent 8 }}
+        {{- include "smsly.podSecurityContext" (dict "runAsUser" 1001 "runAsGroup" 1001) | nindent 8 }}
       initContainers:
         - name: wait-for-backend
           image: "{{ .Values.global.imageRegistry }}busybox:1.36"
           securityContext:
-            {{- include "smsly.containerSecurityContext" . | nindent 12 }}
+            {{- include "smsly.containerSecurityContext" (dict "runAsUser" 1001) | nindent 12 }}
           command:
             - sh
             - -c
             - |
-              until wget -q --spider http://{{ include "smsly-hosting.fullname" . }}-backend:{{ .Values.backend.service.port }}/health; do
+              until wget -q --header="Host: localhost" -O /dev/null http://{{ include "smsly-hosting.fullname" . }}-backend:{{ .Values.backend.service.port }}/health/live; do
                 echo "Waiting for backend..."
                 sleep 2
               done
@@ -51,7 +53,7 @@ spec:
           image: "{{ .Values.global.imageRegistry }}{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
           securityContext:
-            {{- include "smsly.containerSecurityContext" . | nindent 12 }}
+            {{- include "smsly.containerSecurityContext" (dict "runAsUser" 1001) | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ .Values.frontend.service.port }}
@@ -83,3 +85,13 @@ spec:
             successThreshold: 1
           resources:
             {{- toYaml .Values.frontend.resources | nindent 12 }}
+          volumeMounts:
+            - name: next-cache
+              mountPath: /app/.next/cache
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: next-cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

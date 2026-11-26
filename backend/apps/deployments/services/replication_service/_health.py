@@ -3,6 +3,7 @@ import time
 
 from django.utils import timezone
 
+from ._config import _patroni_restapi_credentials
 from ._utils import _bounded_error
 
 logger = logging.getLogger(__name__)
@@ -32,10 +33,13 @@ class HealthMixin:
             for idx, peer in enumerate(peers, 1)
         ]
 
+        api_auth = _patroni_restapi_credentials(mesh)
+
         def _check_node(idx, wg_ip, server_name):
             try:
                 resp = requests.get(
                     f"http://{wg_ip}:8008/patroni",
+                    auth=api_auth,
                     timeout=(2, 5),
                     allow_redirects=False,
                 )
@@ -215,11 +219,13 @@ class HealthMixin:
     def check_replication_lag_sql(cls, mesh):
         import requests
 
+        api_auth = _patroni_restapi_credentials(mesh)
         primary_ip = None
         for peer in mesh.peers.filter(is_active=True):
             try:
                 resp = requests.get(
                     f"http://{peer.wg_address}:8008/master",
+                    auth=api_auth,
                     timeout=3,
                 )
                 if resp.status_code == 200:
@@ -234,6 +240,7 @@ class HealthMixin:
         try:
             resp = requests.get(
                 f"http://{primary_ip}:8008/patroni",
+                auth=api_auth,
                 timeout=5,
             )
             return resp.json()

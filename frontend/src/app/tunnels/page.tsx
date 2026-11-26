@@ -5,11 +5,43 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Radio, Wifi, WifiOff, Plus, Trash2, RefreshCw, Copy, ExternalLink,
   ArrowUpDown, Globe2, Lock, Zap, Clock, BarChart3, Play, Users,
-  Loader2, CheckCircle2, XCircle, Terminal, Hash
+  Loader2, CheckCircle2, Terminal, Hash, Share2
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { tunnelsApi, type Tunnel, type TunnelRequest, type ReservedSubdomain } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useToast } from '@/components/ui/use-toast';
+import { parseApiError } from '@/lib/apiError';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+
+function extractTunnelError(err: any, fallback: string): string {
+  const data = err?.response?.data;
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const fieldMessages: string[] = [];
+    for (const field of ['local_port', 'subdomain', 'email']) {
+      const val = data[field];
+      if (Array.isArray(val) && val.length > 0) {
+        fieldMessages.push(`${field}: ${val.join(', ')}`);
+      } else if (typeof val === 'string' && val) {
+        fieldMessages.push(`${field}: ${val}`);
+      }
+    }
+    if (fieldMessages.length > 0) {
+      return fieldMessages.join(' | ');
+    }
+  }
+  return parseApiError(err, fallback);
+}
 
 const IPV4_HOST_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 
@@ -46,6 +78,7 @@ function inferTunnelDomain(tunnels: Tunnel[]): string {
 
 export default function TunnelsPage() {
   const confirm = useConfirm();
+  const { toast } = useToast();
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
   const [subdomains, setSubdomains] = useState<ReservedSubdomain[]>([]);
   const [subdomainLimit, setSubdomainLimit] = useState(0);
@@ -63,6 +96,11 @@ export default function TunnelsPage() {
   // Subdomain form
   const [showSubdomainForm, setShowSubdomainForm] = useState(false);
   const [newReserve, setNewReserve] = useState('');
+
+  // Share modal state
+  const [sharingTunnel, setSharingTunnel] = useState<Tunnel | null>(null);
+  const [shareEmail, setShareEmail] = useState('');
+  const [sharingLoading, setSharingLoading] = useState(false);
 
   const [copied, setCopied] = useState<string | null>(null);
   const tunnelDomain = inferTunnelDomain(tunnels);
@@ -95,15 +133,20 @@ export default function TunnelsPage() {
     setCreating(true);
     try {
       await tunnelsApi.create({
-        local_port: parseInt(newPort),
+        local_port: parseInt(newPort, 10),
         subdomain: newSubdomain || undefined,
       });
+      toast({ title: 'Tunnel created', description: `Listening on port ${newPort}.` });
       setShowCreate(false);
       setNewPort('3000');
       setNewSubdomain('');
       fetchData();
     } catch (err: any) {
-      alert(err.response?.data?.error || 'Failed to create tunnel');
+      toast({
+        title: 'Failed to create tunnel',
+        description: extractTunnelError(err, 'Failed to create tunnel'),
+        variant: 'destructive',
+      });
     } finally {
       setCreating(false);
     }
@@ -113,9 +156,14 @@ export default function TunnelsPage() {
     if (!await confirm({ title: 'Close tunnel?', message: 'Close this tunnel? Active connections will be dropped.', variant: 'destructive', confirmText: 'Close' })) return;
     try {
       await tunnelsApi.delete(id);
+      toast({ title: 'Tunnel closed' });
       fetchData();
-    } catch (err) {
-      console.error('Delete failed:', err);
+    } catch (err: any) {
+      toast({
+        title: 'Failed to close tunnel',
+        description: extractTunnelError(err, 'Failed to close tunnel'),
+        variant: 'destructive',
+      });
     }
   };
 
@@ -129,8 +177,12 @@ export default function TunnelsPage() {
     try {
       const reqs = await tunnelsApi.requests(tunnelId);
       setRequests(reqs);
-    } catch (err) {
-      console.error('Failed to fetch requests:', err);
+    } catch (err: any) {
+      toast({
+        title: 'Failed to load requests',
+        description: extractTunnelError(err, 'Could not load tunnel requests'),
+        variant: 'destructive',
+      });
     } finally {
       setRequestsLoading(false);
     }
@@ -139,11 +191,15 @@ export default function TunnelsPage() {
   const handleReplay = async (tunnelId: string, requestId: string) => {
     try {
       await tunnelsApi.replay(tunnelId, requestId);
-      // Refresh request list
+      toast({ title: 'Request replayed' });
       const reqs = await tunnelsApi.requests(tunnelId);
       setRequests(reqs);
-    } catch (err) {
-      console.error('Replay failed:', err);
+    } catch (err: any) {
+      toast({
+        title: 'Replay failed',
+        description: extractTunnelError(err, 'Could not replay request'),
+        variant: 'destructive',
+      });
     }
   };
 
@@ -151,11 +207,16 @@ export default function TunnelsPage() {
     if (!newReserve) return;
     try {
       await tunnelsApi.reserveSubdomain(newReserve);
+      toast({ title: 'Subdomain reserved', description: `${newReserve}${tunnelSuffix}` });
       setNewReserve('');
       setShowSubdomainForm(false);
       fetchData();
     } catch (err: any) {
-      alert(err.response?.data?.error || 'Failed to reserve subdomain');
+      toast({
+        title: 'Failed to reserve subdomain',
+        description: extractTunnelError(err, 'Failed to reserve subdomain'),
+        variant: 'destructive',
+      });
     }
   };
 
@@ -163,9 +224,38 @@ export default function TunnelsPage() {
     if (!await confirm({ title: 'Release subdomain?', message: `Release ${subdomain}${tunnelSuffix}? You may not be able to reclaim it.`, variant: 'destructive', confirmText: 'Release' })) return;
     try {
       await tunnelsApi.releaseSubdomain(subdomain);
+      toast({ title: 'Subdomain released' });
       fetchData();
-    } catch (err) {
-      console.error('Release failed:', err);
+    } catch (err: any) {
+      toast({
+        title: 'Release failed',
+        description: extractTunnelError(err, 'Failed to release subdomain'),
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleShareTunnel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sharingTunnel || !shareEmail.trim()) return;
+    setSharingLoading(true);
+    try {
+      await tunnelsApi.share(sharingTunnel.tunnel_id, shareEmail.trim());
+      toast({
+        title: 'Tunnel shared',
+        description: `Shared ${sharingTunnel.public_url} with ${shareEmail.trim()}.`,
+      });
+      setSharingTunnel(null);
+      setShareEmail('');
+      fetchData();
+    } catch (err: any) {
+      toast({
+        title: 'Failed to share tunnel',
+        description: extractTunnelError(err, 'Could not share tunnel'),
+        variant: 'destructive',
+      });
+    } finally {
+      setSharingLoading(false);
     }
   };
 
@@ -243,7 +333,7 @@ export default function TunnelsPage() {
               { icon: <Wifi size={18} />, label: 'Active', value: tunnels.filter(t => t.is_active).length, color: 'text-emerald-500 bg-emerald-500/10' },
               { icon: <ArrowUpDown size={18} />, label: 'Total Requests', value: tunnels.reduce((s, t) => s + t.request_count, 0), color: 'text-blue-500 bg-blue-500/10' },
               { icon: <BarChart3 size={18} />, label: 'Bandwidth', value: formatBytes(tunnels.reduce((s, t) => s + (t.bandwidth_used || 0), 0)), color: 'text-amber-500 bg-amber-500/10' },
-              { icon: <Globe2 size={18} />, label: 'Subdomains', value: `${subdomains.length}`, color: 'text-purple-500 bg-purple-500/10' },
+              { icon: <Globe2 size={18} />, label: 'Subdomains', value: subdomainLimit > 0 ? `${subdomains.length} / ${subdomainLimit}` : `${subdomains.length}`, color: 'text-purple-500 bg-purple-500/10' },
             ].map((stat, i) => (
               <motion.div
                 key={stat.label}
@@ -376,6 +466,14 @@ export default function TunnelsPage() {
                     {/* Actions */}
                     <div className="flex items-center gap-1">
                       <button
+                        onClick={() => { setSharingTunnel(tunnel); setShareEmail(''); }}
+                        className="px-3 py-1.5 rounded text-xs font-semibold transition hover:bg-muted/50 text-muted-foreground flex items-center gap-1"
+                        title="Share tunnel"
+                      >
+                        <Share2 size={12} />
+                        Share
+                      </button>
+                      <button
                         onClick={() => handleViewRequests(tunnel.tunnel_id)}
                         className={`px-3 py-1.5 rounded text-xs font-semibold transition ${
                           selectedTunnel === tunnel.tunnel_id
@@ -441,10 +539,17 @@ export default function TunnelsPage() {
           {/* Subdomains Section */}
           <div className="bg-card border border-border rounded-xl p-5 space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="font-bold text-lg flex items-center gap-2">
-                <Globe2 size={18} className="text-purple-500" />
-                Reserved Subdomains
-              </h2>
+              <div className="flex items-center gap-3">
+                <h2 className="font-bold text-lg flex items-center gap-2">
+                  <Globe2 size={18} className="text-purple-500" />
+                  Reserved Subdomains
+                </h2>
+                <span className="text-xs text-muted-foreground">
+                  {subdomainLimit > 0
+                    ? `${subdomains.length} / ${subdomainLimit} used`
+                    : `${subdomains.length} reserved`}
+                </span>
+              </div>
               <button
                 onClick={() => setShowSubdomainForm(!showSubdomainForm)}
                 className="text-xs px-3 py-1.5 rounded-lg bg-purple-500/10 text-purple-500 font-semibold hover:bg-purple-500/20 transition flex items-center gap-1"
@@ -522,6 +627,58 @@ export default function TunnelsPage() {
               ))}
             </div>
           </div>
+          {/* Share Tunnel Modal */}
+          <Dialog
+            open={Boolean(sharingTunnel)}
+            onOpenChange={(open) => {
+              if (!open) {
+                setSharingTunnel(null);
+                setShareEmail('');
+              }
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Share Tunnel</DialogTitle>
+                <DialogDescription>
+                  Invite a team member by email to access {sharingTunnel?.public_url}.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleShareTunnel} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="share-tunnel-email">Team member email</Label>
+                  <Input
+                    id="share-tunnel-email"
+                    type="email"
+                    required
+                    placeholder="colleague@example.com"
+                    value={shareEmail}
+                    onChange={(e) => setShareEmail(e.target.value)}
+                    disabled={sharingLoading}
+                  />
+                </div>
+                {(sharingTunnel?.shared_with || []).length > 0 && (
+                  <div className="text-xs text-muted-foreground">
+                    Already shared with: {(sharingTunnel?.shared_with || []).join(', ')}
+                  </div>
+                )}
+                <DialogFooter>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => { setSharingTunnel(null); setShareEmail(''); }}
+                    disabled={sharingLoading}
+                  >
+                    Cancel
+                  </Button>
+                  <Button type="submit" disabled={sharingLoading || !shareEmail.trim()}>
+                    {sharingLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Share2 className="h-4 w-4 mr-2" />}
+                    Share Tunnel
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
         </motion.div>
       </div>
     </DashboardShell>

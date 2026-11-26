@@ -28,36 +28,55 @@ log() { echo "$LOG_PREFIX $(date -Is) $*"; }
 # chown it; this heals hosts that predate the fix.
 ensure_caddy_logs_writable() {
     command -v docker >/dev/null 2>&1 || return 0
-    local vol
-    vol=$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E 'caddy_logs$' | head -n 1) || true
-    [ -n "$vol" ] || { log "no caddy_logs volume — skipping log-perm check"; return 0; }
-    local mnt="" owner=""
-    mnt=$(docker volume inspect "$vol" --format '{{.Mountpoint}}' 2>/dev/null) || {
-        log "ALERT: cannot inspect volume $vol"; return 0
-    }
-    owner=$(stat -c '%u:%g' "$mnt" 2>/dev/null) || owner="unknown"
-    if [ "$owner" = "1000:1000" ]; then
-        log "caddy_logs volume writable (1000:1000)"
-    else
-        log "ALERT: caddy_logs volume owned by $owner — routing reloads are failing; repairing"
-        if docker run --rm -v "$vol:/logs" alpine chown -R 1000:1000 /logs >/dev/null 2>&1; then
-            log "caddy_logs ownership repaired to 1000:1000"
+    local _caddy_vols="" vol=""
+    _caddy_vols=$(timeout -k 5 15 docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E '(^|_)(caddy_data|caddy_logs)$' || true)
+    if grep -qE 'docker-compose\.node\.yml' "$INSTALL_DIR/.env" 2>/dev/null; then
+        _caddy_vols=$(timeout -k 5 15 docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E '(^|_)(caddy_data|caddy_logs|caddy_config)$' || true)
+    fi
+    for vol in $_caddy_vols; do
+        [ -n "$vol" ] || continue
+        local mnt="" owner=""
+        mnt=$(timeout -k 5 10 docker volume inspect "$vol" --format '{{.Mountpoint}}' 2>/dev/null) || {
+            log "ALERT: cannot inspect volume $vol"; continue
+        }
+        owner=$(stat -c '%u:%g' "$mnt" 2>/dev/null) || owner="unknown"
+        if [ "$owner" = "1000:1000" ]; then
+            log "${vol} volume writable (1000:1000)"
         else
-            log "ALERT: caddy_logs ownership repair FAILED — future Caddy reloads will fail"
+            log "ALERT: ${vol} volume owned by $owner — repairing to 1000:1000"
+            if timeout -k 5 60 docker run --rm -v "$vol:/data" alpine chown -R 1000:1000 /data >/dev/null 2>&1; then
+                log "${vol} ownership repaired to 1000:1000"
+            else
+                log "ALERT: ${vol} ownership repair FAILED"
+            fi
         fi
-    fi
-    local access_log="$mnt/access.log"
-    if [ -f "$access_log" ]; then
-        local mode=""
-        mode=$(stat -c '%a' "$access_log" 2>/dev/null) || mode=""
-        case "$mode" in
-            *4|*5|*6|*7) ;;
-            *)
-                chmod a+r "$mnt"/*.log 2>/dev/null || true
-                log "caddy access logs made world-readable (was ${mode:-unknown}; CrowdSec/Promtail need read access)"
-                ;;
-        esac
-    fi
+        if [[ "$vol" == *caddy_logs ]]; then
+            local access_log="$mnt/access.log"
+            if [ -f "$access_log" ]; then
+                local mode=""
+                mode=$(stat -c '%a' "$access_log" 2>/dev/null) || mode=""
+                case "$mode" in
+                    *4|*5|*6|*7) ;;
+                    *)
+                        chmod a+r "$mnt"/*.log 2>/dev/null || true
+                        log "caddy access logs made world-readable (was ${mode:-unknown}; CrowdSec/Promtail need read access)"
+                        ;;
+                esac
+            fi
+        fi
+    done
+    local vvol="" vmnt="" vowner=""
+    for vvol in $(timeout -k 5 15 docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E '(^|_)verdaccio_data$' || true); do
+        vmnt=$(timeout -k 5 10 docker volume inspect "$vvol" --format '{{.Mountpoint}}' 2>/dev/null || true)
+        [ -n "$vmnt" ] || continue
+        vowner=$(stat -c '%u:%g' "$vmnt" 2>/dev/null || echo unknown)
+        if [ "$vowner" != "10001:65533" ]; then
+            log "ALERT: ${vvol} owned by ${vowner} (expected 10001:65533) — repairing"
+            timeout -k 5 60 docker run --rm -v "$vvol:/data" alpine chown -R 10001:65533 /data >/dev/null 2>&1 \
+                && log "${vvol} ownership repaired to 10001:65533" \
+                || log "ALERT: ${vvol} ownership repair FAILED"
+        fi
+    done
 }
 
 # ── 8. Traefik dynamic dir must exist (weighted canary files) ─────
@@ -131,7 +150,7 @@ ensure_registry_pair() {
     rm -rf "$tmp"
     chmod 644 "$crt"; chmod 600 "$key"
     if docker ps --format '{{.Names}}' | grep -q smsly-hosting-registry-1; then
-        docker restart smsly-hosting-registry-1 >/dev/null 2>&1 && log "registry restarted with matched pair"
+        timeout -k 5 60 docker restart smsly-hosting-registry-1 >/dev/null 2>&1 && log "registry restarted with matched pair"
     fi
 }
 
@@ -216,27 +235,24 @@ ensure_edge_lockdown() {
     fi
 }
 
-# ── 5. Pending-migration check (2026-09-02 root cause) ───────────────
-# Migration 0196 was never applied on the VPS → PlatformConfig missing
-# a column → ProgrammingError on every ORM query → config loader fell
-# to its ghost path → empty domain → Caddyfile lost the platform block.
-# This check catches it at the shell level (beat task covers in-process).
+# ── 5. Pending-migration check (non-destructive; never run DDL via PgCat) ─
+# Never auto-run schema `migrate` from an hourly cron job (especially over
+# transaction-pooled PgCat, which breaks advisory locks and risks ACCESS
+# EXCLUSIVE DDL contention in live traffic). Check non-destructively using
+# DIRECT_DATABASE_URL when set and ALERT if migrations are pending.
 ensure_migrations() {
     local backend_container="smsly-hosting-backend-1"
     if ! docker inspect "$backend_container" >/dev/null 2>&1; then
         log "backend container not running — skipping migration check"
         return 0
     fi
-    local check_output
+    local check_rc=0
+    local check_output=""
     check_output=$(timeout -k 5 120 docker exec -e DJANGO_SETTINGS_MODULE=config.settings \
         -w /app "$backend_container" \
-        python manage.py migrate --check --noinput 2>&1) || true
-    if echo "$check_output" | grep -q "Your models have changes"; then
-        log "ALERT: pending migrations detected — applying now"
-        timeout -k 5 300 docker exec -e DJANGO_SETTINGS_MODULE=config.settings \
-            -w /app "$backend_container" \
-            python manage.py migrate --noinput 2>&1 | tail -3
-        log "migrations applied"
+        sh -c 'DATABASE_URL="${DIRECT_DATABASE_URL:-${DATABASE_URL:-}}" python manage.py migrate --check --noinput' 2>&1) || check_rc=$?
+    if [ "$check_rc" -ne 0 ]; then
+        log "ALERT: pending or unreachable Django migrations (exit=$check_rc) — run 'sudo bash install.sh --update' or migrate using DIRECT_DATABASE_URL (${check_output%%$'\n'*})"
     else
         log "migrations up to date"
     fi
@@ -288,11 +304,11 @@ ensure_edge_plugins() {
     command -v docker >/dev/null 2>&1 || return 0
     if docker inspect smsly-hosting-traefik-1 >/dev/null 2>&1; then
         local plug
-        plug=$(docker logs smsly-hosting-traefik-1 --since 60m 2>&1 | grep -i 'plugin.*sablier' | head -n 3) || true
+        plug=$(docker logs smsly-hosting-traefik-1 2>&1 | grep -i 'plugin.*sablier' | head -n 3) || true
         if [ -n "$plug" ]; then
             log "traefik sablier plugin loaded"
         else
-            log "traefik sablier plugin: no load line in 60m logs (verify flags after next Traefik recreate)"
+            log "traefik sablier plugin: no load line in Traefik logs (verify flags after next Traefik recreate)"
         fi
     fi
     if docker inspect smsly-sablier >/dev/null 2>&1; then
@@ -988,22 +1004,32 @@ ensure_postgres_archiving() {
         fi
     fi
     local owner=""
-    owner=$(timeout -k 5 15 docker exec "$c" stat -c '%U' /var/lib/postgresql/archive 2>/dev/null || echo unknown)
-    if [ "$owner" != "postgres" ]; then
-        log "ALERT: $c archive dir owned by $owner — WAL archiving is failing; repairing"
-        if timeout -k 5 30 docker exec -u 0 "$c" chown postgres:postgres /var/lib/postgresql/archive >/dev/null 2>&1; then
-            log "archive dir ownership repaired to postgres"
+    owner=$(timeout -k 5 15 docker exec "$c" stat -c '%u:%g' /var/lib/postgresql/archive 2>/dev/null || echo unknown)
+    if [ "$owner" != "70:70" ]; then
+        log "ALERT: $c archive dir owned by $owner (expected 70:70) — WAL archiving is failing; repairing"
+        if timeout -k 5 30 docker exec -u 0 "$c" chown -R 70:70 /var/lib/postgresql/archive >/dev/null 2>&1; then
+            log "archive dir ownership repaired to 70:70"
         else
             log "ALERT: archive dir ownership repair FAILED — pg_wal will grow until the disk fills"
         fi
     else
-        log "postgres archive dir writable (postgres)"
+        log "postgres archive dir writable (70:70)"
     fi
     local walsize=""
     walsize=$(timeout -k 5 15 docker exec "$c" du -sm /var/lib/postgresql/data/pg_wal 2>/dev/null | awk '{print $1}' || echo 0)
     if [ "${walsize:-0}" -ge 10240 ]; then
         log "ALERT: pg_wal is ${walsize}MB — archiving is not keeping up (check archive_command + disk)"
     fi
+    # Prune old archived WAL segments so archive_command='cp ...' cannot grow
+    # /var/lib/postgresql/archive unboundedly across weeks/months.
+    local _arch_tier="" _arch_days=""
+    _arch_tier="$(_env_val STACK_TIER "")"
+    _arch_days="$(_env_val PG_ARCHIVE_RETENTION_DAYS "")"
+    case "$_arch_days" in ''|*[!0-9]*) _arch_days="" ;; esac
+    if [ -z "$_arch_days" ]; then
+        if [ "$_arch_tier" = "lite" ]; then _arch_days=1; else _arch_days=3; fi
+    fi
+    timeout -k 5 30 docker exec "$c" find /var/lib/postgresql/archive -maxdepth 1 -type f -mtime +"$_arch_days" -delete 2>/dev/null || true
     if timeout -k 5 15 docker logs "$c" --since 60m 2>&1 | grep -a -q 'too many connections for role'; then
         log "ALERT: $c rejecting monitor connections (role limit) — run: ALTER ROLE smsly_monitor CONNECTION LIMIT 20"
     fi
@@ -1018,8 +1044,8 @@ ensure_postgres_archiving() {
 ensure_host_firewall() {
     command -v ufw >/dev/null 2>&1 || { log "ufw not installed — skipping host-firewall check"; return 0; }
     if ufw status 2>/dev/null | head -n 1 | grep -q "Status: active"; then
-        if ufw status 2>/dev/null | grep -qE '8971|8972|9105|15432|16379'; then
-            log "ALERT: UFW active but internal daemon port (8971/8972/9105/15432/16379) has allow rules — daemons exposed; remove those rules"
+        if ufw status 2>/dev/null | grep -vE '\bon wg0\b' | grep -qE '8971|8972|9105|9443|15432|16379'; then
+            log "ALERT: UFW active but internal daemon port (8971/8972/9105/9443/15432/16379) has public/unscoped allow rules — daemons exposed; remove those rules"
         else
             log "host firewall active (edge daemon ports isolated)"
         fi
@@ -1077,6 +1103,47 @@ ensure_encrypted_volumes_healthy() {
         done
     fi
 
+    _is_cryptd_locked_vol() {
+        local _v="$1"
+        local _ks_dir="/var/lib/smsly/keystore"
+        if [ -f "${_ks_dir}/epoch_state.json" ] && grep -qiE '"locked"[[:space:]]*:[[:space:]]*true' "${_ks_dir}/epoch_state.json" 2>/dev/null; then
+            return 0
+        fi
+        if [ -d "${_ks_dir}/services" ] && command -v python3 >/dev/null 2>&1; then
+            if python3 - "$_ks_dir/services" "$_v" <<'PY' 2>/dev/null
+import glob, json, os, sys
+sdir, vol = sys.argv[1], sys.argv[2]
+for p in glob.glob(os.path.join(sdir, "*.json")):
+    try:
+        rec = json.load(open(p))
+    except Exception:
+        continue
+    vols = set(rec.get("volume_names") or []) | set((rec.get("volume_deks") or {}).keys())
+    if vol in vols and rec.get("locked"):
+        sys.exit(0)
+sys.exit(1)
+PY
+            then
+                return 0
+            fi
+        fi
+        local _c_env="/etc/smsly/cryptd.env"
+        if [ -f "$_c_env" ] && grep -qiE '^CRYPTD_ENABLED=true' "$_c_env" 2>/dev/null; then
+            local _c_addr="" _c_secret=""
+            _c_addr=$(grep -E '^CRYPTD_LISTEN_ADDR=' "$_c_env" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '\r"' || true)
+            _c_addr="${_c_addr:-127.0.0.1:9105}"
+            _c_addr="${_c_addr/0.0.0.0:/127.0.0.1:}"
+            _c_secret=$(grep -E '^(CRYPTD_HTTP_SECRET|CRYPTD_SHARED_SECRET)=' "$_c_env" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '\r"' || true)
+            if [ -n "$_c_secret" ] && timeout 5 curl -s -H "X-Cryptd-Secret: ${_c_secret}" "http://${_c_addr}/v1/status" 2>/dev/null | grep -qi '"LOCKED"'; then
+                return 0
+            fi
+            if timeout 5 curl -s "http://${_c_addr}/health" 2>/dev/null | grep -qi '"ok":false'; then
+                return 0
+            fi
+        fi
+        return 1
+    }
+
     if [ -d "${base_dir}/images" ]; then
         local img="" vol="" mnt="" hash="" mapper=""
         for img in "${base_dir}/images"/*.img; do
@@ -1085,6 +1152,10 @@ ensure_encrypted_volumes_healthy() {
             mnt="${base_dir}/mnt/${vol}"
             hash=$(printf '%s' "$vol" | sha256sum | awk '{print substr($1, 1, 16)}')
             mapper="smsly-vol-${hash}"
+            if _is_cryptd_locked_vol "$vol"; then
+                log "encrypted LUKS volume ${vol} is intentionally locked by grid-cryptd — skipping"
+                continue
+            fi
             if ! timeout -k 5 10 mountpoint -q "$mnt" 2>/dev/null; then
                 local running_ctr=""
                 if command -v docker >/dev/null 2>&1; then
@@ -1110,9 +1181,14 @@ ensure_encrypted_volumes_healthy() {
     fi
 
     if [ -d "${base_dir}/fscrypt" ] && command -v fscrypt >/dev/null 2>&1; then
-        local fdir=""
+        local fdir="" fvol=""
         for fdir in "${base_dir}/fscrypt"/*; do
             [ -d "$fdir" ] || continue
+            fvol=$(basename "$fdir")
+            if _is_cryptd_locked_vol "$fvol"; then
+                log "encrypted fscrypt volume ${fvol} is intentionally locked by grid-cryptd — skipping"
+                continue
+            fi
             if ! timeout -k 5 10 fscrypt status "$fdir" 2>/dev/null | grep -q "Unlocked: Yes"; then
                 log "ALERT: fscrypt directory locked or unencrypted: ${fdir}"
             elif [ ! -d "${fdir}/data" ]; then

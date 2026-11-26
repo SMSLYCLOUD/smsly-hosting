@@ -42,8 +42,11 @@ add_program() {
 [program:${name}]
 directory=${dir}
 command=${cmd}
-user=${run_user}
 EOF
+
+  if [ -n "$run_user" ]; then
+    echo "user=${run_user}" >> "$SUP_CONF"
+  fi
 
   if [ -n "$prog_env" ]; then
     echo "environment=${prog_env}" >> "$SUP_CONF"
@@ -78,7 +81,7 @@ if [ "$ROLE" = "all" ] || [ "$ROLE" = "web" ]; then
   add_program "caddy" \
     "/usr/bin/caddy run --config /etc/caddy/Caddyfile --adapter caddyfile" \
     "/" \
-    "root"
+    ""
 fi
 
 if [ "$ROLE" = "all" ] || [ "$ROLE" = "worker" ]; then

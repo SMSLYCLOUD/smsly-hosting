@@ -160,7 +160,9 @@ class TokenScopeReadinessTests(TestCase):
             original = _2fa.two_factor_backup_codes.cls.authentication_classes
             _2fa.two_factor_backup_codes.cls.authentication_classes = [SessionAuthentication]
             try:
-                response = self.client.get("/mfa/backup/")
+                get_resp = self.client.get("/mfa/backup/")
+                self.assertEqual(get_resp.status_code, 200)
+                response = self.client.post("/mfa/backup/", {}, format="json")
             finally:
                 _2fa.two_factor_backup_codes.cls.authentication_classes = original
         self.assertEqual(response.status_code, 200)

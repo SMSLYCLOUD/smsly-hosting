@@ -123,9 +123,17 @@ export function FilesTab({ serviceId }: { serviceId: string }) {
         }
     };
 
-    const handleFileDownload = (file: any) => {
+    const handleFileDownload = async (file: any) => {
         const path = currentPath.endsWith('/') ? `${currentPath}${file.name}` : `${currentPath}/${file.name}`;
-        servicesApi.downloadFile(serviceId, path);
+        try {
+            await servicesApi.downloadFile(serviceId, path);
+        } catch (err: any) {
+            toast({
+                title: "Failed to download file",
+                description: err?.response?.data?.error || err?.message || 'Could not download file.',
+                variant: "destructive",
+            });
+        }
     };
 
     const handleMkdir = async () => {

@@ -210,6 +210,22 @@ def ensure_shared_server() -> str:
         cid = None
 
     if cid is None:
+        try:
+            from apps.core.crypto_daemon import cryptd_client
+            if cryptd_client.is_enabled():
+                vol_check = _run(["docker", "volume", "inspect", SHARED_VOLUME], timeout=15)
+                if vol_check.returncode != 0:
+                    cryptd_client.provision_volume(
+                        SHARED_VOLUME,
+                        service_id="paas-shared-postgres",
+                        project_id="control-plane",
+                        owner_uid=999,
+                        owner_gid=999,
+                        size_mb=8192,
+                        persistent=True,
+                    )
+        except Exception as exc:
+            logger.warning("Encrypted volume provision for %s skipped/failed: %s", SHARED_VOLUME, exc)
         env_file = _write_env_file({"POSTGRES_PASSWORD": password})
         try:
             proc = _run(
@@ -588,6 +604,7 @@ def promote_shared_standby(force: bool = False) -> str:
         if not aliases:
             continue
         _run(["docker", "network", "disconnect", network, SHARED_CONTAINER], timeout=60)
+        _run(["docker", "network", "disconnect", network, SHARED_STANDBY], timeout=60)
         cmd = ["docker", "network", "connect"]
         for entry in dict.fromkeys(aliases):
             cmd += ["--alias", entry]
@@ -696,6 +713,20 @@ def _lit(value: str) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+_RESERVED_PG_IDENTIFIERS = frozenset({
+    "postgres", "shared_replicator", "template0", "template1",
+    "pgbouncer", "admin", "root",
+})
+
+
+def _validate_logical_identifier(value: str, kind: str) -> None:
+    ident = str(value or "").strip().lower()
+    if not ident:
+        return
+    if ident in _RESERVED_PG_IDENTIFIERS or ident.startswith("pg_"):
+        raise ValueError(f"Reserved PostgreSQL {kind} name is not allowed: {value!r}")
+
+
 def ensure_logical_db(db_user: str, db_name: str, password: str) -> None:
     """Idempotently create role + database with tenant lockdown.
 
@@ -704,6 +735,10 @@ def ensure_logical_db(db_user: str, db_name: str, password: str) -> None:
       it) and grant it only to the owner.
     * ``statement_timeout`` + ``CONNECTION LIMIT`` bound noisy neighbors.
     """
+    if not str(db_user or "").strip() or not str(db_name or "").strip():
+        raise ValueError("db_user and db_name are required")
+    _validate_logical_identifier(db_user, "role")
+    _validate_logical_identifier(db_name, "database")
     user_q = _quote_ident(db_user)
     db_q = _quote_ident(db_name)
     if not _role_exists(db_user):
@@ -774,6 +809,10 @@ def drop_database_only(db_name: str) -> None:
 
 def drop_logical_db(db_user: str, db_name: str) -> None:
     """Terminate backends, drop database + role. Idempotent."""
+    if db_name:
+        _validate_logical_identifier(db_name, "database")
+    if db_user:
+        _validate_logical_identifier(db_user, "role")
     if db_name:
         _psql(
             "postgres",

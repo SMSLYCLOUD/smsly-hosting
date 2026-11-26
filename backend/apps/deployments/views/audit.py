@@ -34,16 +34,18 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
             # visible, hiding admin interventions on team services.
             from apps.deployments.models import Service
             from apps.permissions.utils import get_accessible_q
-            accessible_names = list(
-                Service.objects.filter(get_accessible_q(user)).values_list("name", flat=True)
+            accessible = list(
+                Service.objects.filter(get_accessible_q(user)).values_list("id", "name")
             )
-            accessible_ids = list(
-                Service.objects.filter(get_accessible_q(user)).values_list("id", flat=True)
-            )
+            target_candidates: list[str] = []
+            for sid, sname in accessible:
+                if sname:
+                    target_candidates.extend([sname, f"Service:{sname}", f"Service: {sname}"])
+                if sid:
+                    uid = str(sid)
+                    target_candidates.extend([uid, f"Service:{uid}", f"Service: {uid}"])
             qs = AuditLog.objects.filter(
-                Q(actor=username) |
-                Q(target__in=accessible_names) |
-                Q(target__in=[str(uid) for uid in accessible_ids])
+                Q(actor=username) | Q(target__in=target_candidates)
             )
 
         # Search filter

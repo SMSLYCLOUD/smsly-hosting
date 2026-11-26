@@ -7,7 +7,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model, login
 from django.db import transaction
 from rest_framework import permissions, status
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, throttle_classes
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 
@@ -126,6 +126,7 @@ def recovery_phrase_revoke(request):
 
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([permissions.AllowAny])
 @throttle_classes([RecoveryPhraseThrottle])
 def recovery_phrase_verify(request):
@@ -136,8 +137,18 @@ def recovery_phrase_verify(request):
     (or if expired), the stored recovery phrase hash is invalidated immediately
     so the phrase cannot be replayed indefinitely.
     """
-    phrase_str = request.data.get('phrase', '').strip().lower()
-    username = request.data.get('username', '').strip()
+    if not isinstance(request.data, dict):
+        return Response({'error': 'Invalid request payload'},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    raw_phrase = request.data.get('phrase', '')
+    raw_username = request.data.get('username', '')
+    if not isinstance(raw_phrase, str) or not isinstance(raw_username, str):
+        return Response({'error': 'Phrase and username must be strings'},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    phrase_str = raw_phrase.strip().lower()
+    username = raw_username.strip()
 
     if not phrase_str or not username:
         return Response({'error': 'Phrase and username are required'},
@@ -150,18 +161,24 @@ def recovery_phrase_verify(request):
 
     client_ip = RecoveryPhraseThrottle().get_ident(request)
 
-    # Track failed attempts atomically in cache for lockout
+    # Track failed attempts atomically in cache for IP and account lockouts
     from django.core.cache import cache
-    lockout_key = f"recovery_attempts:{client_ip}"
-    if cache.add(lockout_key, 1, timeout=3600):
-        attempts = 1
-    else:
+
+    def _bump_lockout(key: str) -> int:
+        if cache.add(key, 1, timeout=3600):
+            return 1
         try:
-            attempts = cache.incr(lockout_key)
+            return cache.incr(key)
         except ValueError:
-            cache.set(lockout_key, 1, timeout=3600)
-            attempts = 1
-    if attempts > 10:
+            cache.set(key, 1, timeout=3600)
+            return 1
+
+    lockout_key = f"recovery_attempts:{client_ip}"
+    account_lockout_key = f"recovery_attempts:user:{username.lower()}"
+
+    attempts = _bump_lockout(lockout_key)
+    account_attempts = _bump_lockout(account_lockout_key)
+    if attempts > 10 or account_attempts > 10:
         return Response(
             {'error': 'Too many failed attempts. Try again later.'},
             status=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -182,6 +199,8 @@ def recovery_phrase_verify(request):
 
         try:
             stored_data = json.loads(stored)
+            if not isinstance(stored_data, dict):
+                raise TypeError("stored recovery data must be a dict")
             stored_hash = stored_data.get('hash', '')
             salt = stored_data.get('salt', '')
             expires_at_raw = stored_data.get('expires_at')
@@ -224,8 +243,9 @@ def recovery_phrase_verify(request):
         config.recovery_phrase_hash = ''
         config.save(update_fields=['recovery_phrase_hash'])
 
-    # Successful verification — clear lockout counter and log audit event
+    # Successful verification — clear lockout counters and log audit event
     cache.delete(lockout_key)
+    cache.delete(account_lockout_key)
     _record_recovery_audit(
         user.get_username() or username,
         "RECOVERY_PHRASE_CONSUMED",

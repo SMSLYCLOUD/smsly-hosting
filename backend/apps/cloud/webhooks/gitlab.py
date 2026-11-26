@@ -85,6 +85,29 @@ class GitLabWebhookHandler:
         if not all([repo_url, mr_iid, source_branch, target_branch, sha]):
             return False
 
+        # Reject fork MR preview deployments (source repository != target repository)
+        source_project_id = attrs.get('source_project_id')
+        target_project_id = attrs.get('target_project_id') or project.get('id')
+        if (
+            source_project_id is not None
+            and target_project_id is not None
+            and source_project_id != target_project_id
+        ):
+            logger.warning("Rejecting fork GitLab MR !%s (project ID mismatch)", mr_iid)
+            return False
+        source_repo = attrs.get('source') or {}
+        target_repo = attrs.get('target') or project or {}
+        source_ns = (source_repo.get('path_with_namespace') or '').strip().lower()
+        target_ns = (target_repo.get('path_with_namespace') or '').strip().lower()
+        if source_ns and target_ns and source_ns != target_ns:
+            logger.warning("Rejecting fork GitLab MR !%s: %s != %s", mr_iid, source_ns, target_ns)
+            return False
+        source_url = (source_repo.get('git_http_url') or source_repo.get('web_url') or '').rstrip('/').lower()
+        target_url = (target_repo.get('git_http_url') or target_repo.get('web_url') or '').rstrip('/').lower()
+        if source_url and target_url and source_url != target_url:
+            logger.warning("Rejecting fork GitLab MR !%s: %s != %s", mr_iid, source_url, target_url)
+            return False
+
         # Find the parent service deployed from the target branch
         from apps.deployments.services.repo_matcher import match_service_repo
         candidates = Service.objects.filter(
@@ -123,6 +146,8 @@ class GitLabWebhookHandler:
                 'pr_number': mr_number,
                 'repository_url': parent.repository_url,
                 'provider': parent.provider,
+                'project': parent.project,
+                'server': parent.server,
                 'deploy_type': 'GIT',
                 'owner': parent.owner,
                 'build_command': parent.build_command,
@@ -134,6 +159,12 @@ class GitLabWebhookHandler:
                 'public_domain': f"{preview_slug}.{base_domain}",
             },
         )
+        if not created and preview_service.parent_service_id != parent.id:
+            logger.warning(
+                "Aborting GitLab preview update for %s: belongs to parent %s, not %s",
+                preview_name, preview_service.parent_service_id, parent.id,
+            )
+            return 0
 
         if preview_service.branch != branch:
             preview_service.branch = branch

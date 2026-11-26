@@ -20,6 +20,7 @@ from rest_framework.response import Response
 from apps.deployments.views._helpers import EmptySerializer, MAINTENANCE_ACTIONS
 
 logger = logging.getLogger(__name__)
+_MAINTENANCE_FAILURE_STATUS = status.HTTP_503_SERVICE_UNAVAILABLE
 
 
 def build_storage_overview() -> dict:
@@ -1095,34 +1096,39 @@ class SystemConfigView(GenericAPIView):
                     "action": action,
                     "message": "Failed to queue maintenance task. Check Celery/RabbitMQ availability.",
                 },
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                status=_MAINTENANCE_FAILURE_STATUS,
             )
 
+        raw_task_id = getattr(task, "id", None)
+        resolved_task_id = raw_task_id if isinstance(raw_task_id, str) and raw_task_id else task_id
         payload = {
             "status": "queued",
             "action": action,
-            "task_id": task.id or task_id,
+            "task_id": resolved_task_id,
             "message": action_spec["queued_message"],
         }
 
-        if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) and task.ready():
+        if (
+            getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False)
+            and task.ready() is True
+        ):
             cache.delete(lock_key)
-            task_result = task.result or {}
-            if isinstance(task_result, dict):
+            raw_res = getattr(task, "result", None)
+            if isinstance(raw_res, dict):
                 payload.update({
-                    "status": task_result.get("status", "success"),
-                    "message": task_result.get("message", payload["message"]),
-                    "result": task_result,
+                    "status": raw_res.get("status", "success"),
+                    "message": raw_res.get("message", payload["message"]),
+                    "result": raw_res,
                 })
                 status_code = (
                     status.HTTP_200_OK
-                    if task_result.get("status") == "success"
-                    else status.HTTP_500_INTERNAL_SERVER_ERROR
+                    if raw_res.get("status") == "success"
+                    else _MAINTENANCE_FAILURE_STATUS
                 )
-            else:
-                payload.update({"status": "success", "result": task_result})
-                status_code = status.HTTP_200_OK
-            return Response(payload, status=status_code)
+                return Response(payload, status=status_code)
+            if isinstance(raw_res, (str, int, float, bool, list)):
+                payload.update({"status": "success", "result": raw_res})
+                return Response(payload, status=status.HTTP_200_OK)
 
         return Response(payload, status=status.HTTP_202_ACCEPTED)
 
@@ -1471,7 +1477,7 @@ class DatabaseHaToggleView(GenericAPIView):
 
     def _start_replica(self):
         result = self._run_compose([
-            '--profile', 'local-ha', 'up', '-d',
+            '--profile', 'local-ha', '--profile', 'local-ha-replica', 'up', '-d',
             '--wait', '--wait-timeout', '120',
             'postgres-replica',
         ], timeout=150)
@@ -1488,7 +1494,7 @@ class DatabaseHaToggleView(GenericAPIView):
 
     def _stop_replica(self):
         result = self._run_compose([
-            'stop', '--timeout', '15', 'postgres-replica',
+            '--profile', 'local-ha-replica', 'stop', '--timeout', '15', 'postgres-replica',
         ], timeout=30)
 
         self._update_env('DB_REPLICA_HOSTS', '')
@@ -1555,11 +1561,18 @@ class PlatformStorageOverviewView(GenericAPIView):
         }
         try:
             from apps.deployments.models import Deployment, Service
-            artifacts_info["deployments_count"] = Deployment.objects.count()
-            artifacts_info["active_services"] = Service.objects.count()
-            has_logs_count = Deployment.objects.exclude(build_logs="").count()
+            from apps.permissions.utils import get_accessible_q
+            is_admin = bool(
+                request.user and request.user.is_authenticated
+                and (request.user.is_staff or request.user.is_superuser)
+            )
+            svc_qs = Service.objects.all() if is_admin else Service.objects.filter(get_accessible_q(request.user)).distinct()
+            dep_qs = Deployment.objects.all() if is_admin else Deployment.objects.filter(service__in=svc_qs)
+            artifacts_info["deployments_count"] = dep_qs.count()
+            artifacts_info["active_services"] = svc_qs.count()
+            has_logs_count = dep_qs.exclude(build_logs="").count()
             artifacts_info["build_logs_mb"] = round((has_logs_count * 50) / 1024, 2)
-            artifacts_info["stale_builds_count"] = Deployment.objects.filter(
+            artifacts_info["stale_builds_count"] = dep_qs.filter(
                 status__in=[Deployment.Status.FAILED, Deployment.Status.CANCELLED, Deployment.Status.SUPERSEDED]
             ).count()
         except Exception as exc:
@@ -1592,6 +1605,45 @@ class PlatformStorageOverviewView(GenericAPIView):
         except Exception as exc:
             logger.debug("Remote storage overview failed: %s", exc)
             return None
+
+    def post(self, request):
+        if not (request.user and request.user.is_authenticated and request.user.is_staff):
+            return Response({"error": "Admin privileges required"}, status=status.HTTP_403_FORBIDDEN)
+
+        action = str(request.data.get("action") or "").strip().lower()
+        from apps.deployments.tasks.infra.tasks_maintenance import run_maintenance_task
+
+        flag_map = {
+            "prune_build_cache": "--clear-build-cache",
+            "build_cache": "--clear-build-cache",
+            "prune_images": "--prune-images",
+            "registry_gc": "--gc",
+            "clear_containers": "--clear",
+            "clear": "--clear",
+            "clean_logs": "--clean-logs",
+            "docker_recovery": "--docker-recovery",
+        }
+
+        command_flag = flag_map.get(action)
+        if not command_flag:
+            return Response({
+                "error": f"Invalid action '{action}'. Valid actions: prune_build_cache, prune_images, registry_gc, clear_containers, clean_logs, docker_recovery"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            task = run_maintenance_task.apply_async(kwargs={"command_flag": command_flag})
+            return Response({
+                "status": "queued",
+                "task_id": task.id,
+                "action": action,
+                "message": f"Storage action '{action}' queued successfully.",
+            }, status=status.HTTP_202_ACCEPTED)
+        except Exception as exc:
+            logger.exception("Failed to dispatch storage action %s: %s", action, exc)
+            return Response({
+                "error": "Failed to queue maintenance task. Check broker availability.",
+                "details": str(exc),
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
 class StorageFleetView(GenericAPIView):
@@ -1656,43 +1708,4 @@ class StorageFleetView(GenericAPIView):
         except Exception:
             pass
         return Response(payload)
-
-    def post(self, request):
-        if not (request.user and request.user.is_authenticated and request.user.is_staff):
-            return Response({"error": "Admin privileges required"}, status=status.HTTP_403_FORBIDDEN)
-
-        action = str(request.data.get("action") or "").strip().lower()
-        from apps.deployments.tasks.infra.tasks_maintenance import run_maintenance_task
-
-        flag_map = {
-            "prune_build_cache": "--clear-build-cache",
-            "build_cache": "--clear-build-cache",
-            "prune_images": "--prune-images",
-            "registry_gc": "--gc",
-            "clear_containers": "--clear",
-            "clear": "--clear",
-            "clean_logs": "--clean-logs",
-            "docker_recovery": "--docker-recovery",
-        }
-
-        command_flag = flag_map.get(action)
-        if not command_flag:
-            return Response({
-                "error": f"Invalid action '{action}'. Valid actions: prune_build_cache, prune_images, registry_gc, clear_containers, clean_logs, docker_recovery"
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            task = run_maintenance_task.apply_async(kwargs={"command_flag": command_flag})
-            return Response({
-                "status": "queued",
-                "task_id": task.id,
-                "action": action,
-                "message": f"Storage action '{action}' queued successfully.",
-            }, status=status.HTTP_202_ACCEPTED)
-        except Exception as exc:
-            logger.exception("Failed to dispatch storage action %s: %s", action, exc)
-            return Response({
-                "error": "Failed to queue maintenance task. Check broker availability.",
-                "details": str(exc),
-            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 

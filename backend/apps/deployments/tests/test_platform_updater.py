@@ -29,17 +29,20 @@ class PlatformUpdaterTest(TestCase):
             self.addCleanup(patcher.stop)
         self.addCleanup(self.tmpdir.cleanup)
 
-    @patch('apps.deployments.services.platform_updater._run')
-    def test_prevent_concurrent_updates(self, mock_run):
-        PlatformUpdate.objects.create(status='MIGRATING')
+    @patch('apps.deployments.services.platform_updater.check_health', return_value=True)
+    @patch('apps.deployments.services.platform_updater._wait_for_watcher', return_value=True)
+    @patch('apps.deployments.services.platform_updater._run', return_value=(True, 'abc123\n'))
+    def test_prevent_concurrent_updates(self, _mock_run, _mock_wait, _mock_health):
+        stale = PlatformUpdate.objects.create(status='MIGRATING')
 
         result = perform_update(self.update)
 
+        stale.refresh_from_db()
         self.update.refresh_from_db()
-        self.assertFalse(result)
-        self.assertEqual(self.update.status, 'FAILED')
-        self.assertIn('Another update is currently in progress', self.update.error_message)
-        mock_run.assert_not_called()
+        self.assertTrue(result)
+        self.assertEqual(stale.status, 'FAILED')
+        self.assertIn('Cleared stale update', stale.error_message)
+        self.assertEqual(self.update.status, 'COMPLETED')
 
     @patch('apps.deployments.services.platform_updater.check_health', return_value=True)
     @patch('apps.deployments.services.platform_updater._wait_for_watcher', return_value=True)

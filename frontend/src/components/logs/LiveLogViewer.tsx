@@ -101,6 +101,8 @@ export interface LiveLogViewerProps {
      * auto-scroll.
      */
     scrollToBottomOnMount?: boolean;
+    /** Accessible label for the log viewer region. */
+    ariaLabel?: string;
 }
 
 const SEVERITY_PATTERNS: Array<{ sev: Exclude<LogSeverity, 'ALL'>; re: RegExp }> = [
@@ -151,6 +153,7 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
             emptyMessage = 'No log lines yet.',
             shortcutsHint,
             scrollToBottomOnMount = true,
+            ariaLabel = 'Log output',
         } = props;
 
         // Append-only buffer. Replaced ONLY on clear(). The `lines` state
@@ -167,6 +170,7 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
         });
         const [totalRendered, setTotalRendered] = useState(initialLines.length);
 
+        const containerRef = useRef<HTMLDivElement>(null);
         const scrollerRef = useRef<HTMLDivElement>(null);
         const counterSeqRef = useRef(0);
         const didInitialScrollRef = useRef(false);
@@ -328,11 +332,25 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
             });
         }, [initialLines.length, scrollToBottomOnMount]);
 
-        // ---- keyboard shortcuts ----
+        // ---- keyboard shortcuts (scoped to focus inside log viewer) ----
         useEffect(() => {
             const handler = (e: KeyboardEvent) => {
-                const target = e.target as HTMLElement | null;
-                if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+                const container = containerRef.current;
+                const activeEl = document.activeElement as HTMLElement | null;
+                const target = (e.target as HTMLElement | null) || activeEl;
+                if (!container) return;
+                const focusInside =
+                    (target && container.contains(target)) ||
+                    (activeEl && container.contains(activeEl));
+                if (!focusInside) return;
+
+                if (
+                    target &&
+                    (target.isContentEditable ||
+                        target.closest(
+                            'button, select, a, input, textarea, [role="button"], [role="tab"], [role="menuitem"]',
+                        ))
+                ) {
                     return;
                 }
                 if (e.key === ' ' || e.code === 'Space') {
@@ -346,7 +364,7 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
                     e.preventDefault();
                     const el = scrollerRef.current;
                     if (el) el.scrollTop = 0;
-                } else if ((e.key === 'c' || e.key === 'C') && !e.metaKey && !e.ctrlKey) {
+                } else if ((e.key === 'c' || e.key === 'C') && !e.metaKey && !e.ctrlKey && !e.altKey) {
                     e.preventDefault();
                     clear();
                 }
@@ -377,19 +395,26 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
         const totalAvailable = lines.length + bufferCount;
 
         return (
-            <div className={cn(
-                'flex flex-col rounded-md border border-border bg-zinc-950 text-zinc-200 overflow-hidden',
-                className,
-            )}>
+            <div
+                ref={containerRef}
+                role="region"
+                aria-label={ariaLabel}
+                tabIndex={-1}
+                className={cn(
+                    'flex flex-col rounded-md border border-border bg-zinc-950 text-zinc-200 overflow-hidden focus:outline-none',
+                    className,
+                )}
+            >
                 {/* Toolbar */}
                 <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs">
                     <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-900 border border-zinc-800 flex-1 min-w-[200px] max-w-md">
-                        <Search className="h-3.5 w-3.5 text-zinc-500" />
+                        <Search className="h-3.5 w-3.5 text-zinc-400" />
                         <input
                             value={textFilter}
                             onChange={(e) => setTextFilter(e.target.value)}
                             placeholder="Filter…"
-                            className="flex-1 bg-transparent outline-none text-xs placeholder:text-zinc-600"
+                            aria-label="Filter log lines"
+                            className="flex-1 bg-transparent outline-none text-xs placeholder:text-zinc-400"
                             spellCheck={false}
                         />
                         {textFilter && (
@@ -489,7 +514,7 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
                                             title={sev}
                                         />
                                         {line.time && (
-                                            <span className="shrink-0 text-zinc-600 select-none tabular-nums">
+                                            <span className="shrink-0 text-zinc-400 select-none tabular-nums">
                                                 {line.time}
                                             </span>
                                         )}
@@ -513,7 +538,7 @@ export const LiveLogViewer = forwardRef<LiveLogViewerHandle, LiveLogViewerProps>
 
                 {/* Tiny footer with total so user always knows how many lines are in the buffer */}
                 {totalAvailable > 0 && !isEmpty && (
-                    <div className="px-3 py-1 text-[10px] text-zinc-600 font-mono border-t border-zinc-900">
+                    <div className="px-3 py-1 text-[10px] text-zinc-400 font-mono border-t border-zinc-900">
                         {totalAvailable} line{totalAvailable === 1 ? '' : 's'} • scroll to see more
                     </div>
                 )}

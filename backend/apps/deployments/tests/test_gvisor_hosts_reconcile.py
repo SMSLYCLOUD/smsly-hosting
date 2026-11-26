@@ -166,3 +166,123 @@ class ReconcileTaskTests(TestCase):
         result, mock_real = self._run_task("plain-1\n", {})
         self.assertEqual(result["checked"], 0)
         mock_real.assert_not_called()
+
+    def test_sibling_service_stale_extra_host_detected(self):
+        import json
+        from apps.deployments.models import Project
+
+        proj = Project.objects.create(owner=self.user, name="mesh-proj")
+        self.service.project = proj
+        self.service.save(update_fields=["project"])
+        Service.objects.create(name="smsly-backend", owner=self.user, project=proj)
+
+        insp = (
+            "runsc\trunning\t"
+            + json.dumps({"smsly.service_id": str(self.service.id)}) + "\t"
+            + json.dumps(["smsly-backend:172.20.0.4"]) + "\t"
+            + json.dumps({"smsly-net-1": {}})
+        )
+        sib_back = "running\t" + json.dumps({"smsly-net-1": {"IPAddress": "172.20.0.9"}})
+        result, mock_real = self._run_task(
+            "greconsvc\n",
+            {"greconsvc": insp, "smsly-backend": sib_back},
+        )
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(result["skipped"]), 1)
+        self.assertEqual(result["skipped"][0]["drift"], {"smsly-backend": "172.20.0.9"})
+        mock_real.assert_not_called()
+
+    def test_sibling_service_absent_from_extra_hosts_has_no_drift(self):
+        import json
+        from apps.deployments.models import Project
+
+        proj = Project.objects.create(owner=self.user, name="mesh-proj-2")
+        self.service.project = proj
+        self.service.save(update_fields=["project"])
+        Service.objects.create(name="smsly-backend", owner=self.user, project=proj)
+
+        insp = (
+            "runsc\trunning\t"
+            + json.dumps({"smsly.service_id": str(self.service.id)}) + "\t"
+            + json.dumps([]) + "\t"
+            + json.dumps({"smsly-net-1": {}})
+        )
+        result, mock_real = self._run_task(
+            "greconsvc\n",
+            {"greconsvc": insp},
+        )
+        self.assertEqual(result["skipped"], [])
+        self.assertEqual(result["recreated"], [])
+        mock_real.assert_not_called()
+
+    def test_sibling_service_dead_extra_host_detected(self):
+        import json
+        from apps.deployments.models import Project
+
+        proj = Project.objects.create(owner=self.user, name="mesh-proj-3")
+        self.service.project = proj
+        self.service.save(update_fields=["project"])
+        Service.objects.create(name="smsly-backend", owner=self.user, project=proj)
+
+        insp = (
+            "runsc\trunning\t"
+            + json.dumps({"smsly.service_id": str(self.service.id)}) + "\t"
+            + json.dumps(["smsly-backend.default.internal:172.20.0.4"]) + "\t"
+            + json.dumps({"smsly-net-1": {}})
+        )
+        sib_back = "exited\t" + json.dumps({})
+        result, mock_real = self._run_task(
+            "greconsvc\n",
+            {"greconsvc": insp, "smsly-backend": sib_back},
+        )
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(result["skipped"]), 1)
+        self.assertIn("smsly-backend.default.internal", result["skipped"][0]["drift"])
+        mock_real.assert_not_called()
+
+    def test_sibling_active_deployment_cid_and_project_addon_detected(self):
+        import json
+        from apps.deployments.models import Deployment, Project
+
+        proj = Project.objects.create(owner=self.user, name="mesh-proj-4")
+        self.service.project = proj
+        self.service.save(update_fields=["project"])
+        sib = Service.objects.create(name="compose-api", owner=self.user, project=proj)
+        Deployment.objects.create(
+            service=sib,
+            commit_hash="a" * 40,
+            status=Deployment.Status.ACTIVE,
+            container_id="proj-compose-api-1",
+        )
+        Addon.objects.create(
+            service=sib,
+            name="sib-pg",
+            addon_type="POSTGRES",
+            status=Addon.Status.ACTIVE,
+            provision_mode="shared",
+            connection_url="postgresql://u:pw@sib-pg-alias:5432/db",
+        )
+
+        insp = (
+            "runsc\trunning\t"
+            + json.dumps({"smsly.service_id": str(self.service.id)}) + "\t"
+            + json.dumps(["compose-api:172.20.0.4", "sib-pg-alias:172.20.0.2"]) + "\t"
+            + json.dumps({"smsly-net-1": {}})
+        )
+        sib_back = "running\t" + json.dumps({"smsly-net-1": {"IPAddress": "172.20.0.9"}})
+        pg_back = json.dumps({"smsly-net-1": {"IPAddress": "172.20.0.8"}})
+        result, mock_real = self._run_task(
+            "greconsvc\n",
+            {
+                "greconsvc": insp,
+                "proj-compose-api-1": sib_back,
+                "smsly-shared-postgres": pg_back,
+            },
+        )
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(result["skipped"]), 1)
+        self.assertEqual(
+            result["skipped"][0]["drift"],
+            {"sib-pg-alias": "172.20.0.8", "compose-api": "172.20.0.9"},
+        )
+        mock_real.assert_not_called()

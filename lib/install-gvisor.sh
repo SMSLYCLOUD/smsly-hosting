@@ -9,6 +9,12 @@
 # ============================================================
 set -euo pipefail
 
+FORCE_DOCKER_RESTART="${FORCE_DOCKER_RESTART:-false}"
+for _arg in "$@"; do
+    [ "$_arg" = "--restart-docker" ] && FORCE_DOCKER_RESTART=true
+done
+unset _arg
+
 _ensure_docker_runsc_registration() {
     local runsc_bin
     runsc_bin="$(command -v runsc 2>/dev/null || true)"
@@ -21,6 +27,9 @@ _ensure_docker_runsc_registration() {
     if [ ! -f "$DAEMON_JSON" ]; then
         echo '{}' > "$DAEMON_JSON"
     fi
+
+    local _daemon_before=""
+    _daemon_before="$(cat "$DAEMON_JSON" 2>/dev/null || echo '')"
 
     local _runsc_reg_out=""
     _runsc_reg_out="$(python3 -c "
@@ -45,15 +54,22 @@ else:
     print(f'  runsc already registered correctly at {runsc_path}')
     ")"
 
+    local _daemon_after=""
+    _daemon_after="$(cat "$DAEMON_JSON" 2>/dev/null || echo '')"
+
     # Restart Docker only if registration changed daemon.json — an
     # unconditional restart kills all running containers on every re-run.
-    if echo "$_runsc_reg_out" | grep -q "already registered correctly"; then
+    if [ "$_daemon_before" = "$_daemon_after" ] || echo "$_runsc_reg_out" | grep -q "already registered correctly"; then
         echo "  Docker restart skipped (runsc registration unchanged)"
-    elif command -v systemctl ; then
-        systemctl daemon-reload
-        systemctl restart docker
-        echo "  Docker restarted with runsc support"
-        sleep 3
+    elif command -v systemctl >/dev/null 2>&1; then
+        timeout 30 systemctl daemon-reload
+        if [ "$FORCE_DOCKER_RESTART" != "true" ] && command -v docker >/dev/null 2>&1 && docker ps -q 2>/dev/null | grep -q .; then
+            echo "  WARN: daemon.json changed but containers are running — skipping live Docker restart (pass --restart-docker to apply now)"
+        else
+            timeout 120 systemctl restart docker
+            echo "  Docker restarted with runsc support"
+            sleep 3
+        fi
     fi
 }
 
@@ -76,13 +92,13 @@ main() {
 
     # ---- Prefer apt (reliable) over the legacy download bucket (often dead) ----
     _install_via_apt() {
-        apt-get update -qq
-        apt-get install -y -qq apt-transport-https ca-certificates curl gnupg
-        curl -fsSL https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+        timeout 300 apt-get update -qq
+        timeout 600 apt-get install -y -qq apt-transport-https ca-certificates curl gnupg
+        curl -fsSL --connect-timeout 15 --max-time 60 https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
         echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
             > /etc/apt/sources.list.d/gvisor.list
-        apt-get update -qq
-        apt-get install -y -qq runsc
+        timeout 300 apt-get update -qq
+        timeout 600 apt-get install -y -qq runsc
         command -v runsc
     }
 
@@ -98,15 +114,15 @@ main() {
         local tmp
         tmp="$(mktemp -d)"
 
-        curl -fsSL "${base_url}/runsc" -o "${tmp}/runsc" || return 1
-        curl -fsSL "${base_url}/runsc.sha512" -o "${tmp}/runsc.sha512" || return 1
+        curl -fsSL --connect-timeout 15 --max-time 120 "${base_url}/runsc" -o "${tmp}/runsc" || return 1
+        curl -fsSL --connect-timeout 15 --max-time 60 "${base_url}/runsc.sha512" -o "${tmp}/runsc.sha512" || return 1
         (cd "$tmp" && sha512sum -c runsc.sha512) || return 1
         chmod +x "${tmp}/runsc"
         mv "${tmp}/runsc" /usr/local/bin/runsc
 
         # containerd shim (optional — best-effort)
-        if curl -fsSL "${base_url}/containerd-shim-runsc-v1" -o "${tmp}/containerd-shim-runsc-v1" && \
-           curl -fsSL "${base_url}/containerd-shim-runsc-v1.sha512" -o "${tmp}/containerd-shim-runsc-v1.sha512"; then
+        if curl -fsSL --connect-timeout 15 --max-time 120 "${base_url}/containerd-shim-runsc-v1" -o "${tmp}/containerd-shim-runsc-v1" && \
+           curl -fsSL --connect-timeout 15 --max-time 60 "${base_url}/containerd-shim-runsc-v1.sha512" -o "${tmp}/containerd-shim-runsc-v1.sha512"; then
             (cd "$tmp" && sha512sum -c containerd-shim-runsc-v1.sha512) && {
                 chmod +x "${tmp}/containerd-shim-runsc-v1"
                 mv "${tmp}/containerd-shim-runsc-v1" /usr/local/bin/containerd-shim-runsc-v1

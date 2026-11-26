@@ -36,7 +36,7 @@ services:
       -c archive_command='mkdir -p /var/lib/postgresql/archive && cp %p /var/lib/postgresql/archive/%f'
       -c max_slot_wal_keep_size=${PG_MAX_SLOT_WAL_KEEP_SIZE:-5GB}
       -c synchronous_commit=${PG_SYNCHRONOUS_COMMIT:-on}
-      -c synchronous_standby_names=${PG_SYNCHRONOUS_STANDBY_NAMES:-'*'}
+      -c synchronous_standby_names=${PG_SYNCHRONOUS_STANDBY_NAMES:-''}
       -c max_connections=200
       -c shared_buffers=256MB
       -c effective_cache_size=768MB

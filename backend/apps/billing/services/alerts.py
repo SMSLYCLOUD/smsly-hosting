@@ -1,5 +1,6 @@
 import logging
 from datetime import timedelta
+from decimal import Decimal
 
 from django.utils import timezone
 
@@ -20,7 +21,7 @@ class AdminAlertService:
             return
 
         avg_revenue = sum(d.total_revenue for d in past_week) / past_week.count()
-        if avg_revenue > 0 and today.total_revenue < avg_revenue * 0.8:
+        if avg_revenue > 0 and today.total_revenue < avg_revenue * Decimal("0.8"):
             logger.warning("Revenue drop detected: $%s vs $%s avg", today.total_revenue, avg_revenue)
             try:
                 from apps.notifications.tasks import dispatch_notification

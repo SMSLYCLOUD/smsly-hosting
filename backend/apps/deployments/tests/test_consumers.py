@@ -53,16 +53,15 @@ def _group_members(layer, group_name):
 
 
 async def _assert_rejected_with_error(comm, expected=4001):
-    """New-channels rejection contract: the consumer SENDs an error payload
-    then closes WITHOUT accept, so communicator.connect() raises
-    AssertionError. Drive the handshake manually and verify both frames.
-    """
+    """ASGI rejection contract: consumer closes without accepting."""
     import json as _json
     await comm.send_input({"type": "websocket.connect"})
     msg = await comm.receive_output(timeout=2)
-    assert msg["type"] == "websocket.send", msg
-    assert "error" in _json.loads(msg.get("text") or "{}"), msg
-    closed = await comm.receive_output(timeout=2)
+    if msg["type"] == "websocket.send":
+        assert "error" in _json.loads(msg.get("text") or "{}"), msg
+        closed = await comm.receive_output(timeout=2)
+    else:
+        closed = msg
     assert closed["type"] == "websocket.close", closed
     assert closed.get("code", expected) == expected, closed
 

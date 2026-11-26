@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Bell, Check, X } from 'lucide-react';
+import { Bell, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -39,8 +39,8 @@ export function NotificationsDropdown() {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon" className="relative">
-          <Bell className="h-5 w-5 text-zinc-400 hover:text-white transition-colors" />
+        <Button variant="ghost" size="icon" className="relative" aria-label="Notifications">
+          <Bell className="h-5 w-5 text-zinc-300 hover:text-white transition-colors" />
           {unreadCount > 0 && (
             <span className="absolute top-1.5 right-1.5 flex h-2 w-2 rounded-full bg-emerald-500">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -48,18 +48,18 @@ export function NotificationsDropdown() {
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-80 p-0" align="end">
-        <div className="flex items-center justify-between p-4 border-b border-white/5">
-          <h4 className="font-semibold text-sm">Notifications</h4>
+      <PopoverContent className="w-80 p-0 bg-card text-card-foreground border-border" align="end">
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          <h4 className="font-semibold text-sm text-foreground">Notifications</h4>
           {unreadCount > 0 && (
-            <span className="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full font-medium">
+            <span className="text-xs bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 px-2 py-0.5 rounded-full font-medium">
               {unreadCount} new
             </span>
           )}
         </div>
         <ScrollArea className="h-80">
           {notifications.length === 0 ? (
-            <div className="p-8 text-center text-sm text-zinc-500">
+            <div className="p-8 text-center text-sm text-muted-foreground">
               No notifications yet.
             </div>
           ) : (
@@ -67,16 +67,16 @@ export function NotificationsDropdown() {
               {notifications.map((n) => (
                 <div 
                   key={n.id} 
-                  className={`flex items-start gap-3 p-4 border-b border-white/5 transition-colors ${!n.is_read ? 'bg-white/[0.02]' : ''}`}
+                  className={`flex items-start gap-3 p-4 border-b border-border transition-colors ${!n.is_read ? 'bg-muted/40' : ''}`}
                 >
                   <div className="flex-1 space-y-1">
-                    <p className={`text-sm ${!n.is_read ? 'text-white font-medium' : 'text-zinc-400'}`}>
+                    <p className={`text-sm ${!n.is_read ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
                       {n.title}
                     </p>
-                    <p className="text-xs text-zinc-500 line-clamp-2">
+                    <p className="text-xs text-muted-foreground line-clamp-2">
                       {n.message}
                     </p>
-                    <p className="text-[10px] text-zinc-600">
+                    <p className="text-[10px] text-muted-foreground">
                       {formatDistanceToNow(new Date(n.created_at), { addSuffix: true })}
                     </p>
                   </div>
@@ -84,7 +84,8 @@ export function NotificationsDropdown() {
                     <Button 
                       variant="ghost" 
                       size="icon" 
-                      className="h-6 w-6 text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10"
+                      aria-label="Mark notification as read"
+                      className="h-6 w-6 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
                       onClick={() => handleMarkRead(n.id)}
                     >
                       <Check className="h-4 w-4" />

@@ -29,6 +29,9 @@ http:
         forceSTSHeader: true
         contentTypeNosniff: true
         browserXssFilter: true
+        customRequestHeaders:
+          X-User-Id: ""
+          X-Edge-Scope: ""
         customResponseHeaders:
           X-Frame-Options: "DENY"
           Content-Security-Policy: "frame-ancestors 'none'"

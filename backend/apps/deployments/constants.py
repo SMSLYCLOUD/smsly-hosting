@@ -100,3 +100,46 @@ DEFAULT_ROLLBACK_GRACE_MINUTES = 10
 # (default 12) so the reaper, not a doomed auto-promote, owns dead greens.
 STALE_STAGED_GREEN_REAP_HOURS = 3
 STALE_STAGED_GREEN_BATCH_SIZE = 20  # max stuck greens reaped per cycle
+
+# ── Platform Container Naming / Hijack Protection ─────────────────────────
+PLATFORM_RESERVED_CONTAINER_NAMES = frozenset({
+    "smsly", "traefik", "caddy", "pgcat", "pgbouncer", "pgbouncer-tenants",
+    "registry", "socket-proxy", "crowdsec", "sablier", "victoriametrics",
+    "loki", "promtail", "prometheus", "alertmanager", "grafana", "cadvisor",
+    "node-exporter", "falco", "etcd", "haproxy", "coredns", "frps",
+    "route-fallback", "spire-server", "spire-agent",
+    "smsly-etcd", "smsly-haproxy", "smsly-apt-cacher", "smsly-verdaccio",
+    "smsly-crowdsec", "smsly-cloudflare-bouncer", "smsly-sablier",
+    "smsly-sablier-socket-proxy", "smsly-traefik",
+    "smsly-traefik-socket-proxy", "smsly-socket-proxy", "smsly-loki",
+    "smsly-promtail", "smsly-loki-log-bridge", "smsly-prometheus",
+    "smsly-alertmanager", "smsly-cadvisor", "smsly-node-exporter",
+    "smsly-docker-labels", "smsly-grafana", "smsly-falco",
+    "smsly-pgbouncer", "smsly-pgbouncer-ro", "smsly-pgbackrest",
+    "smsly-shared-postgres", "smsly-shared-postgres-replica",
+})
+
+PLATFORM_RESERVED_CONTAINER_PREFIXES = (
+    "smsly-hosting-", "smsly-hosting_", "smsly-spire", "smsly-addon-",
+    "smsly-cli-", "smsly-edge-", "smsly-appsec-", "smsly-patroni-",
+    "smsly-postgres-", "smsly-redis-", "smsly-shared-postgres",
+    "smsly-pgbouncer", "smsly-sablier", "smsly-traefik",
+    "smsly-socket-proxy", "smsly-net", "pgbouncer-tenants", "envoy-",
+    "buildx_buildkit_", "grid-e2e-",
+)
+
+# Bare Compose service aliases on the shared `smsly-net` bridge that tenant
+# containers must never hijack (user apps named `backend`, `frontend`, etc.
+# may still use those bare aliases inside their isolated ScopedNetwork).
+CONTROL_PLANE_NETWORK_ALIASES = PLATFORM_RESERVED_CONTAINER_NAMES | frozenset({
+    "db", "postgres", "postgres-replica", "redis", "redis-primary", "redis-replica",
+    "redis-sentinel-1", "redis-sentinel-2", "redis-sentinel-3",
+    "patroni1", "patroni2", "patroni3", "patroni-db-init",
+    "docker-mirror", "apt-cacher", "verdaccio",
+    "backend", "frontend", "celery", "celery-beat", "celery-fast", "celery-deploy",
+    "traefik-socket-proxy", "crowdsec-cloudflare-bouncer", "sablier-socket-proxy",
+    "rabbitmq", "appsec-agent", "appsec-envoy", "appsec-shared-storage",
+    "appsec-smartsync", "appsec-tuning-svc", "appsec-db",
+    "loki-log-bridge", "docker-labels", "spire-server-ecosystem", "spire-agent-ecosystem",
+    "ollama",
+})

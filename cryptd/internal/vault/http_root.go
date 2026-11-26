@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -164,12 +165,17 @@ type RootVaultConfig struct {
 	KeyVersion     string
 	HMACSecret     string
 	AuthToken      string
+	ClientCA       string
 	AllowedNodes   map[string]bool
 	MaxClockSkew   time.Duration
 	AllowPastWeeks uint64
 	PinnedSalt     string
 	StateFile      string
+	EpochAnchor    time.Time
+	EpochDuration  time.Duration
 }
+
+const maxRootVaultSeenNonces = 65536
 
 // RootVaultServer holds ONLY the root Master Key on an external vault host and serves weekly SMKs.
 // It never exports the Master Key itself.
@@ -185,11 +191,17 @@ func NewRootVaultHandler(cfg RootVaultConfig) (http.Handler, error) {
 	if len(cfg.MasterKey) < 16 {
 		return nil, errors.New("root vault MasterKey must be at least 16 bytes")
 	}
-	if cfg.HMACSecret == "" && cfg.AuthToken == "" {
-		return nil, errors.New("root vault requires HMACSecret or AuthToken")
+	if cfg.HMACSecret == "" && cfg.AuthToken == "" && strings.TrimSpace(cfg.ClientCA) == "" {
+		return nil, errors.New("root vault requires HMACSecret, AuthToken, or ClientCA")
 	}
 	if cfg.MaxClockSkew <= 0 {
 		cfg.MaxClockSkew = 2 * time.Minute
+	}
+	if cfg.EpochAnchor.IsZero() {
+		cfg.EpochAnchor = time.Date(2025, 1, 6, 0, 0, 0, 0, time.UTC)
+	}
+	if cfg.EpochDuration <= 0 {
+		cfg.EpochDuration = 7 * 24 * time.Hour
 	}
 	if cfg.KeyVersion == "" {
 		cfg.KeyVersion = "mk-v1"
@@ -222,13 +234,57 @@ func NewRootVaultHandler(cfg RootVaultConfig) (http.Handler, error) {
 	return mux, nil
 }
 
+func writeRootVaultStateAtomic(path string, payload []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".state-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}
+	if _, err := tmp.Write(payload); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
 func (s *RootVaultServer) handleDeriveSMK(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+	if !s.authenticateHeaders(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	defer r.Body.Close()
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "bad request body", http.StatusBadRequest)
 		return
 	}
@@ -246,27 +302,56 @@ func (s *RootVaultServer) handleDeriveSMK(w http.ResponseWriter, r *http.Request
 		http.Error(w, "node not authorized", http.StatusForbidden)
 		return
 	}
+	if ok, tooMany := s.recordNonce(r); !ok {
+		if tooMany {
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+		} else {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		}
+		return
+	}
+	nowUnix := time.Now().Unix()
+	if nowUnix < 0 {
+		nowUnix = 0
+	}
+	wallWeek := uint64(nowUnix / (7 * 86400))
+	if !s.cfg.EpochAnchor.IsZero() {
+		dur := s.cfg.EpochDuration
+		if dur <= 0 {
+			dur = 7 * 24 * time.Hour
+		}
+		now := time.Now().UTC()
+		if now.Before(s.cfg.EpochAnchor) {
+			wallWeek = 1
+		} else {
+			wallWeek = uint64(now.Sub(s.cfg.EpochAnchor)/dur) + 1
+		}
+	}
+	if req.Week == 0 || req.Week > wallWeek+1 {
+		http.Error(w, "requested week out of bounds", http.StatusBadRequest)
+		return
+	}
 	salt := req.ClusterSalt
 	if strings.TrimSpace(s.cfg.PinnedSalt) != "" {
 		salt = strings.TrimSpace(s.cfg.PinnedSalt)
 	}
 
 	s.mu.Lock()
-	changedHighest := false
-	if req.Week > s.highestWeek {
-		s.highestWeek = req.Week
-		changedHighest = true
-	}
 	if s.highestWeek > s.cfg.AllowPastWeeks && req.Week < s.highestWeek-s.cfg.AllowPastWeeks {
 		s.mu.Unlock()
 		http.Error(w, "requested week violates rollback floor", http.StatusConflict)
 		return
 	}
+	changedHighest := false
+	if req.Week > s.highestWeek {
+		s.highestWeek = req.Week
+		changedHighest = true
+	}
 	if changedHighest && s.cfg.StateFile != "" {
 		payload, _ := json.Marshal(struct {
 			HighestWeek uint64 `json:"highest_week"`
 		}{HighestWeek: s.highestWeek})
-		_ = os.WriteFile(s.cfg.StateFile, payload, 0o600)
+		_ = writeRootVaultStateAtomic(s.cfg.StateFile, payload)
 	}
 	s.mu.Unlock()
 
@@ -286,10 +371,56 @@ func (s *RootVaultServer) handleDeriveSMK(w http.ResponseWriter, r *http.Request
 	})
 }
 
-func (s *RootVaultServer) authenticate(r *http.Request, body []byte) bool {
+// authenticateHeaders validates Bearer token and required HMAC header fields/clock-skew/replay
+// before reading the HTTP request body, preventing unauthenticated slow-body connection exhaustion.
+func (s *RootVaultServer) authenticateHeaders(r *http.Request) bool {
+	if strings.TrimSpace(s.cfg.ClientCA) != "" {
+		if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 {
+			return false
+		}
+	}
 	if s.cfg.AuthToken != "" {
 		hdr := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if subtle.ConstantTimeCompare([]byte(hdr), []byte(s.cfg.AuthToken)) != 1 {
+		hdrSum := sha256.Sum256([]byte(hdr))
+		tokSum := sha256.Sum256([]byte(s.cfg.AuthToken))
+		if subtle.ConstantTimeCompare(hdrSum[:], tokSum[:]) != 1 {
+			return false
+		}
+	}
+	if s.cfg.HMACSecret != "" {
+		tsStr := r.Header.Get("X-Grid-Timestamp")
+		nonce := r.Header.Get("X-Grid-Nonce")
+		sig := r.Header.Get("X-Grid-Signature")
+		ts, err := strconv.ParseInt(tsStr, 10, 64)
+		if err != nil || nonce == "" || sig == "" {
+			return false
+		}
+		now := time.Now().Unix()
+		skew := int64(s.cfg.MaxClockSkew.Seconds())
+		if ts < now-skew || ts > now+skew {
+			return false
+		}
+		s.mu.Lock()
+		_, replay := s.seenNonces[nonce]
+		s.mu.Unlock()
+		if replay {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *RootVaultServer) authenticate(r *http.Request, body []byte) bool {
+	if strings.TrimSpace(s.cfg.ClientCA) != "" {
+		if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 {
+			return false
+		}
+	}
+	if s.cfg.AuthToken != "" {
+		hdr := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		hdrSum := sha256.Sum256([]byte(hdr))
+		tokSum := sha256.Sum256([]byte(s.cfg.AuthToken))
+		if subtle.ConstantTimeCompare(hdrSum[:], tokSum[:]) != 1 {
 			return false
 		}
 	}
@@ -307,7 +438,9 @@ func (s *RootVaultServer) authenticate(r *http.Request, body []byte) bool {
 			return false
 		}
 		expected := signVaultRequest(s.cfg.HMACSecret, r.Method, r.URL.Path, tsStr, nonce, body)
-		if subtle.ConstantTimeCompare([]byte(sig), []byte(expected)) != 1 {
+		sigSum := sha256.Sum256([]byte(sig))
+		expSum := sha256.Sum256([]byte(expected))
+		if subtle.ConstantTimeCompare(sigSum[:], expSum[:]) != 1 {
 			return false
 		}
 		s.mu.Lock()
@@ -316,12 +449,40 @@ func (s *RootVaultServer) authenticate(r *http.Request, body []byte) bool {
 				delete(s.seenNonces, k)
 			}
 		}
-		if _, replay := s.seenNonces[nonce]; replay {
-			s.mu.Unlock()
+		_, replay := s.seenNonces[nonce]
+		s.mu.Unlock()
+		if replay {
 			return false
 		}
-		s.seenNonces[nonce] = ts
-		s.mu.Unlock()
 	}
 	return true
+}
+
+func (s *RootVaultServer) recordNonce(r *http.Request) (ok bool, tooMany bool) {
+	if s.cfg.HMACSecret == "" {
+		return true, false
+	}
+	tsStr := r.Header.Get("X-Grid-Timestamp")
+	nonce := r.Header.Get("X-Grid-Nonce")
+	ts, err := strconv.ParseInt(tsStr, 10, 64)
+	if err != nil || nonce == "" {
+		return false, false
+	}
+	now := time.Now().Unix()
+	skew := int64(s.cfg.MaxClockSkew.Seconds())
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, exp := range s.seenNonces {
+		if exp < now-skew {
+			delete(s.seenNonces, k)
+		}
+	}
+	if _, replay := s.seenNonces[nonce]; replay {
+		return false, false
+	}
+	if len(s.seenNonces) >= maxRootVaultSeenNonces {
+		return false, true
+	}
+	s.seenNonces[nonce] = ts
+	return true, false
 }

@@ -42,9 +42,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     _smsly_apt_mirror_ok=false; \
     for _spec in \
       "|" \
-      "http://debian.mirrors.ovh.net|http://debian.mirrors.ovh.net/debian-security" \
-      "http://mirrors.edge.kernel.org|http://mirrors.edge.kernel.org/debian-security" \
-      "http://mirror.netcologne.de|http://mirror.netcologne.de/debian-security" \
+      "https://debian.mirrors.ovh.net|https://debian.mirrors.ovh.net/debian-security" \
+      "https://mirrors.edge.kernel.org|https://mirrors.edge.kernel.org/debian-security" \
+      "https://mirror.netcologne.de|https://mirror.netcologne.de/debian-security" \
     ; do \
       _main="${_spec%%|*}"; _sec="${_spec#*|}"; \
       if [ -n "$_main" ]; then _smsly_apt_restore_official; _smsly_apt_rewrite "$_main" "$_sec"; fi; \
@@ -94,9 +94,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     _smsly_apt_mirror_ok=false; \
     for _spec in \
       "|" \
-      "http://debian.mirrors.ovh.net|http://debian.mirrors.ovh.net/debian-security" \
-      "http://mirrors.edge.kernel.org|http://mirrors.edge.kernel.org/debian-security" \
-      "http://mirror.netcologne.de|http://mirror.netcologne.de/debian-security" \
+      "https://debian.mirrors.ovh.net|https://debian.mirrors.ovh.net/debian-security" \
+      "https://mirrors.edge.kernel.org|https://mirrors.edge.kernel.org/debian-security" \
+      "https://mirror.netcologne.de|https://mirror.netcologne.de/debian-security" \
     ; do \
       _main="${_spec%%|*}"; _sec="${_spec#*|}"; \
       if [ -n "$_main" ]; then _smsly_apt_restore_official; _smsly_apt_rewrite "$_main" "$_sec"; fi; \
@@ -107,22 +107,57 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get install -y --no-install-recommends \
     ca-certificates curl wget bash \
     gcc git libpq-dev postgresql-client \
-    supervisor gettext-base gnupg libcap2-bin libstdc++6
+    supervisor gettext-base gnupg libcap2-bin libstdc++6 age \
+    && ARCH="$(dpkg --print-architecture)" \
+    && case "${ARCH}" in \
+        amd64) SOPS_SHA256="79b0f844237bd4b0446e4dc884dbc1765fc7dedc3968f743d5949c6f2e701739" ;; \
+        arm64) SOPS_SHA256="e91ddc04e6a78f5aed9e4fc347a279b539c43b74d99e6b8078e2f2f6f5b309f5" ;; \
+        *) echo "Unsupported arch for sops: ${ARCH}" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL -o /usr/local/bin/sops "https://github.com/getsops/sops/releases/download/v3.10.2/sops-v3.10.2.linux.${ARCH}" \
+    && echo "${SOPS_SHA256}  /usr/local/bin/sops" | sha256sum -c - \
+    && chmod +x /usr/local/bin/sops \
+    && sops --version 2>&1 | head -n 1
 
-# --- Optional: Docker CLI + buildx + nixpacks + trivy + cosign (for runtime container provisioning & security scanning) ---
+# --- Optional: Docker CLI + buildx + compose + nixpacks + trivy + cosign (for runtime container provisioning & security scanning) ---
 RUN if [ "$INSTALL_BUILD_DEPS" = "true" ]; then \
-      install -m 0755 -d /etc/apt/keyrings \
+      ARCH="$(dpkg --print-architecture)" \
+      && install -m 0755 -d /etc/apt/keyrings \
       && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
       && chmod a+r /etc/apt/keyrings/docker.asc \
-      && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+      && echo "deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
         | tee /etc/apt/sources.list.d/docker.list > /dev/null \
       && apt-get update \
-      && apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin \
+      && apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin docker-compose-plugin \
       && rm -rf /var/lib/apt/lists/* \
-      && curl -sL https://nixpacks.com/install.sh | bash \
-      && curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | bash -s -- -b /usr/local/bin \
-      && COSIGN_ARCH=$(dpkg --print-architecture | sed 's/x86_64/amd64/;s/aarch64/arm64/') \
-      && curl -sSL -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${COSIGN_ARCH}" \
+      && if [ "${ARCH}" = "amd64" ]; then \
+           curl -fsSL -o /tmp/nixpacks.deb "https://github.com/railwayapp/nixpacks/releases/download/v1.40.0/nixpacks-v1.40.0-amd64.deb" \
+           && echo "be0430d2e8faed285b65830e15cc9b53d078360955d6dde387edd40c03d15acc  /tmp/nixpacks.deb" | sha256sum -c - \
+           && dpkg -i /tmp/nixpacks.deb && rm -f /tmp/nixpacks.deb; \
+         elif [ "${ARCH}" = "arm64" ]; then \
+           curl -fsSL -o /tmp/nixpacks.tar.gz "https://github.com/railwayapp/nixpacks/releases/download/v1.40.0/nixpacks-v1.40.0-aarch64-unknown-linux-musl.tar.gz" \
+           && echo "691fdf680a3bd5240b87ffa8d3198d5c8fdf365603351e47f5314ff82c80bed9  /tmp/nixpacks.tar.gz" | sha256sum -c - \
+           && tar -xzf /tmp/nixpacks.tar.gz -C /usr/local/bin nixpacks \
+           && chmod +x /usr/local/bin/nixpacks && rm -f /tmp/nixpacks.tar.gz; \
+         else \
+           echo "Unsupported arch for nixpacks: ${ARCH}" >&2; exit 1; \
+         fi \
+      && case "${ARCH}" in \
+          amd64) TRIVY_ARCH="64bit"; TRIVY_SHA256="bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf" ;; \
+          arm64) TRIVY_ARCH="ARM64"; TRIVY_SHA256="ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3" ;; \
+          *) echo "Unsupported arch for trivy: ${ARCH}" >&2; exit 1 ;; \
+         esac \
+      && curl -fsSL -o /tmp/trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-${TRIVY_ARCH}.tar.gz" \
+      && echo "${TRIVY_SHA256}  /tmp/trivy.tar.gz" | sha256sum -c - \
+      && tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
+      && chmod +x /usr/local/bin/trivy && rm -f /tmp/trivy.tar.gz \
+      && case "${ARCH}" in \
+          amd64) COSIGN_SHA256="8b24b946dd5809c6bd93de08033bcf6bc0ed7d336b7785787c080f574b89249b" ;; \
+          arm64) COSIGN_SHA256="3b2e2e3854d0356c45fe6607047526ccd04742d20bd44afb5be91fa2a6e7cb4a" ;; \
+          *) echo "Unsupported arch for cosign: ${ARCH}" >&2; exit 1 ;; \
+         esac \
+      && curl -fsSL -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/download/v2.4.1/cosign-linux-${ARCH}" \
+      && echo "${COSIGN_SHA256}  /usr/local/bin/cosign" | sha256sum -c - \
       && chmod +x /usr/local/bin/cosign; \
     fi
 
@@ -157,9 +192,9 @@ COPY scripts/entrypoint.platform.sh /entrypoint.platform.sh
 RUN chmod +x /app/entrypoint.sh /entrypoint.platform.sh
 
 # --- Drop privileges ---
-RUN mkdir -p /app/backups /app/builds \
+RUN mkdir -p /app/backups /app/builds /etc/caddy /var/lib/caddy /var/log/caddy \
     && useradd -m -u 1000 smsly \
-    && chown -R smsly:smsly /app /frontend
+    && chown -R smsly:smsly /app /frontend /etc/caddy /var/lib/caddy /var/log/caddy
 RUN setcap cap_net_bind_service=+ep /usr/bin/caddy
 
 USER smsly

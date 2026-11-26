@@ -219,10 +219,15 @@ class ChallengeEndpointTests(TestCase):
 
     def test_exact_token_served_as_text(self):
         from django.test import Client
-        resp = Client().get("/.well-known/smsly-verify/tok-abc-123/")
+        resp = Client().get("/.well-known/smsly-verify/tok-abc-123/", HTTP_HOST="shop.example.com")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.content.decode(), "tok-abc-123")
         self.assertIn("text/plain", resp["Content-Type"])
+
+    def test_mismatched_host_404s(self):
+        from django.test import Client
+        resp = Client().get("/.well-known/smsly-verify/tok-abc-123/", HTTP_HOST="other.example.com")
+        self.assertEqual(resp.status_code, 404)
 
     def test_unknown_token_404s(self):
         from django.test import Client

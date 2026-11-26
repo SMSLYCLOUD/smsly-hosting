@@ -22,13 +22,18 @@ spec:
         app.kubernetes.io/name: {{ include "smsly-hosting.name" $ }}-celery-{{ $name }}
         app.kubernetes.io/instance: {{ $.Release.Name }}
         app.kubernetes.io/component: celery-{{ $name }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/secret-env.yaml") $ | sha256sum }}
     spec:
       {{- with $.Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "smsly-hosting.fullname" $ }}-celery
+      {{- if or $.Values.celery.serviceAccount.create $.Values.celery.serviceAccount.name }}
+      serviceAccountName: {{ default (printf "%s-celery" (include "smsly-hosting.fullname" $)) $.Values.celery.serviceAccount.name }}
+      {{- end }}
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 360
       securityContext:
         {{- include "smsly.podSecurityContext" $ | nindent 8 }}
       containers:
@@ -48,25 +53,63 @@ spec:
             - --concurrency={{ $worker.concurrency }}
           envFrom:
             - secretRef:
-                name: {{ include "smsly-hosting.fullname" $ }}-env
+                name: {{ include "smsly-hosting.secretName" $ }}
           env:
             - name: DEBUG
               value: "{{ $.Values.backend.env.debug }}"
+            - name: DOMAIN
+              value: "{{ $.Values.global.domain }}"
+            - name: ALLOWED_HOSTS
+              value: "{{ include "smsly-hosting.allowedHosts" $ }}"
+            - name: POSTGRES_USER
+              value: "{{ include "smsly-hosting.dbUser" $ }}"
+            - name: POSTGRES_DB
+              value: "{{ include "smsly-hosting.dbName" $ }}"
+            - name: POSTGRES_HOST
+              value: "{{ include "smsly-hosting.dbHost" $ }}"
+            - name: POSTGRES_PORT
+              value: "{{ include "smsly-hosting.dbPort" $ }}"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "smsly-hosting.secretName" $ }}
+                  key: dbPassword
             - name: DATABASE_URL
-              value: "postgres://{{ $.Values.postgresql.auth.username }}:{{ $.Values.postgresql.auth.password }}@{{ include "smsly-hosting.fullname" $ }}-postgresql:5432/{{ $.Values.postgresql.auth.database }}"
+              value: "postgres://{{ include "smsly-hosting.dbUser" $ }}:$(POSTGRES_PASSWORD)@{{ include "smsly-hosting.dbHost" $ }}:{{ include "smsly-hosting.dbPort" $ }}/{{ include "smsly-hosting.dbName" $ }}"
             - name: REDIS_HOST
-              value: {{ include "smsly-hosting.fullname" $ }}-redis-master
+              value: "{{ include "smsly-hosting.redisHost" $ }}"
             - name: REDIS_PORT
-              value: "6379"
-            {{- if $.Values.redis.auth.enabled }}
+              value: "{{ include "smsly-hosting.redisPort" $ }}"
+            {{- if or $.Values.redis.auth.enabled (and $.Values.externalRedis $.Values.externalRedis.enabled) }}
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "smsly-hosting.fullname" $ }}-env
+                  name: {{ include "smsly-hosting.secretName" $ }}
                   key: redisPassword
+                  optional: true
             {{- end }}
+            - name: RABBITMQ_HOST
+              value: "{{ include "smsly-hosting.rabbitmqHost" $ }}"
+            - name: RABBITMQ_PORT
+              value: "{{ include "smsly-hosting.rabbitmqPort" $ }}"
+            - name: RABBITMQ_DEFAULT_USER
+              value: "{{ include "smsly-hosting.rabbitmqUser" $ }}"
+          volumeMounts:
+            - name: home-smsly
+              mountPath: /home/smsly
+            - name: backups
+              mountPath: /app/backups
+            - name: tmp
+              mountPath: /tmp
           resources:
             {{- toYaml $.Values.celery.resources | nindent 12 }}
+      volumes:
+        - name: home-smsly
+          emptyDir: {}
+        - name: backups
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
 {{- end }}
 
 {{- if .Values.celery.beat.enabled }}
@@ -81,6 +124,8 @@ metadata:
     app.kubernetes.io/component: celery-beat
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "smsly-hosting.name" . }}-celery-beat
@@ -91,12 +136,16 @@ spec:
         app.kubernetes.io/name: {{ include "smsly-hosting.name" . }}-celery-beat
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: celery-beat
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/secret-env.yaml") . | sha256sum }}
     spec:
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "smsly-hosting.fullname" . }}-celery
+      {{- if or .Values.celery.serviceAccount.create .Values.celery.serviceAccount.name }}
+      serviceAccountName: {{ default (printf "%s-celery" (include "smsly-hosting.fullname" .)) .Values.celery.serviceAccount.name }}
+      {{- end }}
       automountServiceAccountToken: false
       securityContext:
         {{- include "smsly.podSecurityContext" . | nindent 8 }}
@@ -113,28 +162,68 @@ spec:
             - beat
             - -l
             - info
+            - -S
+            - redbeat.RedBeatScheduler
             - --pidfile=/tmp/celerybeat.pid
-            - --schedule=/tmp/celerybeat-schedule
           envFrom:
             - secretRef:
-                name: {{ include "smsly-hosting.fullname" . }}-env
+                name: {{ include "smsly-hosting.secretName" . }}
           env:
             - name: DEBUG
               value: "{{ .Values.backend.env.debug }}"
+            - name: DOMAIN
+              value: "{{ .Values.global.domain }}"
+            - name: ALLOWED_HOSTS
+              value: "{{ include "smsly-hosting.allowedHosts" . }}"
+            - name: POSTGRES_USER
+              value: "{{ include "smsly-hosting.dbUser" . }}"
+            - name: POSTGRES_DB
+              value: "{{ include "smsly-hosting.dbName" . }}"
+            - name: POSTGRES_HOST
+              value: "{{ include "smsly-hosting.dbHost" . }}"
+            - name: POSTGRES_PORT
+              value: "{{ include "smsly-hosting.dbPort" . }}"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "smsly-hosting.secretName" . }}
+                  key: dbPassword
             - name: DATABASE_URL
-              value: "postgres://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ include "smsly-hosting.fullname" . }}-postgresql:5432/{{ .Values.postgresql.auth.database }}"
+              value: "postgres://{{ include "smsly-hosting.dbUser" . }}:$(POSTGRES_PASSWORD)@{{ include "smsly-hosting.dbHost" . }}:{{ include "smsly-hosting.dbPort" . }}/{{ include "smsly-hosting.dbName" . }}"
             - name: REDIS_HOST
-              value: {{ include "smsly-hosting.fullname" . }}-redis-master
+              value: "{{ include "smsly-hosting.redisHost" . }}"
             - name: REDIS_PORT
-              value: "6379"
-            {{- if .Values.redis.auth.enabled }}
+              value: "{{ include "smsly-hosting.redisPort" . }}"
+            {{- if or .Values.redis.auth.enabled (and .Values.externalRedis .Values.externalRedis.enabled) }}
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "smsly-hosting.fullname" . }}-env
+                  name: {{ include "smsly-hosting.secretName" . }}
                   key: redisPassword
+                  optional: true
+            - name: CELERY_REDBEAT_REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@{{ include "smsly-hosting.redisHost" . }}:{{ include "smsly-hosting.redisPort" . }}/3"
+            {{- else }}
+            - name: CELERY_REDBEAT_REDIS_URL
+              value: "redis://{{ include "smsly-hosting.redisHost" . }}:{{ include "smsly-hosting.redisPort" . }}/3"
             {{- end }}
+            - name: RABBITMQ_HOST
+              value: "{{ include "smsly-hosting.rabbitmqHost" . }}"
+            - name: RABBITMQ_PORT
+              value: "{{ include "smsly-hosting.rabbitmqPort" . }}"
+            - name: RABBITMQ_DEFAULT_USER
+              value: "{{ include "smsly-hosting.rabbitmqUser" . }}"
+          volumeMounts:
+            - name: home-smsly
+              mountPath: /home/smsly
+            - name: tmp
+              mountPath: /tmp
           resources:
             {{- toYaml .Values.celery.resources | nindent 12 }}
+      volumes:
+        - name: home-smsly
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
 {{- end }}
 {{- end }}

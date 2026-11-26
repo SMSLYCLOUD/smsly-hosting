@@ -20,6 +20,14 @@ _harden_crowdsec_bootstrap() {
     # attaches the middleware to user routers.
     _harden_crowdsec_traefik_plugin_gate
     [ "${NODE_CROWDSEC:-1}" = "1" ] || { _harden_log info "crowdsec skipped (NODE_CROWDSEC=0)"; return 0; }
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _cs_tier=""
+        _cs_tier="$(_harden_stack_tier)"
+        if [ "$_cs_tier" = "lite" ]; then
+            _harden_log info "crowdsec skipped (STACK_TIER=lite)"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
@@ -40,9 +48,10 @@ _harden_crowdsec_bootstrap() {
         # starts crowdsec right after .env is ready, and verify converges it.
         return 0
     fi
-    docker compose \
+    timeout 120 docker compose \
         "${env_args[@]}" \
         -f "$_cf" \
+        --profile medium \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
         docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' && break
@@ -295,9 +304,9 @@ _harden_crowdsec_cloudflare_bouncer() {
     _cf="$(_harden_crowdsec_compose_file)"
     local _up_rc=1
     if [ "$_prev_hash" != "$_new_hash" ]; then
-        docker compose "${env_args[@]}" -f "$_cf" up -d --force-recreate --no-deps crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
+        timeout 120 docker compose "${env_args[@]}" -f "$_cf" --profile medium up -d --force-recreate --no-deps crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
     else
-        docker compose "${env_args[@]}" -f "$_cf" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
+        timeout 120 docker compose "${env_args[@]}" -f "$_cf" --profile medium up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
     fi
     if [ "$_up_rc" = "0" ]; then
         _harden_log ok "cloudflare bouncer running (edge enforcement)"
@@ -308,6 +317,14 @@ _harden_crowdsec_cloudflare_bouncer() {
 
 _harden_crowdsec_verify() {
     [ "${NODE_CROWDSEC:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _cs_tier=""
+        _cs_tier="$(_harden_stack_tier)"
+        if [ "$_cs_tier" = "lite" ]; then
+            _harden_log info "crowdsec skipped (STACK_TIER=lite)"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"

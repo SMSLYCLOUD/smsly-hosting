@@ -46,11 +46,28 @@ class HelpersMixin:
         peer_pubkey: str,
         peer_wg_ip: str,
         peer_endpoint: str,
+        iface: str | None = None,
+        mesh=None,
     ) -> bool:
         if not (getattr(server, "ssh_key", "") or getattr(server, "ssh_password", "")):
             return False
         try:
             from apps.deployments.services.ssh_client import SSHClient
+
+            resolved_iface = iface or getattr(mesh, "interface_name", None)
+            if not resolved_iface:
+                try:
+                    from apps.deployments.models.mesh import WireGuardPeer
+                    peer_obj = WireGuardPeer.objects.filter(
+                        server=server, is_active=True,
+                    ).select_related("mesh").first()
+                    if peer_obj and peer_obj.mesh:
+                        resolved_iface = peer_obj.mesh.interface_name
+                except Exception:
+                    resolved_iface = None
+            resolved_iface = cls.validate_interface_name(resolved_iface or "wg0")
+            safe_iface = shlex.quote(resolved_iface)
+            conf_path = f"/etc/wireguard/{safe_iface}.conf"
 
             ssh = SSHClient(
                 host=server.host,
@@ -65,8 +82,10 @@ class HelpersMixin:
             _pk = shlex.quote(peer_pubkey)
             _ep = shlex.quote(peer_endpoint)
             _ip = shlex.quote(peer_wg_ip)
+            sudo_prefix = 'if [ "$(id -u)" -eq 0 ]; then SUDO=\'\'; else SUDO=\'sudo -n\'; fi'
             add_live = (
-                f"wg set wg0 peer {_pk} "
+                f"{sudo_prefix}; "
+                f"$SUDO wg set {safe_iface} peer {_pk} "
                 f"endpoint {_ep} "
                 f"allowed-ips {_ip}/32 "
                 "persistent-keepalive 25"
@@ -74,12 +93,13 @@ class HelpersMixin:
             ssh.exec_command(add_live, timeout=15, raise_on_error=False)
 
             persist = (
-                f"! grep -q '^\\[Interface\\]' /etc/wireguard/wg0.conf 2>/dev/null "
-                f"|| grep -q '^PublicKey = {_pk}$' /etc/wireguard/wg0.conf 2>/dev/null "
+                f"{sudo_prefix}; "
+                f"! $SUDO grep -q '^\\[Interface\\]' {conf_path} 2>/dev/null "
+                f"|| $SUDO grep -q '^PublicKey = {_pk}$' {conf_path} 2>/dev/null "
                 f"|| printf '\\n[Peer]\\nPublicKey = {_pk}\\n"
                 f"AllowedIPs = {_ip}/32\\n"
                 f"Endpoint = {_ep}\\n"
-                f"PersistentKeepalive = 25\\n' >> /etc/wireguard/wg0.conf"
+                f"PersistentKeepalive = 25\\n' | $SUDO tee -a {conf_path} >/dev/null"
             )
             ssh.exec_command(persist, timeout=15, raise_on_error=False)
 

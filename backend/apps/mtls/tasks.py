@@ -518,7 +518,9 @@ def _recreate_spire_agent(spec: dict) -> str:
         )
         return outcome
     except Exception as exc:
-        return f"error: {exc}"
+        import re as _re
+        _safe_exc = _re.sub(r"(-joinToken\s+)\S+", r"\1[REDACTED]", str(exc))
+        return f"error: {_safe_exc}"
 
 
 @shared_task(
@@ -586,7 +588,10 @@ def check_spire_rotation_task():
             except Exception:
                 on_cooldown = False
             if not on_cooldown:
-                outcome = _recreate_spire_agent(spec)
+                import re as _re
+                outcome = _re.sub(
+                    r"(-joinToken\s+)\S+", r"\1[REDACTED]", str(_recreate_spire_agent(spec))
+                )
                 entry["healed"] = outcome
                 if outcome in ("started", "already_running"):
                     report["healed"].append(domain)
@@ -750,7 +755,7 @@ def inject_mtls_task(self, service_id: str):
 
 
 def _swap_container_with_mtls(client, old_container, service):
-    """Commit old container, create new one with mTLS mounts, swap."""
+    """Commit old container, create new one with mTLS mounts, swap cleanly."""
     from apps.deployments.services.mtls_integration import (
         get_mtls_labels,
         get_mtls_env_vars,
@@ -758,39 +763,38 @@ def _swap_container_with_mtls(client, old_container, service):
     )
 
     name = old_container.name
-    new_name = f"{name}-mtls-{int(time.time())}"
+    ts = int(time.time())
+    backup_name = f"{name}-pre-mtls-{ts}"
 
     logger.info("Hot-swapping container %s for mTLS injection", name)
 
     # Step 1: Commit
     repo = f"mtls-swap/{name}"
-    tag = f"pre-mtls-{int(time.time())}"
+    tag = f"pre-mtls-{ts}"
     old_container.commit(repository=repo, tag=tag)
     logger.debug("Committed %s to %s:%s", name, repo, tag)
 
-    # Step 2: Stop old container
-    old_container.stop(timeout=10)
+    # Capture full container runtime & multi-network config before stopping.
+    attrs = old_container.attrs or {}
+    cfg = attrs.get("Config") or {}
+    host_cfg = attrs.get("HostConfig") or {}
 
-    # Step 3: Create new container with mTLS mounts
     mtls_labels = get_mtls_labels(service)
     mtls_env = get_mtls_env_vars(service)
     mtls_volumes = get_mtls_docker_run_volumes(service)
 
-    # Merge labels
-    new_labels = dict(old_container.labels)
+    new_labels = dict(old_container.labels or {})
     new_labels.update(mtls_labels)
 
-    # Merge environment
     new_env = {}
-    for env_str in old_container.attrs.get("Config", {}).get("Env") or []:
+    for env_str in cfg.get("Env") or []:
         if "=" in env_str:
             k, v = env_str.split("=", 1)
             new_env[k] = v
     new_env.update(mtls_env)
 
-    # Build volume mounts
     new_volumes = {}
-    for vol in old_container.attrs.get("Mounts") or []:
+    for vol in attrs.get("Mounts") or []:
         src = vol.get("Source", "")
         dst = vol.get("Destination", "")
         mode = vol.get("Mode", "rw")
@@ -798,49 +802,99 @@ def _swap_container_with_mtls(client, old_container, service):
             new_volumes[src] = {"bind": dst, "mode": mode}
     new_volumes = merge_docker_volumes(new_volumes, mtls_volumes)
 
-    # Get network config
-    network_config = old_container.attrs.get("NetworkSettings", {}).get("Networks") or {}
+    net_map = attrs.get("NetworkSettings", {}).get("Networks") or {}
     primary_network = None
-    for net_name in network_config:
-        if net_name != "bridge":
+    networking_config = {}
+    for net_name, net_data in net_map.items():
+        if net_name == "bridge" and len(net_map) > 1:
+            continue
+        if primary_network is None:
             primary_network = net_name
-            break
+        aliases = [a for a in ((net_data or {}).get("Aliases") or []) if a]
+        if hasattr(client, "api") and hasattr(client.api, "create_endpoint_config"):
+            networking_config[net_name] = client.api.create_endpoint_config(
+                aliases=aliases or None
+            )
 
+    run_kwargs = dict(
+        image=f"{repo}:{tag}",
+        name=name,
+        detach=True,
+        restart_policy=host_cfg.get("RestartPolicy", {"Name": "unless-stopped"}),
+        network=primary_network or "bridge",
+        labels=new_labels,
+        environment=new_env,
+        volumes=new_volumes,
+        security_opt=host_cfg.get("SecurityOpt", [
+            "no-new-privileges:true", "apparmor:docker-default",
+        ]),
+        cap_drop=host_cfg.get("CapDrop", ["ALL"]),
+        cap_add=host_cfg.get("CapAdd", [
+            "NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID",
+        ]),
+        mem_limit=host_cfg.get("Memory"),
+        nano_cpus=host_cfg.get("NanoCpus"),
+        pids_limit=host_cfg.get("PidsLimit"),
+        runtime=host_cfg.get("Runtime"),
+    )
+    if networking_config and primary_network:
+        run_kwargs["networking_config"] = networking_config
+    if cfg.get("Healthcheck"):
+        run_kwargs["healthcheck"] = cfg["Healthcheck"]
+    if host_cfg.get("Tmpfs"):
+        run_kwargs["tmpfs"] = host_cfg["Tmpfs"]
+    if host_cfg.get("ReadonlyRootfs"):
+        run_kwargs["read_only"] = True
+    if host_cfg.get("Init") is not None:
+        run_kwargs["init"] = host_cfg["Init"]
+    if host_cfg.get("PortBindings"):
+        run_kwargs["ports"] = host_cfg["PortBindings"]
+    if host_cfg.get("Ulimits"):
+        import docker.types
+        ulimits = []
+        for u in host_cfg["Ulimits"]:
+            if isinstance(u, dict) and u.get("Name"):
+                ulimits.append(docker.types.Ulimit(
+                    name=u["Name"], soft=u.get("Soft"), hard=u.get("Hard")
+                ))
+        if ulimits:
+            run_kwargs["ulimits"] = ulimits
+
+    # Step 2: Rename and stop old container so the new container keeps the
+    # canonical service container name (Sablier/lookup compatibility).
+    old_container.rename(backup_name)
+    old_container.stop(timeout=10)
+
+    # Remove stale sidecar if it shares the dying network namespace.
     try:
-        new_container = client.containers.run(
-            image=f"{repo}:{tag}",
-            name=new_name,
-            detach=True,
-            restart_policy=old_container.attrs.get("HostConfig", {}).get(
-                "RestartPolicy", {"Name": "unless-stopped"}
-            ),
-            network=primary_network or "bridge",
-            labels=new_labels,
-            environment=new_env,
-            volumes=new_volumes,
-            security_opt=old_container.attrs.get("HostConfig", {}).get("SecurityOpt", [
-                "no-new-privileges:true", "apparmor:docker-default",
-            ]),
-            cap_drop=old_container.attrs.get("HostConfig", {}).get("CapDrop", ["ALL"]),
-            cap_add=old_container.attrs.get("HostConfig", {}).get("CapAdd", [
-                "NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID",
-            ]),
-            mem_limit=old_container.attrs.get("HostConfig", {}).get("Memory"),
-            nano_cpus=old_container.attrs.get("HostConfig", {}).get("NanoCpus"),
-            pids_limit=old_container.attrs.get("HostConfig", {}).get("PidsLimit"),
-            runtime=old_container.attrs.get("HostConfig", {}).get("Runtime"),
-        )
+        from apps.mtls.services.envoy_sidecar import EnvoySidecar
+        EnvoySidecar.remove_sidecar(service)
+    except Exception:
+        pass
+
+    # Step 3: Create new container preserving full network & runtime state.
+    try:
+        client.containers.run(**run_kwargs)
     except Exception as exc:
-        # Rollback: restart old container
-        logger.error("Failed to create new container %s: %s, rolling back", new_name, exc)
+        logger.error("Failed to create new container %s: %s, rolling back", name, exc)
+        try:
+            old_container.rename(name)
+        except Exception:
+            pass
         old_container.start()
         raise
 
-    # Step 4: Remove old container
+    # Step 4: Remove old container and inject sidecar into the new container.
     try:
         old_container.remove(force=True)
     except Exception as exc:
-        logger.warning("Could not remove old container %s: %s", name, exc)
+        logger.warning("Could not remove old container %s: %s", backup_name, exc)
+
+    try:
+        from apps.mtls.services.envoy_sidecar import EnvoySidecar
+        EnvoySidecar.inject_sidecar(service)
+    except Exception as exc:
+        logger.warning("Failed to re-inject Envoy sidecar for %s: %s", service.name, exc)
 
     # Cleanup old image
     try:
@@ -848,4 +902,4 @@ def _swap_container_with_mtls(client, old_container, service):
     except Exception:
         pass
 
-    logger.info("Swapped %s -> %s with SPIRE mTLS mounts", name, new_name)
+    logger.info("Swapped %s -> %s with SPIRE mTLS mounts", backup_name, name)

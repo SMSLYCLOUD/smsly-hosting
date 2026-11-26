@@ -18,7 +18,7 @@ SyslogIdentifier=celery-autoscaler
 # Hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/opt/smsly-hosting
+ReadWritePaths=-/opt/smsly-hosting
 ProtectHome=yes
 
 [Install]

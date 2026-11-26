@@ -25,9 +25,13 @@
     --muted: 220 14% 96%;
     --muted-foreground: 220 12% 38%;
 
-    /* Alert: Amber */
-    --accent: 38 92% 50%;              /* #f59e0b */
+    /* Neutral raised accent surface */
+    --accent: 220 14% 94%;
     --accent-foreground: 222 47% 11%;
+
+    /* Alert: Amber */
+    --warning: 38 92% 50%;             /* #f59e0b */
+    --warning-foreground: 222 47% 11%;
 
     /* Critical: Red */
     --destructive: 0 84% 60%;
@@ -71,9 +75,13 @@
     --muted: 222 30% 12%;
     --muted-foreground: 215 20% 55%;
 
+    /* Neutral raised accent surface */
+    --accent: 222 30% 16%;
+    --accent-foreground: 210 40% 96%;
+
     /* Alert: Amber */
-    --accent: 38 92% 50%;
-    --accent-foreground: 222 47% 6%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 222 47% 6%;
 
     /* Critical: Red */
     --destructive: 0 72% 51%;
@@ -210,6 +218,9 @@
 .pulse-dot[data-status="critical"]::after { background: hsl(var(--status-critical)); }
 .pulse-dot[data-status="offline"] { background: hsl(var(--status-offline)); }
 .pulse-dot[data-status="offline"]::after { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot::after { animation: none; }
+}
 
 /* ===== SECTION HEADER: Enterprise title blocks ===== */
 .section-header {
@@ -315,12 +326,6 @@
 .premium-bg main a[class*="shadow-"][class*="purple"],
 .premium-bg main button[class*="shadow-"][class*="purple"] {
   box-shadow: none;
-}
-
-.premium-bg main a[class*="bg-gradient-to"],
-.premium-bg main button[class*="bg-gradient-to"] {
-  background-color: hsl(var(--primary));
-  background-image: none;
 }
 
 /* ===== DOCS: Keep prose styles ===== */

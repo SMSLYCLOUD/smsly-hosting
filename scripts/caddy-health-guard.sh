@@ -92,7 +92,7 @@ normalize_caddy_candidate() {
             cat <<'CADDY_GLOBAL'
 {
     on_demand_tls {
-        ask http://localhost:8000/api/v1/services/check-domain/
+        ask http://backend:8000/api/v1/services/check-domain/
     }
 }
 
@@ -107,13 +107,14 @@ CADDY_GLOBAL
     tls {
         on_demand
     }
-    reverse_proxy localhost:8000
+    reverse_proxy backend:8000
 }
 CADDY_HTTPS_FALLBACK
 }
 
 apply_candidate() {
     local candidate="$1"
+    local container="${CADDY_CONTAINER:-smsly-hosting-caddy-1}"
 
     export_caddy_cloudflare_env
     if command -v caddy ; then
@@ -122,8 +123,7 @@ apply_candidate() {
     fi
 
     install -m 0644 "$candidate" "$CADDY_CONF" || return 1
-    true
-    true
+    timeout 30 docker exec "$container" caddy reload --config /etc/caddy/Caddyfile || return 1
     sleep 3
     if docker compose ps -q caddy  | grep -q .; then
         cp "$CADDY_CONF" "$LAST_GOOD_CONF"  || true
@@ -139,12 +139,12 @@ write_safe_fallback() {
     cat > "$candidate" <<CADDY_SAFE
 {
     on_demand_tls {
-        ask http://localhost:8000/api/v1/services/check-domain/
+        ask http://backend:8000/api/v1/services/check-domain/
     }
 }
 
 ${domain} {
-    reverse_proxy localhost:8000
+    reverse_proxy backend:8000
     encode gzip
     log {
         output file /var/log/caddy/access.log
@@ -155,11 +155,11 @@ ${domain} {
     tls {
         on_demand
     }
-    reverse_proxy localhost:8000
+    reverse_proxy backend:8000
 }
 
 :80 {
-    reverse_proxy localhost:8000
+    reverse_proxy backend:8000
 }
 CADDY_SAFE
 

@@ -40,6 +40,8 @@ class BranchPreviewManager:
         commit, the existing one is rebuilt.
         """
         self._validate(branch_name, commit_sha)
+        if getattr(service, 'is_preview', False):
+            raise ValueError("Cannot create a preview environment from another preview service.")
         existing = PreviewEnvironment.objects.select_for_update().filter(
             service=service,
             branch_name=branch_name,

@@ -14,6 +14,7 @@ from apps.deployments.utils import (
 )
 
 from ..deploy.helpers import _handle_failure, _regenerate_caddyfile
+from ..deploy.state import stamp_deployment_artifact_metadata
 
 logger = logging.getLogger(__name__)
 def _handle_remote_deployment_legacy(deployment, server):
@@ -21,6 +22,8 @@ def _handle_remote_deployment_legacy(deployment, server):
     from apps.deployments.services.server_guard import ServerGuard
 
     service = deployment.service
+    stamp_deployment_artifact_metadata(deployment, service)
+    deployment.save(update_fields=['metadata'])
     guard = ServerGuard.check_user_workload_allowed(server)
     if not guard["ok"]:
         _handle_failure(
@@ -78,15 +81,16 @@ def _handle_remote_deployment_legacy(deployment, server):
             append_log(deployment, f"[Remote] Status: {status}\n")
 
         if status == Deployment.Status.ACTIVE:
+            stamp_deployment_artifact_metadata(deployment, service)
             deployment.status = Deployment.Status.ACTIVE
             deployment.finished_at = timezone.now()
-            deployment.save(update_fields=['status', 'finished_at'])
+            deployment.save(update_fields=['status', 'finished_at', 'metadata'])
             update_stage(deployment, 'Remote Deploy', 'success')
             broadcast_status(deployment)
 
             # Post success commit status to GitHub (non-blocking)
             try:
-                from .tasks_commit_status import update_commit_status
+                from apps.deployments.tasks.cicd.tasks_commit_status import update_commit_status
                 update_commit_status.delay(
                     str(deployment.id), 'success', 'Deployment active'
                 )
@@ -170,6 +174,8 @@ def _handle_remote_deployment(deployment, server, skip_review: bool = False, ima
         return
 
     service = deployment.service
+    stamp_deployment_artifact_metadata(deployment, service, image_ref=image_name)
+    deployment.save(update_fields=['metadata'])
 
     # [FIX] Proactively stop any existing local container on Master VPS
     # if this service is being delegated to a remote node.
@@ -272,10 +278,11 @@ def _handle_remote_deployment(deployment, server, skip_review: bool = False, ima
         )
         return
 
+    stamp_deployment_artifact_metadata(deployment, service, image_ref=image_name)
     deployment.remote_deployment_id = remote_dep_id
     deployment.status = Deployment.Status.QUEUED  # Stay queued until follower reports a stage
     deployment.started_at = deployment.started_at or timezone.now()
-    deployment.save(update_fields=['remote_deployment_id', 'status', 'started_at', 'updated_at'])
+    deployment.save(update_fields=['remote_deployment_id', 'status', 'started_at', 'metadata', 'updated_at'])
     append_log(deployment, f"Remote deployment triggered: {remote_dep_id}\n")
 
     _poll_remote_deployment(
@@ -290,6 +297,8 @@ def _resume_remote_deployment(deployment, server):
     from apps.deployments.services.server_guard import ServerGuard
 
     service = deployment.service
+    stamp_deployment_artifact_metadata(deployment, service)
+    deployment.save(update_fields=['metadata'])
     guard = ServerGuard.check_user_workload_allowed(server)
     if not guard["ok"]:
         _handle_failure(
@@ -582,6 +591,7 @@ def _poll_remote_deployment(
                         deployment.verified_runtime_id = remote_container_id
                         deployment.verified_at = timezone.now()
 
+                        stamp_deployment_artifact_metadata(deployment, deployment.service)
                         deployment.status = Deployment.Status.ACTIVE
                         deployment.finished_at = timezone.now()
                         # Truthful routing: the container runs on the node, so
@@ -589,7 +599,7 @@ def _poll_remote_deployment(
                         # Caddy blocks, serializers, health) reads these two.
                         deployment.target_server = orchestrator.server
                         deployment.target_is_local = False
-                        deployment.save(update_fields=['status', 'finished_at', 'updated_at', 'verified_target_type', 'verified_host_ip', 'verified_runtime_id', 'verified_at', 'target_server', 'target_is_local'])
+                        deployment.save(update_fields=['status', 'finished_at', 'updated_at', 'verified_target_type', 'verified_host_ip', 'verified_runtime_id', 'verified_at', 'target_server', 'target_is_local', 'metadata'])
 
                         try:
                             node_logs = orchestrator.get_container_logs(remote_container_id or deployment.service.name, tail=200)
@@ -616,7 +626,7 @@ def _poll_remote_deployment(
 
                         # Post success commit status to GitHub (non-blocking)
                         try:
-                            from .tasks_commit_status import update_commit_status
+                            from apps.deployments.tasks.cicd.tasks_commit_status import update_commit_status
                             update_commit_status.delay(
                                 str(deployment.id), 'success', 'Deployment active'
                             )
@@ -696,9 +706,10 @@ def _poll_remote_deployment(
             f"\n[Remote] Polling timed out after 15 minutes while in {deployment.status} state. "
             "The deployment may still be running on the remote node.\n"
         )
+        stamp_deployment_artifact_metadata(deployment, deployment.service)
         deployment.status = Deployment.Status.FAILED
         deployment.finished_at = timezone.now()
-        deployment.save(update_fields=['status', 'finished_at', 'updated_at'])
+        deployment.save(update_fields=['status', 'finished_at', 'metadata', 'updated_at'])
         update_stage(deployment, 'Remote Deploy', 'failed')
         broadcast_status(deployment)
 

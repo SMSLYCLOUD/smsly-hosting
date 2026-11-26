@@ -20,6 +20,7 @@ export default function RegisterPage() {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [verificationMessage, setVerificationMessage] = useState<string | null>(null);
   const [oauthProviders, setOauthProviders] = useState<Record<string, boolean> | null>(null);
 
   const BACKEND_URL =
@@ -97,9 +98,8 @@ export default function RegisterPage() {
       }
 
       const data = await response.json().catch(() => ({}));
-      if (!data?.key && !data?.token) {
-        setError("Account created, but token retrieval failed. Please log in.");
-        window.location.assign("/login");
+      if (!data?.key && !data?.token && data?.detail) {
+        setVerificationMessage(String(data.detail));
         return;
       }
 
@@ -133,6 +133,24 @@ export default function RegisterPage() {
           </div>
 
           <div className="px-6 pb-6">
+            {verificationMessage ? (
+              <div
+                role="status"
+                className="space-y-4 rounded border border-emerald-500/30 bg-emerald-500/10 p-4 text-center"
+              >
+                <h2 className="text-base font-semibold text-emerald-700 dark:text-emerald-300">
+                  Verify your email
+                </h2>
+                <p className="text-sm text-foreground">{verificationMessage}</p>
+                <p className="text-xs text-muted-foreground">
+                  Check your inbox and click the verification link before signing in.
+                </p>
+                <Button asChild className="w-full h-10">
+                  <Link href="/login">Go to Sign in</Link>
+                </Button>
+              </div>
+            ) : (
+              <>
             {hasAnyOauth && (
               <>
                 <div className="rounded overflow-hidden border border-border mb-4">
@@ -250,6 +268,8 @@ export default function RegisterPage() {
                 )}
               </Button>
             </form>
+              </>
+            )}
           </div>
 
           <div className="px-6 pb-6 text-center text-sm text-muted-foreground">

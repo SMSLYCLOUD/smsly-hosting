@@ -27,8 +27,11 @@ MAX_PROXY_BODY_SIZE = 1_048_576
 
 class ProxyMixin:
 
-    @action(detail=True, methods=["post"])
-    @throttle_classes([ServerProxyThrottle])
+    @action(
+        detail=True,
+        methods=["post"],
+        throttle_classes=[ServerProxyThrottle],
+    )
     def proxy(self, request, pk=None):
         server = self.get_object()
         method = request.data.get("method", "GET").upper()

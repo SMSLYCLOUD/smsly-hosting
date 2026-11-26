@@ -533,6 +533,7 @@ class CodeIntelligenceView(GenericAPIView):
                         logger.debug("Deep scan: repo %s (%s) not found in user's services; proceeding anyway", repo_url, normalized)
 
         from apps.deployments.tasks.ai.tasks_code_intelligence import deep_scan_and_verify_task
+        from django.core.cache import cache
 
         task = deep_scan_and_verify_task.delay(
             user_id=request.user.id,
@@ -540,6 +541,7 @@ class CodeIntelligenceView(GenericAPIView):
             deploy_plan=deploy_plan,
             ai_provider=ai_provider
         )
+        cache.set(f"deep_scan_task_owner:{task.id}", str(request.user.id), timeout=86400)
 
         return Response({"task_id": task.id})
 
@@ -550,9 +552,15 @@ class DeepScanTaskStatusView(GenericAPIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from django.core.cache import cache
         task_id = request.query_params.get('task_id')
         if not task_id:
             return Response({"error": "task_id required"}, status=400)
+        owner_id = cache.get(f"deep_scan_task_owner:{task_id}")
+        if not getattr(request.user, 'is_superuser', False) and (
+            owner_id is None or str(owner_id) != str(request.user.id)
+        ):
+            return Response({"error": "Forbidden"}, status=403)
 
         import json
 

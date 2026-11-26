@@ -29,10 +29,9 @@ PROXY_TIMEOUT = 15
 # SSRF on the in-cluster observability backends.
 MAX_PROMETHEUS_QUERY_LENGTH = 4096
 MAX_LOKI_QUERY_LENGTH = 4096
-# Allow valid LogQL / PromQL characters. Includes regex operators (~, |, +, *, ?,
-# ^, $, \), log-range syntax (> <), and backtick for LogQL label matchers.
+# Allow valid LogQL / PromQL characters while blocking shell/injection characters.
 SAFE_QUERY_CHARS_RE = re.compile(
-    r"^[a-zA-Z0-9_=.{}, !\"'\(\)\[\]:\-~|+*?^$\\><`]+$"
+    r"^[a-zA-Z0-9_=.{}, !\"'\(\)\[\]:\-~]+$"
 )
 ALLOWED_LOKI_LABELS = frozenset({
     'service', 'job', 'level', 'status', 'method', 'route',
@@ -93,16 +92,22 @@ def _validate_query_chars(query: str) -> str:
 
 def _user_owned_service_names(user) -> list[str]:
     """Return the names of services the user owns, used for tenant scoping."""
+    from django.db.models import Q
     from apps.deployments.models import Service
     names = list(
         Service.objects
-        .filter(owner=user)
+        .filter(
+            Q(owner=user)
+            | Q(project__owner=user)
+            | Q(project__team__members__user=user)
+        )
+        .distinct()
         .values_list('compose_main_service', 'name')
     )
     out: list[str] = []
     for compose_name, name in names:
         candidate = (compose_name or '').strip() or (name or '').strip()
-        if candidate:
+        if candidate and candidate not in out:
             out.append(candidate)
     return out
 
@@ -117,6 +122,25 @@ def _escape_logql_regex_literal(name: str) -> str:
     """
     _logql_meta = re.compile(r'([\\|.+*?^${}()\[\]])')
     return _logql_meta.sub(r'\\\1', name)
+
+
+def _inject_selector_matcher(query: str, matcher: str, *, strip_existing: bool = True) -> str:
+    """Insert *matcher* into ``query``'s first ``{...}`` stream selector,
+    optionally stripping any existing ``compose_service``/``compose_project`` matchers.
+    """
+    if '{' not in query or '}' not in query[query.index('{'):]:
+        return '{' + matcher + '}'
+    idx = query.index('{')
+    end_idx = query.index('}', idx)
+    inner = query[idx + 1:end_idx].strip()
+    if strip_existing:
+        inner = re.sub(
+            r'(?:compose_service|compose_project)\s*(?:=|!=|=~|!~)\s*"[^"]*"\s*,?\s*',
+            '',
+            inner,
+        ).strip().strip(',').strip()
+    new_inner = f'{inner}, {matcher}' if inner else matcher
+    return query[:idx + 1] + new_inner + query[end_idx:]
 
 
 def _scope_query_to_tenant(query: str, service_names: list[str]) -> str:
@@ -135,25 +159,9 @@ def _scope_query_to_tenant(query: str, service_names: list[str]) -> str:
     if not names:
         raise ValueError("User has no services to scope the query to.")
 
-    if len(names) == 1:
-        tenant_filter = f'compose_service="{names[0]}"'
-    else:
-        escaped = [_escape_logql_regex_literal(n) for n in names]
-        tenant_filter = f'compose_service=~"{"|".join(escaped)}"'
-
-    if '{' in query:
-        idx = query.index('{')
-        end_idx = query.index('}', idx)
-        inner = query[idx + 1:end_idx].strip()
-        # Remove any existing compose_service matcher to avoid duplicate label keys
-        cleaned = re.sub(
-            r'compose_service\s*(?:=|!=|=~|!~)\s*"[^"]*"\s*,?\s*',
-            '',
-            inner,
-        ).strip().strip(',').strip()
-        new_inner = f'{cleaned}, {tenant_filter}' if cleaned else tenant_filter
-        return query[:idx + 1] + new_inner + query[end_idx:]
-    return '{' + tenant_filter + '}'
+    escaped = [_escape_logql_regex_literal(n) for n in names]
+    tenant_filter = f'compose_service=~"{"|".join(escaped)}"'
+    return _inject_selector_matcher(query, tenant_filter, strip_existing=True)
 
 
 def _parse_prometheus_time(raw: str | None) -> str | None:
@@ -194,11 +202,28 @@ def grafana_embed_url(request, dashboard_uid: str):
         params['var-service'] = [resolved]
 
     try:
-        resp = requests.get(
-            f"{GRAFANA_INTERNAL_URL}/api/dashboards/uid/{dashboard_uid}",
-            headers=_grafana_auth_header(),
-            timeout=PROXY_TIMEOUT,
-        )
+        try:
+            resp = requests.get(
+                f"{GRAFANA_INTERNAL_URL}/api/dashboards/uid/{dashboard_uid}",
+                headers=_grafana_auth_header(),
+                timeout=PROXY_TIMEOUT,
+            )
+        except requests.RequestException:
+            # Grafana (ui tier) may have been manually parked to save RAM;
+            # cooperatively wake it via napd and retry once before failing.
+            woke = False
+            try:
+                from apps.deployments.services.tiers import ensure_tier_awake
+                woke = ensure_tier_awake("ui", timeout=60)
+            except Exception:
+                woke = False
+            if not woke:
+                raise
+            resp = requests.get(
+                f"{GRAFANA_INTERNAL_URL}/api/dashboards/uid/{dashboard_uid}",
+                headers=_grafana_auth_header(),
+                timeout=PROXY_TIMEOUT,
+            )
         if resp.status_code == 404:
             return Response(
                 {'error': f'Dashboard {dashboard_uid!r} not found in Grafana.'},
@@ -265,7 +290,7 @@ def _resolve_service_var(var_service: str, user=None) -> str:
         qs = Service.objects.filter(name=var_service)
     if user:
         qs = qs.filter(
-            Q(owner=user) | Q(project__team__members__user=user)
+            Q(owner=user) | Q(project__owner=user) | Q(project__team__members__user=user)
         )
     svc = qs.first()
     if svc:
@@ -292,6 +317,43 @@ def loki_query(request):
     if char_error:
         return Response({'error': char_error}, status=status.HTTP_400_BAD_REQUEST)
 
+    # Resolve UUID in compose_service filter BEFORE tenant scoping so
+    # per-service UUID queries aren't overwritten by the all-services filter.
+    resolved_matcher = None
+    resolved_op = None
+    uuid_match = re.search(
+        r'compose_service(=~|!=|!~|=)"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"',
+        query,
+    )
+    if uuid_match:
+        from django.db.models import Q
+        from apps.deployments.models import Service
+        op = uuid_match.group(1)
+        service_id = uuid_match.group(2)
+        svc = (
+            Service.objects.filter(id=service_id)
+            .filter(
+                Q(owner=request.user)
+                | Q(project__owner=request.user)
+                | Q(project__team__members__user=request.user)
+            )
+            .first()
+        )
+        if svc:
+            resolved_op = op
+            raw_target = (
+                svc.name.lower().replace(' ', '-')
+                if svc.deploy_mode == 'COMPOSE'
+                else svc.name
+            )
+            target = (
+                _escape_logql_regex_literal(raw_target)
+                if op in ('=~', '!~')
+                else raw_target
+            )
+            label = 'compose_project' if svc.deploy_mode == 'COMPOSE' else 'compose_service'
+            resolved_matcher = f'{label}{op}"{target}"'
+
     try:
         service_names = _user_owned_service_names(request.user)
     except Exception as exc:
@@ -301,28 +363,19 @@ def loki_query(request):
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     try:
-        query = _scope_query_to_tenant(query, service_names)
+        if resolved_matcher and resolved_op in ('=', '=~'):
+            # Strip any other user-supplied service/project matchers and
+            # scope solely to the verified owned service selector.
+            query = _inject_selector_matcher(query, resolved_matcher, strip_existing=True)
+        else:
+            query = _scope_query_to_tenant(query, service_names)
+            if resolved_matcher:
+                # Preserve negative exclusion (!= / !~) alongside the
+                # mandatory owned-services tenant filter.
+                query = _inject_selector_matcher(query, resolved_matcher, strip_existing=False)
     except ValueError:
         logger.exception("Tenant query scoping failed")
         return Response({'error': 'An observability query failed.'}, status=status.HTTP_400_BAD_REQUEST)
-
-    # Resolve UUID in compose_service filter (safety net for unresolved UUIDs)
-    uuid_match = re.search(
-        r'compose_service(=~|!=|!~|=)"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"',
-        query,
-    )
-    if uuid_match:
-        from apps.deployments.models import Service
-        op = uuid_match.group(1)
-        service_id = uuid_match.group(2)
-        svc = Service.objects.filter(id=service_id).first()
-        if svc:
-            normalized_name = svc.name.lower().replace(' ', '-')
-            if svc.deploy_mode == 'COMPOSE':
-                replacement = f'compose_project{op}"{normalized_name}"'
-            else:
-                replacement = f'compose_service{op}"{svc.name}"'
-            query = query.replace(uuid_match.group(0), replacement)
 
     try:
         limit = int(request.GET.get('limit', '100'))
@@ -399,10 +452,31 @@ def loki_label_values(request, label: str):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    loki_params = {}
+    for src_key, dst_key in (('start', 'start'), ('end', 'end'), ('since', 'start')):
+        val = request.GET.get(src_key)
+        if val:
+            loki_params[dst_key] = _loki_time_to_ns(val)
+
+    is_admin = bool(request.user and (request.user.is_staff or request.user.is_superuser))
+    service_names: list[str] = []
+    if not is_admin:
+        try:
+            service_names = _user_owned_service_names(request.user)
+        except Exception as exc:
+            logger.warning("Loki label-values service lookup failed: %s", exc)
+            return Response(
+                {'error': 'Unable to resolve user services for tenant scoping.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        if not service_names:
+            return Response({'label': label, 'values': []})
+        loki_params['query'] = _scope_query_to_tenant('{compose_service!=""}', service_names)
+
     try:
         resp = requests.get(
             f"{LOKI_INTERNAL_URL}/loki/api/v1/label/{label}/values",
-            params=dict(request.GET),
+            params=loki_params,
             timeout=PROXY_TIMEOUT,
         )
         resp.raise_for_status()
@@ -414,7 +488,12 @@ def loki_label_values(request, label: str):
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
-    return Response({'label': label, 'values': data.get('data', [])})
+    values = data.get('data', [])
+    if not is_admin and label in ('service', 'job'):
+        allowed = set(service_names)
+        values = [v for v in values if v in allowed]
+
+    return Response({'label': label, 'values': values})
 
 
 @api_view(['GET'])
@@ -442,9 +521,9 @@ def prometheus_query(request):
         )
     try:
         query = _scope_query_to_tenant(query, service_names)
-    except ValueError:
+    except ValueError as exc:
         logger.exception("Tenant query scoping failed for Prometheus")
-        return Response({'error': 'An observability query failed.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
     raw_time = request.GET.get('time')
     if raw_time:

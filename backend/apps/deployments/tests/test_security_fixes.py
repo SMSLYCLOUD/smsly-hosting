@@ -475,8 +475,16 @@ class AttestationInfoLeakTests(TestCase):
     errors, distinguishing it from a 404 for an unknown peer."""
 
     def setUp(self):
+        from apps.deployments.models import ManagedServer
         self.staff = User.objects.create_user(
             username="staff", password="p", is_staff=True,
+        )
+        self.server = ManagedServer.objects.create(
+            owner=self.staff,
+            name="attest-infoleak-srv",
+            host="198.51.100.44",
+            wg_address="10.0.0.1",
+            gateway_secret="secret",
         )
         self.client = APIClient()
         self.client.force_authenticate(user=self.staff)
@@ -490,6 +498,7 @@ class AttestationInfoLeakTests(TestCase):
             "/api/v1/internal/attest/verify/",
             {"challenge": "knownnope", "signature": "x", "sender_wg_address": "10.0.0.1"},
             format="json",
+            HTTP_X_SMSLY_REMOTE_SYNC_PEER_WG="10.0.0.1",
         )
         # 404 (unknown peer) — never 500
         self.assertEqual(resp.status_code, 404)
@@ -505,5 +514,6 @@ class AttestationInfoLeakTests(TestCase):
                 "/api/v1/internal/attest/verify/",
                 {"challenge": "dbtest", "signature": "x", "sender_wg_address": "10.0.0.1"},
                 format="json",
+                HTTP_X_SMSLY_REMOTE_SYNC_PEER_WG="10.0.0.1",
             )
         self.assertEqual(resp.status_code, 404)

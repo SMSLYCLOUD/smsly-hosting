@@ -17,7 +17,10 @@ logger = logging.getLogger(__name__)
 class FleetOrchestrator:
     def __init__(self, update_record: PlatformUpdate):
         self.update_record = update_record
-        self.nodes = ManagedServer.objects.filter(is_active=True, status='online')
+        self.nodes = ManagedServer.objects.filter(
+            is_primary=False,
+            status=ManagedServer.Status.ONLINE,
+        )
 
     def execute_federated_update(self):
         """

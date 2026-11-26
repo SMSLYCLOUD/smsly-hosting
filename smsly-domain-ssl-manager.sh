@@ -206,27 +206,10 @@ start_services() {
     log_success "All custom domain SSL services started"
 }
 
-# Stop services
+# Stop services (never stop shared platform Celery workers)
 stop_services() {
-    log_info "Stopping SMSLY Custom Domain SSL services"
-    
-    cd "$INSTALL_DIR"
-    
-    # Stop Celery beat
-    if check_service_status "$CELERY_BEAT_SERVICE"; then
-        log_info "Stopping Celery beat"
-        docker compose -f "$COMPOSE_FILE" stop "$CELERY_BEAT_SERVICE"
-        log_success "Celery beat stopped"
-    fi
-    
-    # Stop Celery worker
-    if check_service_status "$CELERY_WORKER_SERVICE"; then
-        log_info "Stopping Celery worker"
-        docker compose -f "$COMPOSE_FILE" stop "$CELERY_WORKER_SERVICE"
-        log_success "Celery worker stopped"
-    fi
-    
-    log_success "All custom domain SSL services stopped"
+    log_info "Stopping SMSLY Custom Domain SSL manager (leaving shared platform celery and celery-beat running)"
+    log_success "Custom domain SSL manager stopped cleanly"
 }
 
 # Check status

@@ -62,7 +62,7 @@ class ServiceFileActionsMixin:
         if magic_err:
             return magic_err
 
-        # 2c. Zip-specific checks: zip-slip and zip bomb
+        # 2c. Archive traversal, symlink, and decompression bomb checks
         if filename_lower.endswith('.zip'):
             from .upload_security import validate_zip_entries, validate_zip_no_bomb
             is_safe, err_msg = validate_zip_entries(uploaded_file)
@@ -74,6 +74,14 @@ class ServiceFileActionsMixin:
             bomb_err = validate_zip_no_bomb(uploaded_file)
             if bomb_err:
                 return bomb_err
+        else:
+            from .upload_security import validate_tar_entries
+            is_safe, err_msg = validate_tar_entries(uploaded_file)
+            if not is_safe:
+                return Response(
+                    {'error': f'Unsafe archive: {err_msg}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         # 3. Secure Storage Setup
         base_dir = getattr(settings, 'MEDIA_ROOT', '/app/media')

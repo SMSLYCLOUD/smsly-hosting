@@ -2,7 +2,7 @@ import logging
 
 from django.core.management.base import BaseCommand
 
-from apps.mcp.server import mcp_server
+from apps.mcp.server import mcp_server, set_stdio_mode
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,7 @@ class Command(BaseCommand):
 
         use_sse = options["sse"]
         if use_sse:
+            set_stdio_mode(False)
             host = options["host"]
             port = options["port"]
             self.stdout.write(self.style.SUCCESS(f"Starting SMSLY Ecosystem MCP Server via SSE on http://{host}:{port}/sse ..."))
@@ -45,5 +46,6 @@ class Command(BaseCommand):
             mcp_server.settings.port = port
             mcp_server.run(transport="sse")
         else:
+            set_stdio_mode(True)
             self.stdout.write(self.style.SUCCESS("Starting SMSLY Ecosystem MCP Server via STDIO ..."))
             mcp_server.run(transport="stdio")

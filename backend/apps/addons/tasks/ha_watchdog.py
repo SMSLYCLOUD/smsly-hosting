@@ -25,6 +25,7 @@ from celery import shared_task
 from apps.addons.services.addon_ha import AddonHaManager
 from apps.deployments.constants import (
     RETRY_DELAY_STANDARD,
+    TASK_TIME_LIMIT_MEDIUM,
     TASK_TIME_LIMIT_PROVISION,
     TASK_TIME_LIMIT_QUICK,
 )
@@ -295,11 +296,37 @@ def _check_postgres(addon, manager: AddonHaManager) -> str:
                 "standby %s", addon.id, current_standby,
             )
             try:
-                manager.promote_remote_standby(addon)
+                old_url = str(getattr(addon, 'connection_url', '') or '')
+                cutover = manager.promote_remote_standby(addon)
                 cache.set(failures_key, 0, timeout=600)
+                new_url = cutover.get('connection_url') or ''
+                if new_url:
+                    addon.connection_url = new_url
+                addon.ha_status = Addon.HaStatus.FAILED_OVER
+                addon.replica_container_name = ''
                 updated_topology = manager.mark_cutover_done(addon)
                 addon.ha_topology = {**topology, **updated_topology}
-                _set_status(addon, Addon.HaStatus.FAILED_OVER)
+                addon.save(update_fields=[
+                    'connection_url', 'ha_status', 'replica_container_name', 'ha_topology',
+                ])
+                if new_url:
+                    try:
+                        from apps.addons.services.addon_migrate import _sync_addon_env_vars
+                        _sync_addon_env_vars(addon, old_url=old_url)
+                    except Exception:
+                        logger.exception("ha_watchdog(%s): failed to sync owning service env vars", addon.id)
+                    if old_url and old_url != new_url:
+                        try:
+                            from apps.deployments.models.environment import EnvironmentVariable
+                            for dep_svc in _find_dependent_services(addon):
+                                if getattr(addon, 'service_id', None) and dep_svc.id == addon.service_id:
+                                    continue
+                                for ev in EnvironmentVariable.objects.filter(service=dep_svc):
+                                    if old_url in str(ev.value or ''):
+                                        ev.value = str(ev.value).replace(old_url, new_url)
+                                        ev.save(update_fields=['value', 'updated_at'])
+                        except Exception:
+                            logger.exception("ha_watchdog(%s): failed to sync sibling env vars", addon.id)
                 redeployed = _queue_service_redeploys(addon)
                 logger.info(
                     "ha_watchdog(%s): remote cutover complete; redeploys "
@@ -354,7 +381,7 @@ def _check_postgres(addon, manager: AddonHaManager) -> str:
             # Fence the old primary immediately so a late restart cannot
             # resurrect it as a rogue second master (split-brain), then
             # reseed it as a streaming standby of the promoted node.
-            manager.fence_primary_container(addon, old_name=current_standby)
+            manager.fence_primary_container(addon, old_name=current_master)
 
             from apps.addons.tasks.ha_watchdog import reseed_postgres_standby_task
             try:
@@ -500,8 +527,8 @@ def _shared_pg_throttled_alert(cache, now: float, title: str, message: str) -> N
 
 @shared_task(
     bind=True,
-    soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
-    time_limit=TASK_TIME_LIMIT_QUICK[1],
+    soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0],
+    time_limit=TASK_TIME_LIMIT_MEDIUM[1],
     name="apps.addons.tasks.ha_watchdog.check_shared_postgres_ha_task",
 )
 def check_shared_postgres_ha_task(self) -> dict:

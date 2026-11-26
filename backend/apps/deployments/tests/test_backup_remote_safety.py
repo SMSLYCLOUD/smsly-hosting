@@ -143,12 +143,13 @@ class RemoteBackupShellQuoteTest(TestCase):
         self.service.save()
         mock_encrypt.side_effect = lambda p: p
 
-        # Create a volume with a name that could be problematic
-        Volume.objects.create(
+        # Create a volume with a name that could be problematic (bypass pre_save validator to test defense-in-depth shell quoting)
+        vol = Volume.objects.create(
             service=self.service,
-            name="vol; id",
+            name="vol-safe",
             mount_path="/data",
         )
+        Volume.objects.filter(pk=vol.pk).update(name="vol; id")
 
         mock_ssh = MagicMock()
         mock_ssh.check_docker.return_value = True

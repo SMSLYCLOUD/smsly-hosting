@@ -138,13 +138,17 @@ def _check_tier_gates_disabled() -> bool:
     Checks PlatformConfig DB first, then env var fallback.
     """
     global _TIER_GATES_LOGGED
+    import sys as _sys
+    _views_pkg = _sys.modules.get("apps.deployments.views")
+    if _views_pkg is not None and "_TIER_GATES_LOGGED" in _views_pkg.__dict__:
+        _TIER_GATES_LOGGED = bool(_views_pkg.__dict__["_TIER_GATES_LOGGED"])
     try:
         from ..models.core import PlatformConfig
         db_val = PlatformConfig.load().smsly_disable_tier_gates
     except Exception:
         db_val = None
     if db_val is not None and db_val:
-        raw = str(db_val)
+        raw = str(db_val).strip().lower()
     else:
         raw = str(
             getattr(settings, "SMSLY_DISABLE_TIER_GATES", False)
@@ -168,6 +172,8 @@ def _check_tier_gates_disabled() -> bool:
         except Exception as exc:
             logger.error("Failed to audit-log SMSLY_DISABLE_TIER_GATES: %s", exc)
         _TIER_GATES_LOGGED = True
+        if _views_pkg is not None:
+            _views_pkg._TIER_GATES_LOGGED = True
     return enabled
 
 MAINTENANCE_ACTIONS = {
@@ -471,33 +477,36 @@ def _cancel_stale_in_progress_deployments(service):
     """
     from datetime import timedelta
 
+    from django.db import transaction
     from django.utils import timezone
 
     stale_threshold = timezone.now() - timedelta(minutes=15)
-    service.deployments.filter(
-        status=Deployment.Status.BUILDING,
-        updated_at__lt=stale_threshold
-    ).update(
-        status=Deployment.Status.FAILED,
-        ai_diagnosis="Automatically cancelled: Deployment was stuck in BUILDING state for more than 15 minutes."
-    )
+    with transaction.atomic():
+        locked_service = Service.objects.select_for_update().get(pk=service.pk)
+        locked_service.deployments.filter(
+            status=Deployment.Status.BUILDING,
+            updated_at__lt=stale_threshold
+        ).update(
+            status=Deployment.Status.FAILED,
+            ai_diagnosis="Automatically cancelled: Deployment was stuck in BUILDING state for more than 15 minutes."
+        )
 
-    latest_active = (
-        service.deployments
-        .filter(status=Deployment.Status.ACTIVE)
-        .order_by('-created_at')
-        .first()
-    )
-    if not latest_active:
-        return 0
+        latest_active = (
+            locked_service.deployments
+            .filter(status=Deployment.Status.ACTIVE)
+            .order_by('-created_at')
+            .first()
+        )
+        if not latest_active:
+            return 0
 
-    stale_qs = service.deployments.filter(
-        status__in=_IN_PROGRESS_DEPLOYMENT_STATUSES,
-        created_at__lte=latest_active.created_at,
-    )
-    count = stale_qs.count()
-    if count:
-        stale_qs.update(status=Deployment.Status.CANCELLED, finished_at=timezone.now())
+        stale_qs = locked_service.deployments.filter(
+            status__in=_IN_PROGRESS_DEPLOYMENT_STATUSES,
+            created_at__lte=latest_active.created_at,
+        )
+        count = stale_qs.count()
+        if count:
+            stale_qs.update(status=Deployment.Status.CANCELLED, finished_at=timezone.now())
     return count
 
 
@@ -925,6 +934,7 @@ def is_remote_sync_request(request):
 
 
 __all__ = [
+    '_TIER_GATES_LOGGED',
     '_resolve_encryption_key',
     'ZeroTrustHMACAuthentication',
     '_check_tier_gates_disabled',

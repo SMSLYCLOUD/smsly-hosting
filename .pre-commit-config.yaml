@@ -7,6 +7,8 @@ repos:
     rev: v4.6.0
     hooks:
       - id: check-yaml
+        args: [--allow-multiple-documents]
+        exclude: ^charts/.*/templates/
       - id: check-json
       - id: check-toml
       - id: check-merge-conflict

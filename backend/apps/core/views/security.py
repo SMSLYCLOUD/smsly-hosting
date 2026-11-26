@@ -92,6 +92,7 @@ def _host_security_latest():
 from rest_framework import permissions
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 from django.core.cache import cache
 from apps.deployments.views._helpers import EmptySerializer
 class SecurityStatusView(GenericAPIView):
@@ -110,7 +111,7 @@ class SecurityStatusView(GenericAPIView):
       - Kernel hardening (sysctl)
     """
     serializer_class = EmptySerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAdminUser]
 
     def get(self, request):
         from apps.deployments.models.core import PlatformConfig
@@ -788,6 +789,11 @@ class SecurityStatusView(GenericAPIView):
         })
 
 
+_ALLOWED_EVENT_SOURCES = frozenset({
+    "falco", "crowdsec", "fail2ban", "openappsec", "coraza", "auditd", "host", "trivy",
+})
+
+
 class SecurityEventsView(GenericAPIView):
     """
     Return aggregated security infrastructure events and audit trails.
@@ -803,7 +809,7 @@ class SecurityEventsView(GenericAPIView):
       - Trivy: recent container image CVE vulnerability findings
     """
     serializer_class = EmptySerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAdminUser]
 
     def get(self, request):
         import json
@@ -811,8 +817,12 @@ class SecurityEventsView(GenericAPIView):
         import re
         from datetime import datetime, timezone
 
-        limit = min(int(request.query_params.get("limit", 100)), 300)
-        source_filter = request.query_params.get("source", "").lower().strip()
+        try:
+            limit = max(1, min(int(request.query_params.get("limit", 100)), 300))
+        except (TypeError, ValueError):
+            limit = 100
+        raw_source = str(request.query_params.get("source", "") or "").lower().strip()
+        source_filter = raw_source if raw_source in _ALLOWED_EVENT_SOURCES else ""
 
         # Short cache: every tab switch re-requests the same scrape
         # (docker logs, cscli, loki — 10-30s). Without it each click shows
@@ -1461,7 +1471,8 @@ class SecurityAnalysisView(GenericAPIView):
     POST /api/v1/system/security-analysis/
     """
     serializer_class = EmptySerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAdminUser]
+    throttle_classes = [UserRateThrottle]
 
     def post(self, request):
         from datetime import datetime, timezone
@@ -1528,7 +1539,7 @@ class SecurityAnalysisView(GenericAPIView):
 
         # Attempt to enrich with AI if available
         try:
-            from apps.ai.router import get_ai_response
+            from apps.intelligence.providers import ask_with_fallback
             ai_prompt = (
                 f"You are the Chief Information Security Officer AI for SMSLY Hosting.\n"
                 f"Security Telemetry Summary:\n"
@@ -1541,7 +1552,7 @@ class SecurityAnalysisView(GenericAPIView):
                 f"- Falco Capturing: {falco_ok}\n"
                 f"Provide a concise, 2-3 sentence executive summary of platform security health and posture."
             )
-            ai_res = get_ai_response(ai_prompt)
+            ai_res, _ = ask_with_fallback(ai_prompt)
             if ai_res and isinstance(ai_res, str) and len(ai_res.strip()) > 20:
                 ai_summary = ai_res.strip()
         except Exception:

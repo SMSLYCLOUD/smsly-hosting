@@ -9,6 +9,7 @@ import { coreApi, DashboardOverview } from "@/lib/api";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { useAuth } from "@/components/auth-provider";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { SkeletonDashboard } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 
@@ -74,12 +75,15 @@ export default function ClientDashboardPage() {
             >
               <RefreshCw size={18} className={refreshing ? "animate-spin" : ""} />
             </button>
-            <Link href="/new">
-              <button className="px-5 py-2.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-semibold hover:opacity-90 transition-opacity flex items-center gap-2">
+            <Button
+              asChild
+              className="px-5 py-2.5 h-auto rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-semibold hover:opacity-90 hover:bg-slate-900 dark:hover:bg-white transition-opacity flex items-center gap-2"
+            >
+              <Link href="/new">
                 <Plus size={18} />
                 New Project
-              </button>
-            </Link>
+              </Link>
+            </Button>
           </div>
         </div>
 
@@ -97,11 +101,14 @@ export default function ClientDashboardPage() {
             <p className="text-slate-500 max-w-md mb-8">
               Connect your GitHub repository or use a template to deploy a database, backend, or full-stack application in seconds.
             </p>
-            <Link href="/new">
-              <button className="px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 text-white font-bold shadow-lg shadow-emerald-500/20 hover:scale-105 transition-transform flex items-center gap-2">
+            <Button
+              asChild
+              className="px-6 py-3 h-auto rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 text-white font-bold shadow-lg shadow-emerald-500/20 hover:scale-105 transition-transform flex items-center gap-2"
+            >
+              <Link href="/new">
                 Deploy Now <ArrowRight size={16} />
-              </button>
-            </Link>
+              </Link>
+            </Button>
           </motion.div>
         ) : (
           /* Dashboard Content */

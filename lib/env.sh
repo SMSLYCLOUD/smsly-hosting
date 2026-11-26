@@ -3,6 +3,33 @@ gen_hex_secret() {
     python3 -c "import secrets; print(secrets.token_hex(${bytes}))"  || openssl rand -hex "$bytes"
 }
 
+env_load_file_safe() {
+    local env_file="${1:-}"
+    [ -f "$env_file" ] || return 0
+    local _line="" _key="" _val=""
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        _line="${_line%$'\r'}"
+        [[ -z "$_line" || "$_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$_line" == export[[:space:]]* ]] && _line="${_line#export }"
+        [[ "$_line" == *=* ]] || continue
+        _key="${_line%%=*}"
+        _key="${_key#"${_key%%[![:space:]]*}"}"
+        _key="${_key%"${_key##*[![:space:]]}"}"
+        [[ "$_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        _val="${_line#*=}"
+        if [[ "$_val" == \"*\" && "$_val" == *\" && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+            _val="${_val//\\\"/\"}"
+            _val="${_val//\\\$/\$}"
+            _val="${_val//\\\`/\`}"
+            _val="${_val//\\\\/\\}"
+        elif [[ "$_val" == \'*\' && "$_val" == *\' && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+        fi
+        export "$_key=$_val"
+    done < "$env_file"
+}
+
 env_get_value() {
     local env_file="$1"
     local var_name="$2"
@@ -22,8 +49,18 @@ key = sys.argv[2]
 value = sys.argv[3]
 prefix = f"{key}="
 
+def _format_val(val: str) -> str:
+    if val == "":
+        return ""
+    if any(c.isspace() or c in '#$`\\"\'&;|<>()*?[]~!' for c in val):
+        escaped = val.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
+        return f'"{escaped}"'
+    return val
+
+formatted = _format_val(value)
+
 if not env_path.exists():
-    env_path.write_text(f"{key}={value}\n")
+    env_path.write_text(f"{key}={formatted}\n")
     sys.exit(0)
 
 lines = env_path.read_text().splitlines()
@@ -33,14 +70,14 @@ found = False
 for line in lines:
     if line.startswith(prefix):
         if not found:
-            updated.append(f"{key}={value}")
+            updated.append(f"{key}={formatted}")
             found = True
         # Skip any subsequent duplicates
         continue
     updated.append(line)
 
 if not found:
-    updated.append(f"{key}={value}")
+    updated.append(f"{key}={formatted}")
 
 env_path.write_text("\n".join(updated) + "\n")
 PY

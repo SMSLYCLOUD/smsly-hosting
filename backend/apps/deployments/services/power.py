@@ -86,6 +86,12 @@ def stop_service(service, actor="system"):
         pass
     _audit(actor, 'SERVICE_STOP', service,
            {'deployments_cancelled': count, 'method': method, 'container_id': container_id})
+    if bool(getattr(service, 'sablier_enabled', False)):
+        try:
+            from apps.deployments.tasks.deploy.caddy import _regenerate_caddyfile
+            _regenerate_caddyfile()
+        except Exception as exc:
+            logger.debug("Caddy sync skipped on Sablier stop for %s: %s", service.name, exc)
     return {'ok': True, 'method': method, 'deployments_cancelled': count,
             'container_id': container_id}
 
@@ -128,6 +134,12 @@ def start_service(service, actor="system"):
         pass
     _audit(actor, 'SERVICE_START', service,
            {'container_id': container_id, 'method': 'docker_start'})
+    if bool(getattr(service, 'sablier_enabled', False)):
+        try:
+            from apps.deployments.tasks.deploy.caddy import _regenerate_caddyfile
+            _regenerate_caddyfile()
+        except Exception as exc:
+            logger.debug("Caddy sync skipped on Sablier start for %s: %s", service.name, exc)
     return {'ok': True, 'method': 'docker_start', 'container_id': container_id}
 
 

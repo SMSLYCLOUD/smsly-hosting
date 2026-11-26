@@ -31,6 +31,7 @@ class TestMeshAuth(TestCase):
             owner=self.user,
             name="mesh-server",
             host="203.0.113.20",
+            wg_address="10.8.0.5",
             api_url="https://mesh.example.com",
             api_token="valid",
             gateway_secret="my-mesh-secret",
@@ -59,7 +60,7 @@ class TestMeshAuth(TestCase):
             "challenge": "my-nonce",
             "signature": "bad-signature",
             "sender_wg_address": "10.8.0.5",
-        }, format="json")
+        }, format="json", HTTP_X_SMSLY_REMOTE_SYNC_PEER_WG="10.8.0.5")
         force_authenticate(request, user=self.user)
 
         with patch('rest_framework.views.APIView.get_throttles', return_value=[]):
@@ -82,7 +83,7 @@ class TestMeshAuth(TestCase):
             "challenge": nonce,
             "signature": valid_signature,
             "sender_wg_address": "10.8.0.5",
-        }, format="json")
+        }, format="json", HTTP_X_SMSLY_REMOTE_SYNC_PEER_WG="10.8.0.5")
         force_authenticate(request, user=self.user)
 
         with patch('rest_framework.views.APIView.get_throttles', return_value=[]):

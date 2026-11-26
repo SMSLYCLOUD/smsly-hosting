@@ -368,7 +368,7 @@ class PushStaggerTests(TestCase):
             name="eta-svc", owner=user, branch="main", deploy_type="GIT",
             repository_url="https://github.com/acme/web.git")
         dep = Deployment.objects.create(
-            service=svc, status=Deployment.Status.QUEUED)
+            service=svc, status=Deployment.Status.QUEUED, commit_hash="a" * 40)
         from apps.deployments.tasks.deploy import queue as queue_mod
         fake = SimpleNamespace(id="task-1")
         with patch(
@@ -392,7 +392,7 @@ class PushStaggerTests(TestCase):
             name="eta-rsvc", owner=user, branch="main", deploy_type="GIT",
             repository_url="https://github.com/acme/web.git")
         dep = Deployment.objects.create(
-            service=svc, status=Deployment.Status.QUEUED,
+            service=svc, status=Deployment.Status.QUEUED, commit_hash="b" * 40,
             metadata={"queue_eta": time.time() + 600})
         from apps.deployments.tasks.deploy import queue as queue_mod
         with patch.object(
@@ -413,7 +413,7 @@ class PushStaggerTests(TestCase):
             name="eta-psvc", owner=user, branch="main", deploy_type="GIT",
             repository_url="https://github.com/acme/web.git")
         dep = Deployment.objects.create(
-            service=svc, status=Deployment.Status.QUEUED,
+            service=svc, status=Deployment.Status.QUEUED, commit_hash="c" * 40,
             metadata={"queue_eta": time.time() - 600})
         from apps.deployments.tasks.deploy import queue as queue_mod
         with patch.object(

@@ -13,28 +13,44 @@ interface UpdateTerminalStreamProps {
 
 export default function UpdateTerminalStream({ updateId }: UpdateTerminalStreamProps) {
   const [wsToken, setWsToken] = useState<string | null>(null);
+  const [tokenError, setTokenError] = useState<string | null>(null);
+  const [cookieFallback, setCookieFallback] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    if (!updateId || wsToken) return;
+    if (!updateId || wsToken || cookieFallback) return;
     let cancelled = false;
+    setTokenError(null);
     (async () => {
       try {
         const res = await fetch('/api/v1/auth/session-token/', {
           method: 'POST',
           credentials: 'include',
-          headers: { Accept: 'application/json' },
+          headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (!cancelled) {
+            setTokenError(`Terminal session handshake failed (HTTP ${res.status}).`);
+          }
+          return;
+        }
         const data = await res.json();
-        if (!cancelled && typeof data?.token === 'string') {
-          setWsToken(data.token);
+        if (!cancelled) {
+          if (typeof data?.token === 'string' && data.token) {
+            setWsToken(data.token);
+          } else {
+            setTokenError('Terminal session token was not returned by the server.');
+          }
         }
       } catch (err) {
         console.error('[UpdateTerminalStream] Failed to fetch session token:', err);
+        if (!cancelled) {
+          setTokenError('Unable to reach session-token endpoint.');
+        }
       }
     })();
     return () => { cancelled = true; };
-  }, [updateId, wsToken]);
+  }, [updateId, wsToken, cookieFallback, attempt]);
 
   const wsUrl = getWsUrl(`/ws/platform-updates/${updateId}/`);
 
@@ -56,14 +72,40 @@ export default function UpdateTerminalStream({ updateId }: UpdateTerminalStreamP
           </span>
         </div>
       </div>
-      <div className="h-[360px] w-full p-2 bg-[#09090b]">
-        {!wsToken ? (
+      <div role="region" aria-label={`Platform update terminal stream for task ${updateId}`} className="h-[360px] w-full p-2 bg-[#09090b]">
+        {wsToken || cookieFallback ? (
+          <XtermConsole wsUrl={wsUrl} wsToken={wsToken} ariaLabel={`Platform update terminal stream for task ${updateId}`} />
+        ) : tokenError ? (
+          <div className="h-full w-full flex flex-col items-center justify-center gap-3 p-4 text-center text-zinc-300 text-xs font-mono">
+            <span className="text-red-400">{tokenError}</span>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setTokenError(null);
+                  setAttempt((n) => n + 1);
+                }}
+                className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-sans font-medium"
+              >
+                Retry
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTokenError(null);
+                  setCookieFallback(true);
+                }}
+                className="px-3 py-1.5 rounded border border-zinc-700 hover:bg-zinc-800 text-zinc-300 text-xs font-sans font-medium"
+              >
+                Connect with Cookie Auth
+              </button>
+            </div>
+          </div>
+        ) : (
           <div className="h-full w-full flex flex-col items-center justify-center gap-2 text-zinc-400 text-xs font-mono">
             <div className="h-4 w-4 rounded-full border-2 border-emerald-500 border-t-transparent animate-spin" />
             <span>Establishing secure terminal session...</span>
           </div>
-        ) : (
-          <XtermConsole wsUrl={wsUrl} wsToken={wsToken} />
         )}
       </div>
     </div>

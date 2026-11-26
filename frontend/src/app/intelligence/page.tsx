@@ -36,6 +36,7 @@ import { cn } from '@/lib/utils';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RequiresTier } from '@/components/licensing/RequiresTier';
 import { Progress } from '@/components/ui/progress';
+import { usePermissions } from '@/hooks/usePermissions';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -78,6 +79,8 @@ export default function IntelligencePage() {
   const chatAbortRef = useRef<AbortController | null>(null);
   const { toast } = useToast();
   const confirm = useConfirm();
+  const { isStaff, isSuperuser } = usePermissions();
+  const isAdmin = isStaff || isSuperuser;
 
   // Cost Estimate State
   const [costConfig, setCostConfig] = useState({ cpu: 1, ram: 512 });
@@ -125,19 +128,27 @@ export default function IntelligencePage() {
         ]);
 
       const [prov, deps, anoms, rep, svcs, autoStatus, svrs, secStat, secEvts] = await Promise.all([
-        withTimeout(
-          aiApi.getProviders(false).catch(() => ({
-            providers: [],
-            mode: 'mock',
-            mode_label: 'Mock AI (provider status unavailable)',
-            active_count: 0,
-            total_available: 0,
-            degraded: true,
-            degraded_reason: 'providers_request_failed',
-          }) as any),
-          12000,
-          { providers: [], mode: 'mock', mode_label: 'Mock AI (timeout)', active_count: 0, total_available: 0, degraded: true, degraded_reason: 'providers_timeout' } as any,
-        ),
+        isAdmin
+          ? withTimeout(
+              aiApi.getProviders(false).catch(() => ({
+                providers: [],
+                mode: 'mock',
+                mode_label: 'Mock AI (provider status unavailable)',
+                active_count: 0,
+                total_available: 0,
+                degraded: true,
+                degraded_reason: 'providers_request_failed',
+              }) as any),
+              12000,
+              { providers: [], mode: 'mock', mode_label: 'Mock AI (timeout)', active_count: 0, total_available: 0, degraded: true, degraded_reason: 'providers_timeout' } as any,
+            )
+          : Promise.resolve({
+              providers: [],
+              mode: 'mock',
+              mode_label: 'AI Operations',
+              active_count: 0,
+              total_available: 0,
+            } as any),
         withTimeout(
           api.get('/deployments/', {
             params: { page_size: 20 },
@@ -151,39 +162,47 @@ export default function IntelligencePage() {
           12000,
           [],
         ),
-        withTimeout(
-          aiApi.getReport().catch(() => null),
-          12000,
-          null,
-        ),
+        isAdmin
+          ? withTimeout(
+              aiApi.getReport().catch(() => null),
+              12000,
+              null,
+            )
+          : Promise.resolve(null),
         withTimeout(
           api.get('/services/', { params: { page_size: 50 } }).then(r => r.data?.results || r.data || []).catch(() => []),
           12000,
           [],
         ),
-        withTimeout(
-          api.get('/autoscaler/status/').then(r => r.data).catch(() => null),
-          12000,
-          null,
-        ),
+        isAdmin
+          ? withTimeout(
+              api.get('/autoscaler/status/').then(r => r.data).catch(() => null),
+              12000,
+              null,
+            )
+          : Promise.resolve(null),
         withTimeout(
           api.get('/servers/').then(r => r.data?.results || r.data || []).catch(() => []),
           12000,
           [],
         ),
-        withTimeout(
-          systemSecurityApi.getStatus().catch(() => null),
-          12000,
-          null,
-        ),
-        withTimeout(
-          systemSecurityApi.getEvents(
-            securitySourceRef.current !== 'all' ? securitySourceRef.current : undefined,
-            100,
-          ).catch(() => null),
-          12000,
-          null,
-        ),
+        isAdmin
+          ? withTimeout(
+              systemSecurityApi.getStatus().catch(() => null),
+              12000,
+              null,
+            )
+          : Promise.resolve(null),
+        isAdmin
+          ? withTimeout(
+              systemSecurityApi.getEvents(
+                securitySourceRef.current !== 'all' ? securitySourceRef.current : undefined,
+                100,
+              ).catch(() => null),
+              12000,
+              null,
+            )
+          : Promise.resolve(null),
       ]);
       setProviders(prov);
       setAnomalies(anoms);
@@ -210,9 +229,10 @@ export default function IntelligencePage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [isAdmin]);
 
   const refreshSecurityData = useCallback(async (source?: string) => {
+    if (!isAdmin) return;
     setSecurityLoading(true);
     const effective = source && source !== 'all' ? source : 'all';
     securitySourceRef.current = effective;
@@ -238,9 +258,10 @@ export default function IntelligencePage() {
     } finally {
       setSecurityLoading(false);
     }
-  }, [toast]);
+  }, [isAdmin, toast]);
 
   const handleRunSecurityAnalysis = async () => {
+    if (!isAdmin) return;
     setSecurityAnalyzing(true);
     try {
       const res = await systemSecurityApi.analyze();
@@ -261,6 +282,7 @@ export default function IntelligencePage() {
   };
 
   const handleUnbanIp = async (ip: string) => {
+    if (!isAdmin) return;
     if (!await confirm({
       title: 'Remove CrowdSec ban?',
       message: `Revoking the ban lets ${ip} reach the edge again. Continue?`,
@@ -287,6 +309,7 @@ export default function IntelligencePage() {
   };
 
   const handleUnbanFail2banIp = async (ip: string, jail?: string) => {
+    if (!isAdmin) return;
     const jailLabel = jail || 'sshd';
     if (!await confirm({
       title: 'Remove fail2ban ban?',
@@ -321,6 +344,7 @@ export default function IntelligencePage() {
     patch: Record<string, unknown>,
     opts: { title: string; message: string; confirmText: string; success: string; destructive?: boolean },
   ) => {
+    if (!isAdmin) return;
     if (!await confirm({
       title: opts.title,
       message: opts.message,
@@ -611,11 +635,13 @@ export default function IntelligencePage() {
               </p>
             </div>
             <div className="flex gap-2">
-              <a href="/settings?tab=ai">
-                <Button variant="outline">
-                  <Settings className="w-4 h-4 mr-2" /> Configure AI
+              {isAdmin && (
+                <Button variant="outline" asChild>
+                  <a href="/settings?tab=ai">
+                    <Settings className="w-4 h-4 mr-2" /> Configure AI
+                  </a>
                 </Button>
-              </a>
+              )}
               <Button onClick={handleRefresh} disabled={refreshing} variant="ghost" size="icon">
                 <RefreshCw size={18} className={refreshing ? 'animate-spin' : ''} />
               </Button>
@@ -681,9 +707,11 @@ export default function IntelligencePage() {
 
           <Tabs defaultValue="dashboard" className="w-full">
             <div className="w-full overflow-x-auto scrollbar-hide pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
-              <TabsList className="inline-flex sm:grid w-max sm:w-full sm:grid-cols-9 bg-muted/20 gap-2 sm:gap-0 p-1">
+              <TabsList className={cn("inline-flex sm:grid w-max sm:w-full bg-muted/20 gap-2 sm:gap-0 p-1", isAdmin ? "sm:grid-cols-9" : "sm:grid-cols-8")}>
                 <TabsTrigger value="dashboard" className="rounded-full sm:rounded-sm px-3">Dashboard</TabsTrigger>
-                <TabsTrigger value="security" className="rounded-full sm:rounded-sm px-3 flex items-center gap-1.5"><Shield className="w-3.5 h-3.5 text-purple-400" />Security Intel</TabsTrigger>
+                {isAdmin && (
+                  <TabsTrigger value="security" className="rounded-full sm:rounded-sm px-3 flex items-center gap-1.5"><Shield className="w-3.5 h-3.5 text-purple-400" />Security Intel</TabsTrigger>
+                )}
                 <TabsTrigger value="anomalies" className="rounded-full sm:rounded-sm px-3">Anomalies</TabsTrigger>
                 <TabsTrigger value="services" className="rounded-full sm:rounded-sm px-3">Services</TabsTrigger>
                 <TabsTrigger value="autoscaler" className="rounded-full sm:rounded-sm px-3">Autoscaler</TabsTrigger>
@@ -705,7 +733,7 @@ export default function IntelligencePage() {
                      </CardTitle>
                    </CardHeader>
                    <CardContent>
-                      {report ? (
+                      {report && report.available !== false ? (
                         <div className="space-y-4">
                           <div className="grid grid-cols-2 gap-4">
                              <div className="p-3 bg-muted/30 rounded-lg">
@@ -721,9 +749,11 @@ export default function IntelligencePage() {
                              <div className="text-sm text-muted-foreground mb-1">Anomalies Detected</div>
                              <div className="text-2xl font-bold text-amber-500">{report.anomalies_detected}</div>
                           </div>
-                          <div className="text-xs text-muted-foreground text-right">
-                            Generated at: {new Date(report.generated_at).toLocaleString()}
-                          </div>
+                          {report.generated_at && (
+                            <div className="text-xs text-muted-foreground text-right">
+                              Generated at: {new Date(report.generated_at).toLocaleString()}
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <div className="text-center py-8 text-muted-foreground">No report generated for today yet.</div>
@@ -752,35 +782,37 @@ export default function IntelligencePage() {
             </TabsContent>
 
             {/* ── Security Intel Tab ───────────────────────────────── */}
-            <TabsContent value="security" className="mt-6">
-              <SecurityIntelWorkspace
-                securityStatus={securityStatus}
-                securityEvents={securityEvents}
-                securityLoading={securityLoading}
-                securityAnalysis={securityAnalysis}
-                securityAnalyzing={securityAnalyzing}
-                securitySourceFilter={securitySourceFilter}
-                securityEventsSource={securityEventsSource}
-                securitySeverityFilter={securitySeverityFilter}
-                securitySearchQuery={securitySearchQuery}
-                onChangeSourceFilter={setSecuritySourceFilter}
-                onChangeSeverityFilter={setSecuritySeverityFilter}
-                onChangeSearchQuery={setSecuritySearchQuery}
-                onRefreshSecurity={refreshSecurityData}
-                onRunSecurityAnalysis={handleRunSecurityAnalysis}
-                onUnbanCrowdSec={handleUnbanIp}
-                onUnbanFail2ban={handleUnbanFail2banIp}
-                onCrowdSecToggle={handleCrowdSecToggle}
-                onOpenAppSecToggle={handleOpenAppSecToggle}
-                onOpenAppSecModeSwitch={handleOpenAppSecModeSwitch}
-                onTrivySeverityChange={handleTrivySeverityChange}
-                onTrivyToggle={handleTrivyToggle}
-                onDeviceTrustToggle={handleDeviceTrustToggle}
-                unbanningIp={unbanningIp}
-                unbanningF2bIp={unbanningF2bIp}
-                domainUpdating={domainUpdating}
-              />
-            </TabsContent>
+            {isAdmin && (
+              <TabsContent value="security" className="mt-6">
+                <SecurityIntelWorkspace
+                  securityStatus={securityStatus}
+                  securityEvents={securityEvents}
+                  securityLoading={securityLoading}
+                  securityAnalysis={securityAnalysis}
+                  securityAnalyzing={securityAnalyzing}
+                  securitySourceFilter={securitySourceFilter}
+                  securityEventsSource={securityEventsSource}
+                  securitySeverityFilter={securitySeverityFilter}
+                  securitySearchQuery={securitySearchQuery}
+                  onChangeSourceFilter={setSecuritySourceFilter}
+                  onChangeSeverityFilter={setSecuritySeverityFilter}
+                  onChangeSearchQuery={setSecuritySearchQuery}
+                  onRefreshSecurity={refreshSecurityData}
+                  onRunSecurityAnalysis={handleRunSecurityAnalysis}
+                  onUnbanCrowdSec={handleUnbanIp}
+                  onUnbanFail2ban={handleUnbanFail2banIp}
+                  onCrowdSecToggle={handleCrowdSecToggle}
+                  onOpenAppSecToggle={handleOpenAppSecToggle}
+                  onOpenAppSecModeSwitch={handleOpenAppSecModeSwitch}
+                  onTrivySeverityChange={handleTrivySeverityChange}
+                  onTrivyToggle={handleTrivyToggle}
+                  onDeviceTrustToggle={handleDeviceTrustToggle}
+                  unbanningIp={unbanningIp}
+                  unbanningF2bIp={unbanningF2bIp}
+                  domainUpdating={domainUpdating}
+                />
+              </TabsContent>
+            )}
 
             {/* ── Anomalies Tab ──────────────────────────────────────── */}
             <TabsContent value="anomalies" className="mt-6">

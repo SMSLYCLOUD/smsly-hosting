@@ -2,6 +2,7 @@
 import logging
 
 from django.conf import settings
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import permissions, serializers, viewsets
 from rest_framework.decorators import action
@@ -11,7 +12,7 @@ from apps.deployments.models.core import ManagedServer, Service
 from apps.autoscaler.models.replica import ServiceReplica
 from apps.deployments.services.node_scorer import NodeScorer, _get_min_score
 from apps.deployments.services.spawning_service import SpawningService
-from apps.teams.permissions import get_team_q_filter
+from apps.teams.permissions import assert_can_write, get_team_q_filter
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,14 @@ class AlertConfigSerializer(serializers.Serializer):
     cooldown_up_min = serializers.IntegerField(min_value=0, required=False)
     cooldown_down_min = serializers.IntegerField(min_value=0, required=False)
 
+    def validate_webhook_url(self, value):
+        url = str(value or '').strip()
+        if not url:
+            return url
+        from apps.core.validators import validate_ssrf
+        validate_ssrf(url, fail_closed_dns=True)
+        return url
+
 
 class ScalingViewSet(viewsets.GenericViewSet):
     permission_classes = [permissions.IsAuthenticated]
@@ -76,6 +85,7 @@ class ScalingViewSet(viewsets.GenericViewSet):
             service = get_object_or_404(Service, get_team_q_filter(request.user, request=request), id=pk)
         if request.method == 'GET':
             return Response(service.alert_config or {})
+        assert_can_write(request.user, service, action='update autoscaler alert config')
         serializer = AlertConfigSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         merged = dict(service.alert_config or {})
@@ -102,17 +112,9 @@ class ScalingViewSet(viewsets.GenericViewSet):
             service = get_object_or_404(
                 Service, get_team_q_filter(request.user, request=request), id=pk
             )
+        assert_can_write(request.user, service, action='spawn service replica')
 
         mode = request.query_params.get('mode', '').lower() or request.data.get('mode', '').lower() or ''
-
-        # Check max_replicas cap
-        running = ServiceReplica.objects.filter(
-            service=service, status='RUNNING'
-        ).count()
-        if running >= (service.max_replicas or 1):
-            return Response({
-                'error': f'At max_replicas ({service.max_replicas}) — cannot spawn more.',
-            }, status=400)
 
         spawner = SpawningService()
 
@@ -130,13 +132,30 @@ class ScalingViewSet(viewsets.GenericViewSet):
             home_server is not None and not getattr(home_server, 'is_primary', True)
         )
 
+        def _claim_replica_slot(target_node, reason: str):
+            with transaction.atomic():
+                locked_service = Service.objects.select_for_update().get(id=service.id)
+                active_count = ServiceReplica.objects.filter(
+                    service=locked_service, status__in=['RUNNING', 'SPAWNING']
+                ).count()
+                if active_count >= (locked_service.max_replicas or 1):
+                    return None, Response({
+                        'error': f'At max_replicas ({locked_service.max_replicas}) — cannot spawn more.',
+                    }, status=400)
+                rep = ServiceReplica.objects.create(
+                    service=locked_service, node=target_node, status='SPAWNING',
+                    spawn_reason=reason,
+                )
+                return rep, None
+
         # --- Horizontal: home server only ---
         if mode != 'vertical':
             if home_is_node:
-                replica = ServiceReplica.objects.create(
-                    service=service, node=home_server, status='SPAWNING',
-                    spawn_reason='Manual spawn via API (horizontal, on home node)',
+                replica, cap_err = _claim_replica_slot(
+                    home_server, 'Manual spawn via API (horizontal, on home node)'
                 )
+                if cap_err is not None:
+                    return cap_err
                 try:
                     spawner.spawn(service, home_server, replica)
                     return Response(ServiceReplicaSerializer(replica).data)
@@ -153,10 +172,11 @@ class ScalingViewSet(viewsets.GenericViewSet):
                 finally:
                     spawner.cleanup()
             else:
-                replica = ServiceReplica.objects.create(
-                    service=service, node=None, status='SPAWNING',
-                    spawn_reason='Manual spawn via API (horizontal)',
+                replica, cap_err = _claim_replica_slot(
+                    None, 'Manual spawn via API (horizontal)'
                 )
+                if cap_err is not None:
+                    return cap_err
                 try:
                     spawner.spawn_local(service, replica)
                     return Response(ServiceReplicaSerializer(replica).data)
@@ -205,10 +225,9 @@ class ScalingViewSet(viewsets.GenericViewSet):
                 ],
             }, status=400)
 
-        replica = ServiceReplica.objects.create(
-            service=service, node=best, status='SPAWNING',
-            spawn_reason='Manual spawn via API (vertical)',
-        )
+        replica, cap_err = _claim_replica_slot(best, 'Manual spawn via API (vertical)')
+        if cap_err is not None:
+            return cap_err
         try:
             spawner.spawn(service, best, replica)
             return Response(ServiceReplicaSerializer(replica).data)
@@ -252,6 +271,7 @@ class ScalingViewSet(viewsets.GenericViewSet):
                 get_team_q_filter(request.user, prefix='service__', request=request),
                 id=replica_id, status__in=['RUNNING', 'SPAWNING', 'DRAINING', 'DESTROYING'],
             )
+        assert_can_write(request.user, replica.service, action='destroy service replica')
         spawner = SpawningService()
         try:
             spawner.destroy(replica)
@@ -268,6 +288,7 @@ class ScalingViewSet(viewsets.GenericViewSet):
             service = get_object_or_404(
                 Service, get_team_q_filter(request.user, request=request), id=pk
             )
+        assert_can_write(request.user, service, action='scale down service')
         try:
             count = int(request.query_params.get('count', 1) or request.data.get('count', 1))
         except (ValueError, TypeError):
@@ -294,33 +315,41 @@ class ScalingViewSet(viewsets.GenericViewSet):
         2. Node API call (for self-provisioned/bootstrap nodes with no SSH)
         3. Local Docker SDK (if service runs on this server)
         """
-        if request.user.is_superuser:
-            service = get_object_or_404(Service, id=pk)
-        else:
-            service = get_object_or_404(
-                Service, get_team_q_filter(request.user, request=request), id=pk
-            )
-
+        import json as _json
+        import shlex
         import docker as docker_lib
+        from apps.autoscaler.services.tasks_autoscale import (
+            build_vpa_resource_spec,
+            service_vpa_target_containers,
+        )
         from apps.deployments.services.ssh_client import SSHClient
 
-        ceiling = 1.5
-        memory = service.memory_mb
-        cpu = int(service.cpu_cores * 1024) if service.cpu_cores else 0
+        scope_qs = (
+            Service.objects.all()
+            if request.user.is_superuser
+            else Service.objects.filter(get_team_q_filter(request.user, request=request))
+        )
+        service = scope_qs.filter(id=pk).first()
+        if service is None:
+            svc_name = str(
+                (request.data.get('service_name') if isinstance(request.data, dict) else '')
+                or request.query_params.get('service_name', '')
+                or ''
+            ).strip()
+            if svc_name:
+                service = scope_qs.filter(name=svc_name).first()
+        if service is None:
+            service = get_object_or_404(scope_qs, id=pk)
+        assert_can_write(request.user, service, action='apply VPA limits')
 
-        update_parts = []
-        if memory and memory > 0:
-            update_parts.append(f"--memory={memory}m")
-            update_parts.append(f"--memory-reservation={memory}m")
-        if cpu and cpu > 0:
-            update_parts.append(f"--cpu-shares={max(2, int((cpu / 1000) * 1024))}")
-            update_parts.append("--cpu-period=100000")
-            update_parts.append(f"--cpu-quota={int((cpu / 1000) * 100000 * ceiling)}")
+        spec = build_vpa_resource_spec(service)
+        update_parts = spec['update_parts']
+        docker_kwargs = spec['docker_kwargs']
         if not update_parts:
             return Response({'error': 'No memory/cpu settings to apply'}, status=400)
 
         update_cmd = " ".join(update_parts)
-        container_name = service.name
+        replica_names = service_vpa_target_containers(service)
 
         if service.server_id:
             node = service.server
@@ -337,11 +366,18 @@ class ScalingViewSet(viewsets.GenericViewSet):
                     wg_address=getattr(node, 'wg_address', '') or '',
                 )
                 try:
-                    cmd = f"docker update {update_cmd} {container_name}"
-                    stdout, stderr, exit_code = ssh.exec_command(cmd, timeout=60)
-                    if exit_code == 0:
-                        return Response({'status': 'applied', 'method': 'ssh', 'node': node.name})
-                    return Response({'error': f'docker update failed: {stderr}'}, status=500)
+                    applied_cnt = 0
+                    last_err = ''
+                    for target_name in replica_names:
+                        cmd = f"docker update {update_cmd} {shlex.quote(target_name)}"
+                        _stdout, stderr, exit_code = ssh.exec_command(cmd, timeout=60)
+                        if exit_code == 0:
+                            applied_cnt += 1
+                        else:
+                            last_err = stderr
+                    if applied_cnt > 0:
+                        return Response({'status': 'applied', 'method': 'ssh', 'node': node.name, 'updated': applied_cnt})
+                    return Response({'error': f'docker update failed: {last_err}'}, status=500)
                 except Exception as exc:
                     return Response({'error': f'SSH failed: {exc}'}, status=500)
                 finally:
@@ -358,14 +394,17 @@ class ScalingViewSet(viewsets.GenericViewSet):
                 import requests
                 from apps.deployments.views.server.helpers import _build_remote_headers
                 try:
+                    payload_bytes = _json.dumps({'service_name': service.name}).encode('utf-8')
                     headers = _build_remote_headers(
                         node, method='POST',
                         path=f'/api/v1/autoscaler/services/{service.id}/apply_vpa/',
-                        body=b'',
+                        body=payload_bytes,
                     )
+                    headers['Content-Type'] = 'application/json'
                     resp = requests.post(
                         f"{node_api_url}/api/v1/autoscaler/services/{service.id}/apply_vpa/",
                         headers=headers,
+                        data=payload_bytes,
                         timeout=30,
                     )
                     if resp.ok:
@@ -387,21 +426,19 @@ class ScalingViewSet(viewsets.GenericViewSet):
                 'hint': 'Add SSH key/password to ManagedServer, or ensure agent is registered with api_token.',
             }, status=400)
         else:
-            # Local container
+            # Local container + replicas
             try:
                 client = docker_lib.from_env()
-                container = client.containers.get(container_name)
-                update_kwargs = {}
-                if memory and memory > 0:
-                    update_kwargs['mem_reservation'] = f"{memory}m"
-                    update_kwargs['mem_limit'] = f"{int(memory * ceiling)}m"
-                if cpu and cpu > 0:
-                    update_kwargs['cpu_shares'] = max(2, int((cpu / 1000) * 1024))
-                    update_kwargs['cpu_period'] = 100000
-                    update_kwargs['cpu_quota'] = int((cpu / 1000) * 100000 * ceiling)
-                container.update(**update_kwargs)
-                return Response({'status': 'applied', 'method': 'local', 'container': container_name})
-            except docker_lib.errors.NotFound:
-                return Response({'error': f'Container {container_name} not found locally'}, status=404)
+                applied_names: list[str] = []
+                for target_name in replica_names:
+                    try:
+                        container = client.containers.get(target_name)
+                    except docker_lib.errors.NotFound:
+                        continue
+                    container.update(**docker_kwargs)
+                    applied_names.append(target_name)
+                if not applied_names:
+                    return Response({'error': f'Container {service.name} not found locally'}, status=404)
+                return Response({'status': 'applied', 'method': 'local', 'containers': applied_names, 'updated': len(applied_names)})
             except Exception as exc:
                 return Response({'error': str(exc)}, status=500)

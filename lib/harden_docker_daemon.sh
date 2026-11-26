@@ -48,7 +48,7 @@ with open('$daemon_cfg','w') as f: json.dump(cfg, f, indent=2)
         _smsly_ctrs="$(docker ps --format '{{.Names}}'  | grep -c smsly || true)"
         if [ "$_smsly_ctrs" -eq 0 ]; then
             _harden_log info "Docker daemon config changed — restarting Docker..."
-            systemctl restart docker || { _harden_log error "Docker restart failed"; }
+            systemctl restart docker || { _harden_log err "Docker restart failed"; }
             for _i in $(seq 1 30); do
                 docker info  && break
                 sleep 2

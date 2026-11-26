@@ -58,6 +58,7 @@
     # ─── Targeted Rebuild (CRITICAL BLINDSPOT FIX: --no-deps) ────────────────
     # Using --no-deps prevents cascade restart of unrelated services
     if ! is_checkpoint_done "update_containers_rebuilt"; then
+    ensure_compose_profiles
 
     # ─── Safe Update Protocol ─────────────────────────────────────────────
     if [ -f "$INSTALL_DIR/scripts/safe-update.sh" ]; then
@@ -118,6 +119,7 @@
                 "SENTINEL_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
                 "CROWDSEC_BOUNCER_KEY|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
                 "CADDY_ASK_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+                "EDGE_JWT_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || openssl rand -hex 64 || true)"
                 "PATRONI_SUPERUSER_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
                 "GRAFANA_PASSWORD|$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))"  || true)"
             )
@@ -137,12 +139,10 @@
          done
          if [ "$_missing_count" -gt 0 ]; then
              echo -e "${GREEN}  ✓ Auto-generated $_missing_count missing secret(s)${NC}"
-             # Re-source the env so the new values take effect
-             # in the current shell session.
-             set -a
-             # shellcheck disable=SC1090
-             source "$_env_file"  || true
-             set +a
+             # Load updated .env values safely without shell execution
+             if declare -F env_load_file_safe >/dev/null 2>&1; then
+                 env_load_file_safe "$_env_file"
+             fi
          fi
      fi
      # Unset the helper var to avoid leaking into the rest of the script.
@@ -202,13 +202,26 @@
                       echo -e "${YELLOW}  ⚠ iptables-shim build failed (non-fatal)${NC}"
               fi
           fi
+          _upd_ha_svcs="pgcat redis-primary"
+          _upd_tier_early="${STACK_TIER:-}"
+          [ -n "$_upd_tier_early" ] || _upd_tier_early="$(env_get_value "$INSTALL_DIR/.env" "STACK_TIER" || true)"
+          [ -n "$_upd_tier_early" ] || _upd_tier_early="full"
+          if [ "${DB_HA_ENABLED:-local-ha}" = "local-ha" ]; then
+              if [ "$_upd_tier_early" = "lite" ]; then
+                  _upd_ha_svcs="db $_upd_ha_svcs"
+              else
+                  _upd_ha_svcs="db postgres-replica $_upd_ha_svcs redis-replica"
+              fi
+          elif [ "$_upd_tier_early" != "lite" ]; then
+              _upd_ha_svcs="$_upd_ha_svcs redis-replica"
+          fi
           if $_already_migrated; then
               # Data is already on postgres-primary — switch to prod compose
               # immediately but ensure the HA stack is up first.
              echo -e "${BLUE}  → HA stack already has data — ensuring services are up...${NC}"
              docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
                  up -d --wait --wait-timeout 120 \
-                 $( [ "${DB_HA_ENABLED:-local-ha}" = local-ha ] && echo "db postgres-replica" ) pgcat redis-primary redis-replica \
+                 $_upd_ha_svcs \
                   || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
              echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
              env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
@@ -229,7 +242,7 @@
                      echo -e "${BLUE}  → Starting HA stack (postgres-primary, pgcat, redis-primary)...${NC}"
                      docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
                          up -d --wait --wait-timeout 120 \
-                         $( [ "${DB_HA_ENABLED:-local-ha}" = local-ha ] && echo "db postgres-replica" ) pgcat redis-primary redis-replica \
+                         $_upd_ha_svcs \
                           || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
 
                      echo -e "${BLUE}  → Running data migration from old @db to postgres-primary...${NC}"
@@ -253,12 +266,13 @@
                  echo -e "${BLUE}  → Starting HA stack (fresh install)...${NC}"
                  docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
                      up -d --wait --wait-timeout 120 \
-                     $( [ "${DB_HA_ENABLED:-local-ha}" = local-ha ] && echo "db postgres-replica" ) pgcat redis-primary redis-replica \
+                     $_upd_ha_svcs \
                       || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
                  echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
                  env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
              fi
          fi
+         unset _upd_ha_svcs _upd_tier_early
      fi
      unset _current_compose
 
@@ -314,20 +328,27 @@
              env_set_value "$_env_fix_file" "DIRECT_DATABASE_URL" "$_migrated_direct"
          fi
 
-         # Ensure REDIS_MIN_REPLICAS_TO_WRITE is present only when the
-         # prod compose is active (has a replica).  Setting it on the
-         # dev compose will cause NOREPLICAS errors on every write.
-         if echo "$_current_compose_final" | grep -q 'prod'; then
-             if ! grep -q '^REDIS_MIN_REPLICAS_TO_WRITE=' "$_env_fix_file" ; then
-                 echo -e "${YELLOW}  → Adding REDIS_MIN_REPLICAS_TO_WRITE=1 (Redis HA durability)${NC}"
-                 echo 'REDIS_MIN_REPLICAS_TO_WRITE=1' >> "$_env_fix_file"
+         # Populate SENTINEL_HOSTS only when Redis HA is active (non-lite tiers)
+         _cur_sentinels="$(env_get_value "$_env_fix_file" "SENTINEL_HOSTS" || true)"
+         _cur_db_ha="$(env_get_value "$_env_fix_file" "DB_HA_ENABLED" || true)"
+         [ -n "$_cur_db_ha" ] || _cur_db_ha="local-ha"
+         _cur_tier="$(env_get_value "$_env_fix_file" "STACK_TIER" || true)"
+         [ -n "$_cur_tier" ] || _cur_tier="${STACK_TIER:-full}"
+         if [ "$_cur_tier" = "lite" ]; then
+             if [ "$_cur_sentinels" = "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379" ]; then
+                 env_set_value "$_env_fix_file" "SENTINEL_HOSTS" ""
              fi
-         else
-             # Dev/single-node compose — ensure replica requirement is off
-             # so writes don't get rejected.
-             _min_rep="$(grep '^REDIS_MIN_REPLICAS_TO_WRITE=' "$_env_fix_file"  | cut -d= -f2 || true)"
+         elif [ -z "$_cur_sentinels" ] && [ "$_cur_db_ha" = "local-ha" ] && [ "$MODE_AGENT_LITE" != "true" ]; then
+             env_set_value "$_env_fix_file" "SENTINEL_HOSTS" "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379"
+         fi
+         unset _cur_tier
+
+         # Single-host local-ha / single-node Redis: keep REDIS_MIN_REPLICAS_TO_WRITE=0
+         # so a restarting local replica never blocks all writes.
+         _min_rep="$(grep '^REDIS_MIN_REPLICAS_TO_WRITE=' "$_env_fix_file" | cut -d= -f2 || true)"
+         if [ "$_cur_db_ha" = "local-ha" ] || ! echo "$_current_compose_final" | grep -q 'prod'; then
              if [ "$_min_rep" != "0" ]; then
-                 echo -e "${YELLOW}  → Setting REDIS_MIN_REPLICAS_TO_WRITE=0 (single-node, no replica)${NC}"
+                 echo -e "${YELLOW}  → Setting REDIS_MIN_REPLICAS_TO_WRITE=0 (single-host/local-ha)${NC}"
                  env_set_value "$_env_fix_file" "REDIS_MIN_REPLICAS_TO_WRITE" "0"
              fi
          fi
@@ -344,7 +365,7 @@
              fi
          fi
 
-         unset _env_fix_file _current_redis_host _redis_url _fixed_redis_url _registry _db_url _pg_commit _current_compose_final _min_rep
+         unset _env_fix_file _current_redis_host _redis_url _fixed_redis_url _registry _db_url _pg_commit _current_compose_final _min_rep _cur_sentinels _cur_db_ha
      fi
 
      # Cache bust only if disk is low (already runs in the disk check above when needed).
@@ -358,35 +379,12 @@
                   echo -e "${YELLOW}  → Node mode: no frontend to update. Skipping.${NC}"
               else
                   echo -e "${BLUE}  → Rebuilding frontend container (cached)...${NC}"
-                docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend || echo -e "${YELLOW}    ⚠ docker compose stop frontend failed (non-fatal)${NC}"
-                  docker compose -f "$COMPOSE_FILE" rm -f frontend || echo -e "${YELLOW}    ⚠ docker compose rm frontend failed (non-fatal)${NC}"
                   timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build frontend
+                  docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend || echo -e "${YELLOW}    ⚠ docker compose stop frontend failed (non-fatal)${NC}"
+                  docker compose -f "$COMPOSE_FILE" rm -f frontend || echo -e "${YELLOW}    ⚠ docker compose rm frontend failed (non-fatal)${NC}"
                   docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps frontend
-
-                 # Custom Domain SSL Setup for Frontend Update
-                 if should_manage_caddy; then  # Only for master mode
-                     echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
-                     SSL_SCRIPT="install-custom-domain-ssl.sh"
-                     [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
-                 if [ -f "$SSL_SCRIPT" ]; then
-                     echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                     timeout -k 5 120 bash "$SSL_SCRIPT" install || true
-                     
-                     # Start the services
-                     echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
-                     
-                     # Enable auto-start on boot (if not already enabled)
-                     echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
-                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
-                     
-                     echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
-                     else
-                         echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
-                     fi
-                 fi
-             fi
-             ;;
+              fi
+              ;;
          backend)
             echo -e "${BLUE}  → Rebuilding backend containers (cached)...${NC}"
             build_svcs="backend celery"
@@ -400,13 +398,13 @@
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 verify_agent_lite_connectivity
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_redis_service) rabbitmq socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
             else
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) socket-proxy
             fi
             # Stop backend, celery & pgcat so their DB connections don't block
             # migrations (ALTER TABLE requires exclusive locks).
@@ -449,29 +447,6 @@
             else
                  docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $celery_svcs
              fi
-             
-             # Custom Domain SSL Setup for Backend Update
-             if should_manage_caddy; then  # Only for master mode
-                 echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
-                 SSL_SCRIPT="install-custom-domain-ssl.sh"
-                 [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
-                 if [ -f "$SSL_SCRIPT" ]; then
-                     echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                     timeout -k 5 120 bash "$SSL_SCRIPT" install || true
-                     
-                     # Start the services
-                     echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
-                     
-                     # Enable auto-start on boot (if not already enabled)
-                     echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
-                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
-                     
-                     echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
-                 else
-                     echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
-                 fi
-             fi
              ;;
           half)
             echo -e "${BLUE}  → [HALF UPDATE] Rebuilding changed services from cache (no image pulls)${NC}"
@@ -505,7 +480,7 @@
             echo -e "${BLUE}  → Starting pgcat & backend...${NC}"
             if [ -n "$(get_pgcat_if_exists)" ]; then docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat || echo -e "${YELLOW}    ⚠ docker compose up pgcat failed (non-fatal)${NC}"; fi
             if [ "$MODE_AGENT_LITE" = "true" ]; then
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_redis_service) rabbitmq socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else
@@ -531,29 +506,6 @@
                 docker compose -f "$COMPOSE_FILE" restart $restart_svcs || echo -e "${YELLOW}    ⚠ docker compose restart celery failed (non-fatal)${NC}"
              fi
              set_checkpoint "update_db_migrated"
-             
-             # Custom Domain SSL Setup for Half Update
-             if should_manage_caddy; then  # Only for master mode
-                 echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
-                 SSL_SCRIPT="install-custom-domain-ssl.sh"
-                 [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
-                 if [ -f "$SSL_SCRIPT" ]; then
-                     echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                     timeout -k 5 120 bash "$SSL_SCRIPT" install || true
-                     
-                     # Start the services
-                     echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
-                     
-                     # Enable auto-start on boot (if not already enabled)
-                     echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
-                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
-                     
-                     echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
-                 else
-                     echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
-                 fi
-             fi
              ;;
          full)
             echo -e "${BLUE}  → [FULL REBUILD] Rebuilding PaaS core (preserving addon databases)...${NC}"
@@ -585,15 +537,15 @@
             # This does a graceful zero-downtime replacement instead of an explicit hard stop
             echo -e "${BLUE}    ↳ Starting all services...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_redis_service) rabbitmq socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
-                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --remove-orphans $CORE_SERVICES
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate $CORE_SERVICES
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
-                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps --remove-orphans $CORE_SERVICES
+                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $CORE_SERVICES
             else
-                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps --remove-orphans $CORE_SERVICES
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $CORE_SERVICES
             fi
 
             if [ "$MODE_AGENT_LITE" != "true" ]; then
@@ -617,13 +569,13 @@
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 verify_agent_lite_connectivity
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_redis_service) rabbitmq socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
             else
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) socket-proxy
             fi
             run_backend_migrations --root || {
                 echo -e "${YELLOW}  ⚠ Migration failed — retrying in 15s...${NC}"
@@ -659,21 +611,6 @@
                 docker compose -f "$COMPOSE_FILE" restart $restart_svcs || echo -e "${YELLOW}    ⚠ docker compose restart celery failed (non-fatal)${NC}"
             fi
             set_checkpoint "update_db_migrated"
-
-            # Custom Domain SSL Setup for Full Update
-            if should_manage_caddy; then
-                echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
-                SSL_SCRIPT="install-custom-domain-ssl.sh"
-                [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
-                if [ -f "$SSL_SCRIPT" ]; then
-                    timeout -k 5 120 bash "$SSL_SCRIPT" install || true
-                    timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
-                    timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
-                    echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
-                else
-                    echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
-                fi
-            fi
             ;;
     esac
 
@@ -818,49 +755,57 @@
         fi
     fi
 
-    # ─── Observability Stack Update (master mode only) ──────────────────────
+    # ─── Observability & Build Caches (master mode, tier-gated) ────────────
+    _upd_tier="$(env_get_value "$INSTALL_DIR/.env" "STACK_TIER" || true)"
+    [ -n "$_upd_tier" ] || _upd_tier="${STACK_TIER:-full}"
     if [ "$MODE_AGENT_LITE" != "true" ] && [ "$MODE_NODE" != "true" ]; then
-        echo -e "${BLUE}  → Updating observability stack...${NC}"
-        # Ensure scripts mounted into containers are executable (git may not preserve +x)
-        chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh  || true
-        chmod +x "$INSTALL_DIR"/infrastructure/docker/infisical-gen-env.sh  || true
-        mkdir -p /opt/smsly-hosting/prometheus-targets
-        if ! chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets ; then
-            echo -e "${YELLOW}  ⚠ Could not chown prometheus-targets to uid 1000${NC}"
+        if [ "$_upd_tier" != "lite" ]; then
+            echo -e "${BLUE}  → Updating observability stack...${NC}"
+            # Ensure scripts mounted into containers are executable (git may not preserve +x)
+            chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh  || true
+            chmod +x "$INSTALL_DIR"/infrastructure/docker/infisical-gen-env.sh  || true
+            mkdir -p /opt/smsly-hosting/prometheus-targets
+            if ! chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets ; then
+                echo -e "${YELLOW}  ⚠ Could not chown prometheus-targets to uid 1000${NC}"
+            fi
+            chmod 2777 /opt/smsly-hosting/prometheus-targets  || true
+            docker compose \
+                --env-file /opt/smsly-hosting/.env \
+                -f infrastructure/docker/docker-compose.observability.yml \
+                up -d --pull always || \
+                echo -e "${YELLOW}  ⚠ Observability stack had issues (non-fatal)${NC}"
+            # Restart containers whose bind-mounted config or environment may have
+            # changed.  docker compose up -d only recreates on IMAGE changes, so
+            # config-file updates require an explicit restart.
+            docker restart smsly-grafana || echo -e "${YELLOW}    ⚠ docker restart smsly-grafana failed (non-fatal)${NC}"
+            docker restart smsly-alertmanager || echo -e "${YELLOW}    ⚠ docker restart smsly-alertmanager failed (non-fatal)${NC}"
+            docker restart smsly-prometheus || echo -e "${YELLOW}    ⚠ docker restart smsly-prometheus failed (non-fatal)${NC}"
+            docker restart smsly-docker-labels || echo -e "${YELLOW}    ⚠ docker restart smsly-docker-labels failed (non-fatal)${NC}"
+            docker restart smsly-promtail || echo -e "${YELLOW}    ⚠ docker restart smsly-promtail failed (non-fatal)${NC}"
+            # Deploy/update docker-labels exporter to all remote nodes and
+            # regenerate Prometheus file_sd target files (docker-labels,
+            # cAdvisor, Node Exporter).
+            backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)
+            if [ -n "$backend_container" ]; then
+                timeout -k 5 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters --force || echo -e "${YELLOW}    ⚠ deploy_docker_labels_exporters failed${NC}"
+            fi
+            echo -e "${GREEN}  ✓ Observability stack updated${NC}"
+        else
+            echo -e "${BLUE}  → Skipping observability stack update (STACK_TIER=lite)${NC}"
         fi
-        chmod 2777 /opt/smsly-hosting/prometheus-targets  || true
-        docker compose \
-            --env-file /opt/smsly-hosting/.env \
-            -f infrastructure/docker/docker-compose.observability.yml \
-            up -d --pull always || \
-            echo -e "${YELLOW}  ⚠ Observability stack had issues (non-fatal)${NC}"
-        # Restart containers whose bind-mounted config or environment may have
-        # changed.  docker compose up -d only recreates on IMAGE changes, so
-        # config-file updates require an explicit restart.
-        docker restart smsly-grafana || echo -e "${YELLOW}    ⚠ docker restart smsly-grafana failed (non-fatal)${NC}"
-        docker restart smsly-alertmanager || echo -e "${YELLOW}    ⚠ docker restart smsly-alertmanager failed (non-fatal)${NC}"
-        docker restart smsly-prometheus || echo -e "${YELLOW}    ⚠ docker restart smsly-prometheus failed (non-fatal)${NC}"
-        docker restart smsly-docker-labels || echo -e "${YELLOW}    ⚠ docker restart smsly-docker-labels failed (non-fatal)${NC}"
-        docker restart smsly-promtail || echo -e "${YELLOW}    ⚠ docker restart smsly-promtail failed (non-fatal)${NC}"
-        # Deploy/update docker-labels exporter to all remote nodes and
-        # regenerate Prometheus file_sd target files (docker-labels,
-        # cAdvisor, Node Exporter).
-        backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)
-        if [ -n "$backend_container" ]; then
-            timeout -k 5 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters --force || echo -e "${YELLOW}    ⚠ deploy_docker_labels_exporters failed${NC}"
+        if [ "$_upd_tier" = "full" ]; then
+            # ─── Build-cache images (apt-cacher-ng floats :latest) ──────────
+            # Fresh deploy starts these explicitly; refresh their images here
+            # so updates don't pin stale cache daemons forever. Non-fatal.
+            echo -e "${BLUE}  → Refreshing build-cache images (apt-cacher, verdaccio)...${NC}"
+            timeout -k 5 240 docker compose -f "$COMPOSE_FILE" --profile full pull --ignore-pull-failures apt-cacher verdaccio 2>&1 | tail -3 || \
+                echo -e "${YELLOW}  ⚠ Build-cache image refresh failed (non-fatal)${NC}"
+            timeout -k 5 120 docker compose -f "$COMPOSE_FILE" --profile full up -d --no-deps apt-cacher verdaccio 2>&1 | tail -3 || \
+                echo -e "${YELLOW}  ⚠ Build-cache services restart failed (non-fatal)${NC}"
         fi
-        echo -e "${GREEN}  ✓ Observability stack updated${NC}"
-        # ─── Build-cache images (apt-cacher-ng floats :latest) ──────────
-        # Fresh deploy starts these explicitly; refresh their images here
-        # so updates don't pin stale cache daemons forever. Non-fatal.
-        # Explicit service names: profile-proof, no --remove-orphans.
-        echo -e "${BLUE}  → Refreshing build-cache images (apt-cacher, verdaccio)...${NC}"
-        timeout -k 5 240 docker compose -f "$COMPOSE_FILE" pull --ignore-pull-failures apt-cacher verdaccio 2>&1 | tail -3 || \
-            echo -e "${YELLOW}  ⚠ Build-cache image refresh failed (non-fatal)${NC}"
-        timeout -k 5 120 docker compose -f "$COMPOSE_FILE" up -d --no-deps apt-cacher verdaccio 2>&1 | tail -3 || \
-            echo -e "${YELLOW}  ⚠ Build-cache services restart failed (non-fatal)${NC}"
     fi
-    if [ -n "${CROWDSEC_BOUNCER_KEY:-}" ]; then
+    unset _upd_tier
+    if [ -n "${CROWDSEC_BOUNCER_KEY:-}" ] && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'smsly-crowdsec'; then
         echo -e "${BLUE}  → Registering CrowdSec Bouncer...${NC}"
         # Idempotent: pre-check keeps logs clean; the "already exists"
         # fallback covers concurrent registration by the harden path.

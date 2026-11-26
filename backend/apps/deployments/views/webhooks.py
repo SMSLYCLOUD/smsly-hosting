@@ -29,11 +29,7 @@ class GitHubWebhookView(GenericAPIView):
     permission_classes: list = []
 
     def _get_secret(self):
-        from ..models.core import PlatformConfig
-        try:
-            return PlatformConfig.load().get_webhook_secret('github')
-        except Exception:
-            return getattr(settings, 'GITHUB_WEBHOOK_SECRET', '')
+        return resolve_webhook_secret('github')
 
     def post(self, request):
         webhook_secret = self._get_secret()

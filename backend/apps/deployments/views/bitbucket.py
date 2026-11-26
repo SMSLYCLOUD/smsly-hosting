@@ -132,9 +132,12 @@ def bitbucket_branches(request):
     if not token:
         return Response({"error": "Bitbucket not connected."}, status=status.HTTP_400_BAD_REQUEST)
 
-    repo = request.query_params.get("repo", "")
+    repo = request.query_params.get("repo", "").strip()
     if not repo:
         return Response({"error": "repo parameter required"}, status=status.HTTP_400_BAD_REQUEST)
+    import re as _re
+    if not _re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repo) or ".." in repo:
+        return Response({"error": "Invalid repository format"}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
         resp = requests.get(
@@ -142,6 +145,7 @@ def bitbucket_branches(request):
             headers={"Authorization": f"Bearer {token}"},
             params={"pagelen": 50},
             timeout=15,
+            allow_redirects=False,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -163,10 +167,15 @@ def bitbucket_commits(request):
     if not token:
         return Response({"error": "Bitbucket not connected."}, status=status.HTTP_400_BAD_REQUEST)
 
-    repo = request.query_params.get("repo", "")
-    branch = request.query_params.get("branch", "main")
+    repo = request.query_params.get("repo", "").strip()
+    branch = request.query_params.get("branch", "main").strip()
     if not repo:
         return Response({"error": "repo parameter required"}, status=status.HTTP_400_BAD_REQUEST)
+    import re as _re
+    if not _re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repo) or ".." in repo:
+        return Response({"error": "Invalid repository format"}, status=status.HTTP_400_BAD_REQUEST)
+    if not branch or branch.startswith("-") or ".." in branch or any(c in branch for c in "?#\r\n "):
+        return Response({"error": "Invalid branch name"}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
         resp = requests.get(
@@ -174,6 +183,7 @@ def bitbucket_commits(request):
             headers={"Authorization": f"Bearer {token}"},
             params={"pagelen": 30},
             timeout=15,
+            allow_redirects=False,
         )
         resp.raise_for_status()
         data = resp.json()

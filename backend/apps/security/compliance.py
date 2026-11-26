@@ -45,6 +45,7 @@ def verify_audit_log_chain(limit: int = 500) -> dict[str, Any]:
 def evaluate_all_compliance_controls() -> dict[str, Any]:
     """Evaluate SOC 2 Type II, ISO 27001:2022, NDPR, and PCI-DSS v4.0 from live telemetry."""
     from apps.deployments.models import Service
+    from apps.deployments.models.addons import Addon
     from apps.deployments.models.core import PlatformConfig
     from apps.deployments.services.container_runtime import detect_best_runtime, is_sandboxed_runtime
 
@@ -62,11 +63,108 @@ def evaluate_all_compliance_controls() -> dict[str, Any]:
     sandboxed = is_sandboxed_runtime(detect_best_runtime())
 
     cryptd_configured = False
+    cryptd_active = False
+    cryptd_state = "DISABLED"
+    cryptd_week: int | None = None
+    cryptd_error = ""
     try:
         from apps.core.crypto_daemon import cryptd_client
         cryptd_configured = cryptd_client.is_enabled()
-    except Exception:
-        pass
+        if cryptd_configured:
+            try:
+                status_payload = cryptd_client.get_status() or {}
+                cryptd_state = str(status_payload.get("state") or "UNKNOWN").strip().upper()
+                cryptd_active = cryptd_state == "ACTIVE"
+                raw_week = status_payload.get("current_week")
+                if isinstance(raw_week, int):
+                    cryptd_week = raw_week
+            except Exception as exc:
+                cryptd_state = "UNREACHABLE"
+                cryptd_active = False
+                cryptd_error = str(exc)[:200]
+    except Exception as exc:
+        cryptd_error = str(exc)[:200]
+
+    total_addons = 0
+    encrypted_addons = 0
+    fallback_unencrypted_addons = 0
+    unencrypted_addon_details: list[dict[str, Any]] = []
+    for addon in Addon.objects.exclude(status=Addon.Status.DELETED).only(
+        "id", "name", "addon_type", "provider_metadata"
+    ):
+        total_addons += 1
+        meta = addon.provider_metadata if isinstance(addon.provider_metadata, dict) else {}
+        ve = meta.get("volume_encryption")
+        if isinstance(ve, dict) and ve:
+            if ve.get("encrypted") is True:
+                encrypted_addons += 1
+            elif ve.get("encrypted") is False or ve.get("status") in (
+                "fallback_unencrypted",
+                "preexisting_unencrypted",
+                "disabled",
+            ):
+                fallback_unencrypted_addons += 1
+                if len(unencrypted_addon_details) < 20:
+                    unencrypted_addon_details.append({
+                        "name": addon.name,
+                        "type": addon.addon_type,
+                        "status": str(ve.get("status") or "unencrypted"),
+                    })
+
+    cryptd_failing = (cryptd_configured and cryptd_state in ("LOCKED", "UNREACHABLE")) or (
+        fallback_unencrypted_addons > 0
+    )
+    backup_enc_required = bool(getattr(cfg, "backup_require_encryption", False))
+    all_services_encrypted = total_services == 0 or encrypted_services == total_services
+
+    if backup_enc_required and cryptd_active and all_services_encrypted and fallback_unencrypted_addons == 0:
+        cc67_status, cc67_score = "PASS", 100
+    elif cryptd_failing:
+        cc67_status = "FAIL"
+        cc67_score = 0 if (cryptd_configured and cryptd_state in ("LOCKED", "UNREACHABLE")) else 25
+    else:
+        cc67_status = "PARTIAL"
+        cc67_score = 60 if (cryptd_configured or backup_enc_required) else 40
+
+    if cryptd_active and backup_enc_required and fallback_unencrypted_addons == 0:
+        a824_status, a824_score = "PASS", 100
+    elif cryptd_failing:
+        a824_status = "FAIL"
+        a824_score = 15 if (cryptd_configured and cryptd_state in ("LOCKED", "UNREACHABLE")) else 30
+    else:
+        a824_status, a824_score = "PARTIAL", 65
+
+    if (encrypted_services > 0 or total_services == 0) and backup_enc_required and cryptd_active and fallback_unencrypted_addons == 0:
+        ndpr26_status, ndpr26_score = "PASS", 95
+    elif cryptd_failing:
+        ndpr26_status = "FAIL"
+        ndpr26_score = 20
+    else:
+        ndpr26_status = "PARTIAL"
+        ndpr26_score = 65
+
+    if cryptd_active and all_services_encrypted and fallback_unencrypted_addons == 0:
+        pci35_status, pci35_score = "PASS", 100
+    elif cryptd_failing:
+        pci35_status = "FAIL"
+        pci35_score = 0 if (cryptd_configured and cryptd_state in ("LOCKED", "UNREACHABLE")) else 20
+    else:
+        pci35_status, pci35_score = "PARTIAL", 60
+
+    crypto_evidence = {
+        "cryptd_enabled": cryptd_configured,
+        "cryptd_active": cryptd_active,
+        "cryptd_state": cryptd_state,
+        "cryptd_week": cryptd_week,
+        "cryptd_error": cryptd_error,
+        "backup_require_encryption": backup_enc_required,
+        "encrypted_services": encrypted_services,
+        "total_services": total_services,
+        "total_addons": total_addons,
+        "encrypted_addons": encrypted_addons,
+        "fallback_unencrypted_addons": fallback_unencrypted_addons,
+        "unencrypted_addon_details": unencrypted_addon_details,
+    }
 
     controls: list[dict[str, Any]] = [
         # ── SOC 2 Type II ───────────────────────────────────────────────
@@ -94,11 +192,20 @@ def evaluate_all_compliance_controls() -> dict[str, Any]:
             "framework": ComplianceControlResult.Framework.SOC2,
             "control_id": "CC6.7",
             "control_name": "Transmission & Data-at-Rest Cryptography",
-            "status": "PASS" if (getattr(cfg, "backup_require_encryption", False) and (total_services == 0 or encrypted_services == total_services)) else "PARTIAL",
-            "score_pct": 100 if (cryptd_configured and getattr(cfg, "backup_require_encryption", False)) else 70,
-            "evidence_summary": f"BackupEncryptionRequired={bool(getattr(cfg, 'backup_require_encryption', False))}, grid-cryptd={cryptd_configured}, EncryptedServices={encrypted_services}/{total_services}",
-            "evidence_details": {"cryptd_enabled": cryptd_configured, "encrypted_services": encrypted_services, "total_services": total_services},
-            "remediation": "Enable Require Backup Encryption and opt sensitive services into grid-cryptd.",
+            "status": cc67_status,
+            "score_pct": cc67_score,
+            "evidence_summary": (
+                f"BackupEncryptionRequired={backup_enc_required}, "
+                f"grid-cryptd={cryptd_state}, "
+                f"EncryptedServices={encrypted_services}/{total_services}, "
+                f"UnencryptedFallbackAddons={fallback_unencrypted_addons}/{total_addons}"
+            ),
+            "evidence_details": dict(crypto_evidence),
+            "remediation": (
+                "Ensure grid-cryptd is ACTIVE, enable Require Backup Encryption, opt services into grid-cryptd, and remediate any fallback_unencrypted addon volumes."
+                if cryptd_failing or not cryptd_active
+                else "Enable Require Backup Encryption and opt sensitive services into grid-cryptd."
+            ),
         },
         {
             "framework": ComplianceControlResult.Framework.SOC2,
@@ -125,11 +232,18 @@ def evaluate_all_compliance_controls() -> dict[str, Any]:
             "framework": ComplianceControlResult.Framework.ISO27001,
             "control_id": "A.8.24",
             "control_name": "Use of Cryptography & Key Management",
-            "status": "PASS" if (cryptd_configured and getattr(cfg, "backup_require_encryption", False)) else "PARTIAL",
-            "score_pct": 100 if cryptd_configured else 75,
-            "evidence_summary": f"Fernet EnvVars active; grid-cryptd={cryptd_configured}; Cosign={bool(getattr(cfg, 'cosign_enabled', True))}",
-            "evidence_details": {"cryptd": cryptd_configured, "cosign": bool(getattr(cfg, "cosign_enabled", True))},
-            "remediation": "Configure grid-cryptd Shamir/Vault root custody and enable Cosign verification.",
+            "status": a824_status,
+            "score_pct": a824_score,
+            "evidence_summary": (
+                f"Fernet EnvVars active; grid-cryptd={cryptd_state}; "
+                f"UnencryptedFallbackAddons={fallback_unencrypted_addons}; "
+                f"Cosign={bool(getattr(cfg, 'cosign_enabled', True))}"
+            ),
+            "evidence_details": {
+                **crypto_evidence,
+                "cosign": bool(getattr(cfg, "cosign_enabled", True)),
+            },
+            "remediation": "Configure grid-cryptd Shamir/Vault root custody (state=ACTIVE), avoid fallback_unencrypted volumes, and enable Cosign verification.",
         },
         {
             "framework": ComplianceControlResult.Framework.ISO27001,
@@ -146,11 +260,16 @@ def evaluate_all_compliance_controls() -> dict[str, Any]:
             "framework": ComplianceControlResult.Framework.NDPR,
             "control_id": "NDPR-Art2.6",
             "control_name": "Data Security, Pseudonymization & Sovereign Custody",
-            "status": "PASS" if (encrypted_services > 0 or total_services == 0) and getattr(cfg, "backup_require_encryption", False) else "PARTIAL",
-            "score_pct": 95 if cryptd_configured else 65,
-            "evidence_summary": f"Self-hosted sovereign data custody; EncryptedServices={encrypted_services}/{total_services}; EncryptedBackups={bool(getattr(cfg, 'backup_require_encryption', False))}",
-            "evidence_details": {"encrypted_services": encrypted_services, "total_services": total_services},
-            "remediation": "Enable `encryption_at_rest_enabled` on all services handling Nigerian citizen PII.",
+            "status": ndpr26_status,
+            "score_pct": ndpr26_score,
+            "evidence_summary": (
+                f"Self-hosted sovereign data custody; grid-cryptd={cryptd_state}; "
+                f"EncryptedServices={encrypted_services}/{total_services}; "
+                f"EncryptedBackups={backup_enc_required}; "
+                f"UnencryptedFallbackAddons={fallback_unencrypted_addons}"
+            ),
+            "evidence_details": dict(crypto_evidence),
+            "remediation": "Keep grid-cryptd ACTIVE, enforce encrypted addon volumes, and enable `encryption_at_rest_enabled` on all services handling Nigerian citizen PII.",
         },
         {
             "framework": ComplianceControlResult.Framework.NDPR,
@@ -167,11 +286,20 @@ def evaluate_all_compliance_controls() -> dict[str, Any]:
             "framework": ComplianceControlResult.Framework.PCIDSS,
             "control_id": "PCI-3.5",
             "control_name": "Protect Stored Account Data with Strong Cryptography",
-            "status": "PASS" if (cryptd_configured and (total_services == 0 or encrypted_services == total_services)) else "PARTIAL",
-            "score_pct": 100 if cryptd_configured and encrypted_services == total_services else 60,
-            "evidence_summary": f"LUKS2 AES-XTS + AES-256-GCM Redis encryption via grid-cryptd (`{encrypted_services}/{total_services}` services).",
-            "evidence_details": {"cryptd": cryptd_configured, "encrypted_services": encrypted_services},
-            "remediation": "Opt all cardholder/payment services into `grid-cryptd`.",
+            "status": pci35_status,
+            "score_pct": pci35_score,
+            "evidence_summary": (
+                f"LUKS2/fscrypt + AES-256-GCM Redis encryption via grid-cryptd={cryptd_state} "
+                f"(`{encrypted_services}/{total_services}` services, "
+                f"`{encrypted_addons}/{total_addons}` encrypted addons, "
+                f"`{fallback_unencrypted_addons}` unencrypted fallback)."
+            ),
+            "evidence_details": dict(crypto_evidence),
+            "remediation": (
+                "Restore grid-cryptd to ACTIVE state and eliminate all fallback_unencrypted addon volumes before processing cardholder data."
+                if cryptd_failing
+                else "Opt all cardholder/payment services into `grid-cryptd`."
+            ),
         },
         {
             "framework": ComplianceControlResult.Framework.PCIDSS,

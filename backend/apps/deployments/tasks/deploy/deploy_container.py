@@ -28,7 +28,11 @@ from .addons import _ensure_addons_ready, _probe_addon_connectivity
 from .build_compose import _build_platform_healthcheck, _build_runtime_env
 from .build_docker import _run_managed_image_post_deploy_hooks
 from .caddy import _regenerate_caddyfile
-from .state import _mark_deployment_active, _post_deploy_success
+from .state import (
+    _mark_deployment_active,
+    _post_deploy_success,
+    stamp_deployment_artifact_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +159,8 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
 
     try:
         service = deployment.service
+        stamp_deployment_artifact_metadata(deployment, service, image_ref=image_name)
+        deployment.save(update_fields=['metadata'])
 
         # --- Compose mode: containers already running from pipeline ---
         if service.deploy_mode == 'COMPOSE' and image_name.startswith('compose:'):
@@ -165,9 +171,10 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                 _wait_for_local_route_ready,
             )
             container_name = image_name.split(':', 1)[1]
+            stamp_deployment_artifact_metadata(deployment, service, image_ref=image_name)
             deployment.status = Deployment.Status.HEALTH_CHECK
             deployment.container_id = container_name
-            deployment.save(update_fields=['status', 'container_id'])
+            deployment.save(update_fields=['status', 'container_id', 'metadata'])
             broadcast_status(deployment)
 
             if provider.provider_type == CloudProvider.ProviderType.LOCAL:
@@ -180,6 +187,12 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                     raise RuntimeError(
                         f"Container failed readiness checks: {container_name}"
                     )
+                staging_url = ""
+                if staged_only:
+                    _cancel_previous_staged(deployment)
+                    staging_url = service.generate_staging_url(deployment.commit_hash or '')
+                    deployment.staging_url = staging_url
+                    deployment.save(update_fields=['staging_url'])
                 _regenerate_caddyfile()
                 if service.is_public:
                     staging_host = ""
@@ -188,18 +201,22 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                         staging_host = urlparse(staging_url).hostname or ""
                     _wait_for_local_route_ready(
                         deployment, service,
-                        timeout_seconds=DEPLOY_CONTAINER_TIMEOUT,
+                        timeout_seconds=route_timeout or DEPLOY_CONTAINER_TIMEOUT,
                         host_override=staging_host,
                     )
 
             if staged_only:
-                _cancel_previous_staged(deployment)
-                staging_url = service.generate_staging_url(deployment.commit_hash or '')
+                if not deployment.staging_url:
+                    _cancel_previous_staged(deployment)
+                    staging_url = service.generate_staging_url(deployment.commit_hash or '')
+                else:
+                    staging_url = deployment.staging_url
+                stamp_deployment_artifact_metadata(deployment, service, image_ref=image_name)
                 deployment.status = Deployment.Status.STAGED
                 deployment.staging_url = staging_url
                 deployment.staged_at = timezone.now()
                 deployment.container_id = container_name
-                deployment.save(update_fields=['status', 'staging_url', 'staged_at', 'container_id'])
+                deployment.save(update_fields=['status', 'staging_url', 'staged_at', 'container_id', 'metadata'])
                 broadcast_status(deployment)
                 _post_deploy_success(deployment, service)
                 append_log(
@@ -209,9 +226,10 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                 )
                 return
 
+            stamp_deployment_artifact_metadata(deployment, service, image_ref=image_name)
             deployment.status = Deployment.Status.ACTIVE
             deployment.finished_at = timezone.now()
-            deployment.save(update_fields=['status', 'finished_at'])
+            deployment.save(update_fields=['status', 'finished_at', 'metadata'])
             update_stage(
                 deployment, 'Deploy', 'success',
                 (timezone.now() - start).total_seconds()
@@ -350,6 +368,9 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                     f"{detail}"
                 )
 
+        stamp_deployment_artifact_metadata(
+            deployment, service, image_ref=_pulled_ref or image_name
+        )
         env_vars = _build_runtime_env(service, image_name=image_name)
 
         # Fail fast on placeholder secrets: a placeholder (CHANGE_ME,
@@ -470,19 +491,25 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                 # Also signal the adapter this is a staged deployment
                 env_vars['STAGING_DOMAIN'] = staging_host
 
-        # Inject host aliases so Traefik labels include them in Host() rule
-        host_aliases = getattr(service, 'host_aliases', None) or []
-        if host_aliases:
-            alias_hosts = []
-            for item in host_aliases:
-                if isinstance(item, dict):
-                    h = str(item.get('host') or '').strip().lower()
-                else:
-                    h = str(item or '').strip().lower()
-                if h:
-                    alias_hosts.append(h)
-            if alias_hosts:
-                env_vars['HOST_ALIASES'] = ','.join(alias_hosts)
+        # Inject host aliases (plus worker-node hostnames when node-hosted)
+        # so Traefik Host() rules route direct node URLs and node Caddy ->
+        # traefik:80 pooling seamlessly.
+        alias_hosts: list[str] = []
+        for item in getattr(service, 'host_aliases', None) or []:
+            h = str(item.get('host') if isinstance(item, dict) else item or '').strip().lower()
+            if h and h not in alias_hosts:
+                alias_hosts.append(h)
+        try:
+            from apps.deployments.services.caddy_manager.config_generation import (
+                node_service_domains_for_service,
+            )
+            for nh in node_service_domains_for_service(service):
+                if nh not in alias_hosts:
+                    alias_hosts.append(nh)
+        except Exception:
+            pass
+        if alias_hosts:
+            env_vars['HOST_ALIASES'] = ','.join(alias_hosts)
 
         resource = compute.deploy_container(
             name=service.name,
@@ -513,9 +540,12 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
                 resource.resource_id, service.name,
             )
 
+        stamp_deployment_artifact_metadata(
+            deployment, service, image_ref=_pulled_ref or image_name
+        )
         deployment.status = Deployment.Status.HEALTH_CHECK
         deployment.green_container_id = live_container_id
-        deployment.save(update_fields=['status', 'green_container_id'])
+        deployment.save(update_fields=['status', 'green_container_id', 'metadata'])
         # The local adapter may auto-promote after the staging hold. Refresh
         # before the staged-only branch so it cannot overwrite ACTIVE.
         deployment.refresh_from_db()
@@ -717,10 +747,13 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
 
         if staged_only and not auto_promoted and deployment.status != Deployment.Status.ACTIVE:
             _cancel_previous_staged(deployment)
+            stamp_deployment_artifact_metadata(
+                deployment, service, image_ref=_pulled_ref or image_name
+            )
             deployment.status = Deployment.Status.STAGED
             deployment.staged_at = timezone.now()
             deployment.container_id = live_container_id
-            deployment.save(update_fields=['status', 'staged_at', 'container_id'])
+            deployment.save(update_fields=['status', 'staged_at', 'container_id', 'metadata'])
             broadcast_status(deployment)
             _post_deploy_success(deployment, service)
             append_log(
@@ -732,6 +765,9 @@ def _deploy_container(deployment: Deployment, provider: CloudProvider, image_nam
             return
 
         _mark_deployment_active(deployment, "local", "127.0.0.1", live_container_id)
+        stamp_deployment_artifact_metadata(
+            deployment, service, image_ref=_pulled_ref or image_name
+        )
 
         deployment.status = Deployment.Status.ACTIVE
         deployment.container_id = live_container_id

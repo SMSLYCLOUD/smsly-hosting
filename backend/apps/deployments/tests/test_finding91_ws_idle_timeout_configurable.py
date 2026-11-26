@@ -2,16 +2,16 @@ import inspect
 
 from django.test import SimpleTestCase, override_settings
 
-from apps.deployments import consumers
+from apps.deployments.consumers import terminal as terminal_consumers
 
 
 class Finding91WsIdleTimeoutConfigurableTests(SimpleTestCase):
     def test_settings_attribute_is_referenced_in_source(self):
-        source = inspect.getsource(consumers)
+        source = inspect.getsource(terminal_consumers)
         self.assertIn("WEBSOCKET_IDLE_TIMEOUT", source)
 
     def test_default_value_is_420_seconds(self):
-        source = inspect.getsource(consumers)
+        source = inspect.getsource(terminal_consumers)
         self.assertIn(
             'getattr(settings, "WEBSOCKET_IDLE_TIMEOUT", 420)',
             source,

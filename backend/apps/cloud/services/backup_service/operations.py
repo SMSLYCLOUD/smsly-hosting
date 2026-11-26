@@ -1,14 +1,70 @@
 """Standalone backup/restore operations."""
 
+import io
 import logging
 import os
 import shlex
+import tarfile
 import time
 
 import docker as _docker
 from .s3 import delete_cloud_backup_object
 
 logger = logging.getLogger(__name__)
+
+
+def _call_delete_cloud_backup_object(*args, **kwargs):
+    import sys
+    for mod_name in (
+        "apps.deployments.services.backup_service",
+        "apps.cloud.services.backup_service",
+    ):
+        mod = sys.modules.get(mod_name)
+        fn = getattr(mod, "delete_cloud_backup_object", None) if mod else None
+        if fn is not None and fn is not delete_cloud_backup_object:
+            return fn(*args, **kwargs)
+    return delete_cloud_backup_object(*args, **kwargs)
+
+
+def _unpack_exec_demux(output) -> tuple[bytes, bytes]:
+    """Return (stdout_bytes, stderr_bytes) from a demuxed or combined exec output."""
+    if isinstance(output, tuple):
+        return (output[0] or b""), (output[1] or b"")
+    return (output or b""), b""
+
+
+def _extract_tar_archive_member(bits, dest_path: str) -> bool:
+    """Extract the first regular file payload from a Docker get_archive() tar stream."""
+    raw = b"".join(bits)
+    if not raw:
+        return False
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as tf:
+        for member in tf.getmembers():
+            if not member.isfile():
+                continue
+            extracted = tf.extractfile(member)
+            if extracted is None:
+                continue
+            with extracted, open(dest_path, "wb") as out_f:
+                out_f.write(extracted.read())
+            return True
+    return False
+
+
+def _exec_redis_cli(ctr, args: list[str], redis_pw: str = ''):
+    """Run redis-cli inside a container, automatically enabling TLS if mounted."""
+    cmd = ['redis-cli']
+    try:
+        tls_chk = ctr.exec_run(['test', '-f', '/etc/redis/tls/ca.crt'])
+        if getattr(tls_chk, 'exit_code', 1) == 0:
+            cmd.extend(['--tls', '--cacert', '/etc/redis/tls/ca.crt'])
+    except Exception:
+        pass
+    if redis_pw:
+        cmd.extend(['--no-auth-warning', '-a', redis_pw])
+    cmd.extend(args)
+    redis_env = {'REDISCLI_AUTH': redis_pw} if redis_pw else None
+    return ctr.exec_run(cmd, environment=redis_env)
 
 
 def _dump_container_database(container_name, image_tag, temp_dir, docker_client=None):
@@ -28,9 +84,15 @@ def _dump_container_database(container_name, image_tag, temp_dir, docker_client=
         ctr = client.containers.get(container_name)
         # BUG FIX: detect the DB type from the CONTAINER's actual image,
         # not from the backup commit tag (which never contains db names)
-        container_image = (ctr.attrs.get('Config', {}).get('Image', '') or '').lower()
+        cfg = ctr.attrs.get('Config', {}) if isinstance(getattr(ctr, 'attrs', None), dict) else {}
+        raw_image = cfg.get('Image', '')
+        container_image = raw_image.lower() if isinstance(raw_image, str) else ''
         if not container_image:
-            container_image = (ctr.image.tags[0] if ctr.image.tags else '').lower()
+            tags = getattr(getattr(ctr, 'image', None), 'tags', None)
+            if isinstance(tags, (list, tuple)) and tags and isinstance(tags[0], str):
+                container_image = tags[0].lower()
+        if not container_image and isinstance(image_tag, str):
+            container_image = image_tag.lower()
         image_lower = container_image
         dump_file = None
 
@@ -47,32 +109,34 @@ def _dump_container_database(container_name, image_tag, temp_dir, docker_client=
                  '--lock-wait-timeout=5000',
                  '--clean', '--if-exists',
                  '--no-owner', '--no-acl'],
-                environment={'PGPASSWORD': pg_password}
-                ,
+                environment={'PGPASSWORD': pg_password},
+                demux=True,
             )
+            stdout_b, stderr_b = _unpack_exec_demux(result.output)
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
-                    f.write(result.output)
+                    f.write(stdout_b)
                 logger.info("pg_dump successful for %s (db: %s)", container_name, pg_db)
             else:
                 logger.warning(
-                    "pg_dump failed for %s (exit %s). Falling back to pg_dumpall.",
-                    container_name, result.exit_code,
+                    "pg_dump failed for %s (exit %s): %s. Falling back to pg_dumpall.",
+                    container_name, result.exit_code, stderr_b[:200],
                 )
                 result = ctr.exec_run(
                     ['pg_dumpall', '-U', pg_user,
                      '--clean', '--if-exists',
                      '--no-role-passwords',
                      '--lock-wait-timeout=5000'],
-                    environment={'PGPASSWORD': pg_password}
-                    ,
+                    environment={'PGPASSWORD': pg_password},
+                    demux=True,
                 )
+                stdout_b, stderr_b = _unpack_exec_demux(result.output)
                 if result.exit_code == 0:
                     with open(dump_file, 'wb') as f:
-                        f.write(result.output)
+                        f.write(stdout_b)
                     logger.info("pg_dumpall fallback successful for %s", container_name)
                 else:
-                    raise RuntimeError(f"pg_dumpall failed for {container_name}: {result.output}")
+                    raise RuntimeError(f"pg_dumpall failed for {container_name}: {stderr_b or stdout_b}")
         elif 'mysql' in image_lower or 'mariadb' in image_lower:
             dump_file = os.path.join(temp_dir, 'db_dump.sql')
             c_env = {e.split('=', 1)[0]: e.split('=', 1)[1]
@@ -81,24 +145,28 @@ def _dump_container_database(container_name, image_tag, temp_dir, docker_client=
             password = c_env.get('MYSQL_ROOT_PASSWORD', c_env.get('MYSQL_PASSWORD', ''))
             result = ctr.exec_run(
                 ['mysqldump', '--all-databases', '-u', 'root'],
-                environment={'MYSQL_PWD': password}
-                ,
+                environment={'MYSQL_PWD': password},
+                demux=True,
             )
+            stdout_b, stderr_b = _unpack_exec_demux(result.output)
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
-                    f.write(result.output)
+                    f.write(stdout_b)
                 logger.info("mysqldump successful for %s", container_name)
             else:
-                raise RuntimeError(f"mysqldump failed for {container_name}: {result.output}")
+                raise RuntimeError(f"mysqldump failed for {container_name}: {stderr_b or stdout_b}")
         elif 'redis' in image_lower:
             dump_file = os.path.join(temp_dir, 'redis_dump.rdb')
-            ctr.exec_run(['redis-cli', 'SAVE'])
+            c_env = {e.split('=', 1)[0]: e.split('=', 1)[1]
+                     for e in (ctr.attrs.get('Config', {}).get('Env', []))
+                     if '=' in e}
+            redis_pw = c_env.get('REDIS_PASSWORD', '')
+            save_res = _exec_redis_cli(ctr, ['SAVE'], redis_pw=redis_pw)
+            if save_res.exit_code != 0:
+                raise RuntimeError(f"redis-cli SAVE failed for {container_name}: {save_res.output}")
             time.sleep(2)
             bits, _ = ctr.get_archive('/data/dump.rdb')
-            if bits:
-                with open(dump_file, 'wb') as f:
-                    for chunk in bits:
-                        f.write(chunk)
+            if _extract_tar_archive_member(bits, dump_file):
                 logger.info("Redis SAVE+backup successful for %s", container_name)
     except Exception as exc:
         logger.warning("DB dump for %s failed: %s", container_name, exc)
@@ -215,23 +283,94 @@ def _redeploy_restored_service_container(service):
     ]
 
     internal_port = int(getattr(service, 'internal_port', 0) or 3000)
+
+    # Preserve sandbox runtime, resource limits, ScopedNetwork, and volumes.
+    from apps.deployments.models import Volume
+    from apps.deployments.services.container_runtime import (
+        detect_best_runtime,
+        is_sandboxed_runtime,
+        sandbox_dns_servers,
+    )
+    from apps.deployments.services.network_scope import (
+        ScopedNetwork,
+        ensure_platform_bridge,
+        ensure_project_network,
+    )
+
+    runtime_name = None
     try:
-        client.containers.run(
-            image,
-            name=container_name,
-            environment=env_list,
-            detach=True,
-            restart_policy={"Name": "unless-stopped"},
-            labels={
-                "com.smsly.service": service.name,
-                "smsly.service_id": str(service.id),
-                "smsly.restored": "true",
-            },
-            ports={f"{internal_port}/tcp": None},
-        )
+        runtime_name = detect_best_runtime()
+    except Exception:
+        runtime_name = None
+
+    project = getattr(service, 'project', None)
+    primary_net = 'smsly-net'
+    if project is not None:
+        try:
+            net_cfg = ScopedNetwork.resolve_network_config(project)
+            primary_net = str(net_cfg.get('name') or 'smsly-net').strip() or 'smsly-net'
+            ensure_project_network(primary_net, client=client)
+        except Exception as net_exc:
+            logger.debug("ScopedNetwork resolve fallback for restored %s: %s", container_name, net_exc)
+            primary_net = 'smsly-net'
+
+    aliases = [container_name, f"{container_name}.default.internal"]
+    mesh_alias = str(getattr(service, 'mesh_alias', '') or '').strip()
+    if mesh_alias and mesh_alias not in aliases:
+        aliases.append(mesh_alias)
+
+    networks_dict = {
+        primary_net: client.api.create_endpoint_config(aliases=aliases),
+    }
+    try:
+        platform_bridge = ensure_platform_bridge(client=client)
+        if platform_bridge and platform_bridge != primary_net:
+            networks_dict[platform_bridge] = client.api.create_endpoint_config(aliases=aliases)
+    except Exception:
+        pass
+
+    vol_binds = {}
+    for vol in Volume.objects.filter(service=service):
+        if vol.name and vol.mount_path:
+            vol_binds[vol.name] = {'bind': vol.mount_path, 'mode': 'rw'}
+
+    mem_mb = int(getattr(service, 'memory_mb', 512) or 512)
+    cpu_cores = float(getattr(service, 'cpu_cores', 1.0) or 1.0)
+    create_kwargs = {
+        'image': image,
+        'name': container_name,
+        'environment': env_list,
+        'network': primary_net,
+        'networking_config': networks_dict,
+        'detach': True,
+        'restart_policy': {"Name": "unless-stopped"},
+        'init': True,
+        'mem_limit': f"{max(mem_mb, 64)}m",
+        'nano_cpus': int(max(cpu_cores, 0.1) * 1e9),
+        'pids_limit': 1024,
+        'cap_drop': ["ALL"],
+        'cap_add': ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
+        'security_opt': ["no-new-privileges:true", "apparmor:docker-default"],
+        'labels': {
+            "com.smsly.service": service.name,
+            "smsly.service_id": str(service.id),
+            "smsly.restored": "true",
+        },
+        'ports': {f"{internal_port}/tcp": None},
+    }
+    if vol_binds:
+        create_kwargs['volumes'] = vol_binds
+    if runtime_name:
+        create_kwargs['runtime'] = runtime_name
+        if is_sandboxed_runtime(runtime_name):
+            create_kwargs['dns'] = sandbox_dns_servers()
+
+    try:
+        ctr = client.containers.create(**create_kwargs)
+        ctr.start()
         logger.info(
-            "Restore redeploy: recreated container %s from image %s",
-            container_name, image,
+            "Restore redeploy: recreated container %s from image %s on %s",
+            container_name, image, primary_net,
         )
     except Exception as exc:
         raise RuntimeError(
@@ -318,15 +457,16 @@ def _dump_service_addons(service, temp_dir, docker_client=None):
                 ['pg_dump', '-h', '127.0.0.1', '-U', url_user, '-d', url_db,
                  '--lock-wait-timeout=5000', '--clean', '--if-exists',
                  '--no-owner', '--no-acl'],
-                environment={'PGPASSWORD': url_password}
-                ,
+                environment={'PGPASSWORD': url_password},
+                demux=True,
             )
+            stdout_b, stderr_b = _unpack_exec_demux(result.output)
             if result.exit_code != 0:
                 raise RuntimeError(
                     f"Addon dump failed for {addon.name}: pg_dump exit "
-                    f"{result.exit_code}: {(result.output or b'')[:200]}")
+                    f"{result.exit_code}: {(stderr_b or stdout_b)[:200]}")
             with open(dump_path, 'wb') as f:
-                f.write(result.output)
+                f.write(stdout_b)
             logger.info("Addon dump successful for %s (shared %s)", addon.name, url_db)
             manifest.append({'addon': addon.name, 'addon_type': kind,
                              'provision_mode': 'shared', 'filename': filename,
@@ -354,51 +494,59 @@ def _dump_service_addons(service, temp_dir, docker_client=None):
                 ['pg_dump', '-U', pg_user, '-d', pg_db,
                  '--lock-wait-timeout=5000', '--clean', '--if-exists',
                  '--no-owner', '--no-acl'],
-                environment={'PGPASSWORD': pg_password}
-                ,
+                environment={'PGPASSWORD': pg_password},
+                demux=True,
             )
+            stdout_b, stderr_b = _unpack_exec_demux(result.output)
             if result.exit_code != 0:
                 result = ctr.exec_run(
                     ['pg_dumpall', '-U', pg_user,
                      '--clean', '--if-exists', '--no-role-passwords',
                      '--lock-wait-timeout=5000'],
-                    environment={'PGPASSWORD': pg_password}
-                    ,
+                    environment={'PGPASSWORD': pg_password},
+                    demux=True,
                 )
+                stdout_b, stderr_b = _unpack_exec_demux(result.output)
                 if result.exit_code != 0:
                     raise RuntimeError(
                         f"Addon dump failed for {addon.name}: pg_dumpall exit "
-                        f"{result.exit_code}: {(result.output or b'')[:200]}")
+                        f"{result.exit_code}: {(stderr_b or stdout_b)[:200]}")
             with open(dump_path, 'wb') as f:
-                f.write(result.output)
+                f.write(stdout_b)
             logger.info("Addon dump successful for %s (db: %s)", addon.name, pg_db)
             manifest.append({'addon': addon.name, 'addon_type': kind,
                              'provision_mode': 'container', 'filename': filename,
                              'db': pg_db})
         elif kind in ('MYSQL', 'MARIADB'):
-            password = c_env.get('MYSQL_ROOT_PASSWORD', c_env.get('MYSQL_PASSWORD', ''))
+            password = c_env.get('MYSQL_ROOT_PASSWORD', c_env.get('MYSQL_PASSWORD', '')) or url_password
             result = ctr.exec_run(
                 ['mysqldump', '--all-databases', '-u', 'root'],
-                environment={'MYSQL_PWD': password}
-                ,
+                environment={'MYSQL_PWD': password},
+                demux=True,
             )
+            stdout_b, stderr_b = _unpack_exec_demux(result.output)
             if result.exit_code != 0:
                 raise RuntimeError(
                     f"Addon dump failed for {addon.name}: mysqldump exit "
-                    f"{result.exit_code}: {(result.output or b'')[:200]}")
+                    f"{result.exit_code}: {(stderr_b or stdout_b)[:200]}")
             with open(dump_path, 'wb') as f:
-                f.write(result.output)
+                f.write(stdout_b)
             manifest.append({'addon': addon.name, 'addon_type': kind,
                              'provision_mode': 'container', 'filename': filename,
                              'db': 'all'})
         elif kind == 'REDIS':
-            ctr.exec_run(['redis-cli', 'SAVE'])
+            redis_pw = c_env.get('REDIS_PASSWORD', '') or url_password
+            save_res = _exec_redis_cli(ctr, ['SAVE'], redis_pw=redis_pw)
+            if save_res.exit_code != 0:
+                raise RuntimeError(
+                    f"Addon dump failed for {addon.name}: redis-cli SAVE exit "
+                    f"{save_res.exit_code}: {(save_res.output or b'')[:200]}")
             time.sleep(2)
             try:
                 bits, _ = ctr.get_archive('/data/dump.rdb')
             except Exception:
                 bits = None
-            if not bits:
+            if not bits or not _extract_tar_archive_member(bits, dump_path):
                 # No RDB on disk (persistence off / custom dbfilename):
                 # nothing durable to back up — skip truthfully instead
                 # of failing the whole backup over ephemeral cache.
@@ -406,24 +554,24 @@ def _dump_service_addons(service, temp_dir, docker_client=None):
                     "Addon dump skipped for %s: no dump.rdb "
                     "(redis persistence off?)", addon.name)
                 continue
-            with open(dump_path, 'wb') as f:
-                for chunk in bits:
-                    f.write(chunk)
             manifest.append({'addon': addon.name, 'addon_type': kind,
                              'provision_mode': 'container', 'filename': filename,
                              'db': 'rdb'})
         elif kind in ('MONGO', 'MONGODB'):
-            result = ctr.exec_run(
-                ['mongodump', '--archive=/tmp/mongo.archive', '--gzip'])
+            mongo_user = c_env.get('MONGO_INITDB_ROOT_USERNAME', '') or url_user
+            mongo_pw = c_env.get('MONGO_INITDB_ROOT_PASSWORD', '') or url_password
+            cmd = ['mongodump', '--archive=/tmp/mongo.archive', '--gzip']
+            if mongo_user and mongo_pw:
+                cmd.extend(['-u', mongo_user, '-p', mongo_pw, '--authenticationDatabase', 'admin'])
+            result = ctr.exec_run(cmd, demux=True)
+            stdout_b, stderr_b = _unpack_exec_demux(result.output)
             if result.exit_code != 0:
                 raise RuntimeError(
-                    f"Addon dump failed for {addon.name}: mongodump exit {result.exit_code}")
+                    f"Addon dump failed for {addon.name}: mongodump exit {result.exit_code}: "
+                    f"{(stderr_b or stdout_b)[:200]}")
             bits, _ = ctr.get_archive('/tmp/mongo.archive')
-            if not bits:
+            if not bits or not _extract_tar_archive_member(bits, dump_path):
                 raise RuntimeError(f"Addon dump failed for {addon.name}: empty archive")
-            with open(dump_path, 'wb') as f:
-                for chunk in bits:
-                    f.write(chunk)
             manifest.append({'addon': addon.name, 'addon_type': kind,
                              'provision_mode': 'container', 'filename': filename,
                              'db': 'archive'})
@@ -705,27 +853,29 @@ def backup_addon(addon_id: str) -> str | None:
             pg_password = c_env.get('POSTGRES_PASSWORD', '')
             result = ctr.exec_run(
                 ['pg_dump', '-U', pg_user, '-d', pg_db, '--lock-wait-timeout=5000', '-c'],
-                environment={'PGPASSWORD': pg_password}
-                ,
+                environment={'PGPASSWORD': pg_password},
+                demux=True,
             )
+            stdout_b, stderr_b = _unpack_exec_demux(result.output)
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
-                    f.write(result.output)
+                    f.write(stdout_b)
                 return dump_file
             logger.warning(
-                "pg_dump failed for addon %s (exit %s). Falling back to pg_dumpall.",
-                addon_id, result.exit_code,
+                "pg_dump failed for addon %s (exit %s): %s. Falling back to pg_dumpall.",
+                addon_id, result.exit_code, stderr_b[:200],
             )
             result = ctr.exec_run(
                 ['pg_dumpall', '-U', pg_user, '-c', '--lock-wait-timeout=5000'],
-                environment={'PGPASSWORD': pg_password}
-                ,
+                environment={'PGPASSWORD': pg_password},
+                demux=True,
             )
+            stdout_b, stderr_b = _unpack_exec_demux(result.output)
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
-                    f.write(result.output)
+                    f.write(stdout_b)
                 return dump_file
-            raise RuntimeError(f"Addon pg_dumpall failed with exit {result.exit_code}: {result.output}")
+            raise RuntimeError(f"Addon pg_dumpall failed with exit {result.exit_code}: {stderr_b or stdout_b}")
         elif 'mysql' in atype or 'mariadb' in atype:
             dump_file = os.path.join(backup_dir, 'db_dump.sql')
             c_env = {e.split('=', 1)[0]: e.split('=', 1)[1]
@@ -734,35 +884,45 @@ def backup_addon(addon_id: str) -> str | None:
             password = c_env.get('MYSQL_ROOT_PASSWORD', c_env.get('MYSQL_PASSWORD', ''))
             result = ctr.exec_run(
                 ['mysqldump', '--all-databases', '-u', 'root'],
-                environment={'MYSQL_PWD': password}
-                ,
+                environment={'MYSQL_PWD': password},
+                demux=True,
             )
+            stdout_b, stderr_b = _unpack_exec_demux(result.output)
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
-                    f.write(result.output)
+                    f.write(stdout_b)
                 return dump_file
-            raise RuntimeError(f"Addon mysqldump failed with exit {result.exit_code}: {result.output}")
+            raise RuntimeError(f"Addon mysqldump failed with exit {result.exit_code}: {stderr_b or stdout_b}")
         elif 'redis' in atype:
             dump_file = os.path.join(backup_dir, 'redis_dump.rdb')
-            ctr.exec_run(['redis-cli', 'SAVE'])
+            c_env = {e.split('=', 1)[0]: e.split('=', 1)[1]
+                     for e in (ctr.attrs.get('Config', {}).get('Env', []))
+                     if '=' in e}
+            redis_pw = c_env.get('REDIS_PASSWORD', '')
+            save_res = _exec_redis_cli(ctr, ['SAVE'], redis_pw=redis_pw)
+            if save_res.exit_code != 0:
+                raise RuntimeError(f"redis-cli SAVE failed for addon {addon_id}: {save_res.output}")
             time.sleep(1)
             bits, _ = ctr.get_archive('/data/dump.rdb')
-            if bits:
-                with open(dump_file, 'wb') as f:
-                    for chunk in bits:
-                        f.write(chunk)
+            if bits and _extract_tar_archive_member(bits, dump_file):
                 return dump_file
         elif 'mongo' in atype:
             dump_file = os.path.join(backup_dir, 'mongo_dump.archive')
-            result = ctr.exec_run(['mongodump', '--archive=/tmp/mongo.archive', '--gzip'])
+            c_env = {e.split('=', 1)[0]: e.split('=', 1)[1]
+                     for e in (ctr.attrs.get('Config', {}).get('Env', []))
+                     if '=' in e}
+            mongo_user = c_env.get('MONGO_INITDB_ROOT_USERNAME', '')
+            mongo_pw = c_env.get('MONGO_INITDB_ROOT_PASSWORD', '')
+            cmd = ['mongodump', '--archive=/tmp/mongo.archive', '--gzip']
+            if mongo_user and mongo_pw:
+                cmd.extend(['-u', mongo_user, '-p', mongo_pw, '--authenticationDatabase', 'admin'])
+            result = ctr.exec_run(cmd, demux=True)
+            stdout_b, stderr_b = _unpack_exec_demux(result.output)
             if result.exit_code == 0:
                 bits, _ = ctr.get_archive('/tmp/mongo.archive')
-                if bits:
-                    with open(dump_file, 'wb') as f:
-                        for chunk in bits:
-                            f.write(chunk)
+                if bits and _extract_tar_archive_member(bits, dump_file):
                     return dump_file
-            raise RuntimeError(f"mongodump failed for addon {addon_id}: exit {result.exit_code}")
+            raise RuntimeError(f"mongodump failed for addon {addon_id}: exit {result.exit_code}: {(stderr_b or stdout_b)[:200]}")
     except Exception as exc:
         logger.warning("Addon backup failed for %s: %s", addon_id, exc)
     return None
@@ -937,7 +1097,7 @@ def purge_user_backups(user_id) -> dict:
 
         bucket, key, endpoint, region, access_key, secret_key = _resolve_cloud_config(backup)
         if bucket and key:
-            if delete_cloud_backup_object(
+            if _call_delete_cloud_backup_object(
                 bucket, key, endpoint=endpoint, region=region,
                 access_key=access_key, secret_key=secret_key,
             ):
@@ -978,7 +1138,7 @@ def purge_user_backups(user_id) -> dict:
         if getattr(backup, 'cloud_uploaded', False):
             bucket, key, endpoint, region, access_key, secret_key = _resolve_cloud_config(backup)
             if bucket and key:
-                if delete_cloud_backup_object(
+                if _call_delete_cloud_backup_object(
                     bucket, key, endpoint=endpoint, region=region,
                     access_key=access_key, secret_key=secret_key,
                 ):

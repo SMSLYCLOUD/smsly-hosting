@@ -11,7 +11,7 @@ import logging
 from rest_framework import permissions
 
 from .codes import ADMIN_ACCESS, BILLING_MANAGE, BILLING_VIEW
-from .utils import has_permission
+from .utils import has_permission, user_can_manage_billing, user_can_view_billing
 
 logger = logging.getLogger(__name__)
 
@@ -31,19 +31,21 @@ class HasPermission(permissions.BasePermission):
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
-        # For list/create actions we don't have a specific object yet.
-        # has_permission() requires an object, so for list we check
-        # against the view's queryset model.
-        if view.action in ('list', 'create', 'metadata'):
-            # Use queryset model as a proxy — the object check happens
-            # in has_object_permission() below.
-            queryset = view.get_queryset() if hasattr(view, 'get_queryset') else view.queryset
-            if hasattr(queryset, 'model'):
-                result = has_permission(request.user, queryset.model(), self.code)
-                if not result:
-                    request._denied_permission = self.code  # type: ignore[attr-defined]
-                return result
-            return True
+        if self.code == ADMIN_ACCESS:
+            result = bool(getattr(request.user, 'is_superuser', False))
+            if not result:
+                request._denied_permission = self.code  # type: ignore[attr-defined]
+            return result
+        if self.code == BILLING_MANAGE:
+            result = user_can_manage_billing(request.user)
+            if not result:
+                request._denied_permission = self.code  # type: ignore[attr-defined]
+            return result
+        if self.code == BILLING_VIEW:
+            result = user_can_view_billing(request.user)
+            if not result:
+                request._denied_permission = self.code  # type: ignore[attr-defined]
+            return result
         return True
 
     def has_object_permission(self, request, view, obj):
@@ -142,9 +144,7 @@ class CanManageBilling(permissions.BasePermission):
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
-        # Billing management checks don't require a specific object.
-        # Check against a dummy — has_permission resolves membership flags.
-        result = has_permission(request.user, object(), BILLING_MANAGE)
+        result = user_can_manage_billing(request.user)
         if not result:
             request._denied_permission = BILLING_MANAGE  # type: ignore[attr-defined]
         return result
@@ -156,7 +156,7 @@ class CanViewBilling(permissions.BasePermission):
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
-        result = has_permission(request.user, object(), BILLING_VIEW)
+        result = user_can_view_billing(request.user)
         if not result:
             request._denied_permission = BILLING_VIEW  # type: ignore[attr-defined]
         return result

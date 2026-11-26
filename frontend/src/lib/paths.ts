@@ -45,6 +45,8 @@ export const PROTECTED_PREFIXES = [
   "/restore",
   "/addons",
   "/mcp",
+  "/cloud",
+  "/console",
 ] as const;
 
 export function isProtectedPath(pathname: string): boolean {
@@ -102,4 +104,48 @@ export function resetRedirectGuard(): void {
   if (typeof sessionStorage === "undefined") return;
   sessionStorage.removeItem(AUTH_REDIRECT_GUARD_KEY);
   sessionStorage.removeItem("__auth_redirect_count");
+}
+
+/**
+ * Validate a redirect/navigation URL against an http:/https: allowlist,
+ * rejecting javascript:, data:, control characters, and protocol-relative (//)
+ * injections. Returns the normalized URL string, or null if unsafe.
+ */
+export function getSafeRedirectUrl(rawUrl: unknown): string | null {
+  if (typeof rawUrl !== "string") return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+  if (/[\u0000-\u001F\u007F]/.test(trimmed)) return null;
+  if (trimmed.startsWith("//") || trimmed.startsWith("\\") || trimmed.startsWith("/\\")) {
+    return null;
+  }
+
+  try {
+    const isRelative = trimmed.startsWith("/");
+    if (!isRelative && !/^https?:\/\//i.test(trimmed)) {
+      return null;
+    }
+    const base =
+      typeof window !== "undefined" && window.location?.origin
+        ? window.location.origin
+        : "http://localhost";
+    const parsed = new URL(trimmed, base);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+    return isRelative ? `${parsed.pathname}${parsed.search}${parsed.hash}` : parsed.href;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Safely assign window.location to a validated http:/https: (or same-origin) URL.
+ * Returns true if navigation was initiated, false if the URL was rejected.
+ */
+export function safeAssignUrl(rawUrl: unknown): boolean {
+  const safe = getSafeRedirectUrl(rawUrl);
+  if (!safe || typeof window === "undefined") return false;
+  window.location.assign(safe);
+  return true;
 }

@@ -82,6 +82,7 @@ export default function AddonDetailsPage() {
         setUpdatingBucket(true);
         try {
             await addonsApi.toggleBucketPublic(id as string, isPublic);
+            setAddon((prev) => prev ? { ...prev, is_bucket_public: isPublic } : prev);
             toast({ title: "Bucket Access Updated", description: `Bucket is now ${isPublic ? 'public' : 'private'}.` });
         } catch (err) {
             toast({ title: "Error", description: "Failed to update bucket access policy.", variant: "destructive" });
@@ -104,7 +105,7 @@ export default function AddonDetailsPage() {
                     <div>
                         <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
                             {addon.name}
-                            <Badge variant={addon.status === 'RUNNING' ? 'default' : 'secondary'}>{addon.status}</Badge>
+                            <Badge variant={addon.status === 'ACTIVE' ? 'default' : 'secondary'}>{addon.status}</Badge>
                         </h1>
                         <p className="text-muted-foreground mt-2">{addon.addon_type} Instance • Created {new Date(addon.created_at).toLocaleDateString()}</p>
                     </div>
@@ -158,9 +159,18 @@ export default function AddonDetailsPage() {
                                             variant="outline"
                                             size="sm"
                                             disabled={updatingBucket}
-                                            onClick={() => {
-                                                const makePublic = window.confirm("Make bucket public? Anyone will be able to read objects from the bucket. Ensure you do not store sensitive data if enabling this.");
-                                                if (makePublic !== null) handleToggleBucketPublic(makePublic);
+                                            onClick={async () => {
+                                                const nextPublic = !addon.is_bucket_public;
+                                                if (nextPublic) {
+                                                    const ok = await confirm({
+                                                        title: 'Make bucket public?',
+                                                        message: 'Anyone will be able to read objects from the bucket. Ensure you do not store sensitive data if enabling this.',
+                                                        variant: 'warning',
+                                                        confirmText: 'Make Public',
+                                                    });
+                                                    if (!ok) return;
+                                                }
+                                                handleToggleBucketPublic(nextPublic);
                                             }}
                                             className="text-xs"
                                         >
@@ -188,11 +198,11 @@ export default function AddonDetailsPage() {
                                 <>
                                     <div className="flex justify-between items-center border-b pb-2">
                                         <span className="text-sm font-medium">CPU Usage</span>
-                                        <span className="text-lg font-bold">{metrics.cpu_percent || 0}%</span>
+                                        <span className="text-lg font-bold">{metrics?.current?.cpu_percent ?? 0}%</span>
                                     </div>
                                     <div className="flex justify-between items-center border-b pb-2">
                                         <span className="text-sm font-medium">Memory</span>
-                                        <span className="text-lg font-bold">{metrics.memory_mb || 0} MB</span>
+                                        <span className="text-lg font-bold">{metrics?.current?.memory_usage ?? 0} MB</span>
                                     </div>
                                     <div className="flex justify-between items-center pb-2">
                                         <span className="text-sm font-medium">Disk</span>

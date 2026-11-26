@@ -264,8 +264,14 @@ def test_f4_promote_container_preserves_runtime_readonly_tmpfs_ulimits_extra_hos
     assert kw["tmpfs"] == custom_tmpfs
     assert kw["ulimits"] == custom_ulimits
     assert kw["dns"] == ["10.100.0.1", "8.8.8.8", "1.1.1.1"]
-    assert kw["extra_hosts"]["postgres-svc"] == "172.30.0.10"
-    assert kw["extra_hosts"]["redis-svc"] == "172.30.0.11"
+    eh = kw["extra_hosts"]
+    eh_map = (
+        eh
+        if isinstance(eh, dict)
+        else dict(item.split(":", 1) for item in eh if ":" in item)
+    )
+    assert eh_map["postgres-svc"] == "172.30.0.10"
+    assert eh_map["redis-svc"] == "172.30.0.11"
     assert any(":/etc/resolv.conf:ro" in str(b) for b in kw["volumes"])
 
 
@@ -472,7 +478,7 @@ def test_f3_service_restore_requests_dual_home_only_when_service_opted_in():
                 self.sent = body
             return {"exit_code": 0, "stdout": ""}
 
-        def _seed_target_deployment_record(self, metadata):
+        def _seed_target_deployment_record(self, metadata, container_id=None):
             return None
 
     with patch("apps.deployments.models.network_scope.ScopedNetwork"):

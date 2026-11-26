@@ -5,6 +5,7 @@ from datetime import timedelta
 
 import docker
 from celery import shared_task
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.cloud.models import CloudProvider
@@ -166,7 +167,19 @@ def auto_promote_staged_deployments():
     for deployment in staged:
         try:
             from .provider import _resolve_provider_for_service
-            provider = _resolve_provider_for_service(deployment.service, prefer_local=True)
+            svc_server = getattr(deployment.service, 'server', None)
+            is_local_dep = bool(getattr(deployment, 'target_is_local', False)) or (
+                getattr(deployment, 'target_server_id', None) is None
+                and (svc_server is None or getattr(svc_server, 'is_primary', False))
+            )
+            try:
+                provider = _resolve_provider_for_service(
+                    deployment.service,
+                    prefer_local=is_local_dep,
+                )
+            except Exception:
+                provider = None
+            provider = provider or getattr(deployment.service, 'provider', None)
             if not provider:
                 logger.warning("Auto-promote: no provider for %s, skipping", deployment.service.name)
                 continue
@@ -231,10 +244,12 @@ def auto_promote_staged_deployments():
             except Exception:
                 pass
             try:
-                meta = deployment.metadata if isinstance(deployment.metadata, dict) else {}
+                had_dict_meta = isinstance(deployment.metadata, dict)
+                meta = dict(deployment.metadata) if had_dict_meta else {}
                 attempts = int(meta.get('auto_promote_attempts', 0) or 0) + 1
                 meta['auto_promote_attempts'] = attempts
-                deployment.metadata = meta
+                if had_dict_meta or attempts >= 5:
+                    deployment.metadata = meta
                 if attempts >= 5:
                     deployment.status = Deployment.Status.FAILED
                     deployment.finished_at = timezone.now()
@@ -248,7 +263,7 @@ def auto_promote_staged_deployments():
                         "Auto-promote: giving up on deployment %s after %d attempts — marked FAILED",
                         deployment.id, attempts,
                     )
-                else:
+                elif had_dict_meta:
                     deployment.save(update_fields=['metadata', 'updated_at'])
             except Exception as meta_exc:
                 logger.debug("Auto-promote retry-counter update failed for %s: %s", deployment.id, meta_exc)
@@ -284,6 +299,12 @@ def reap_unhealthy_staged_deployments():
     staged = Deployment.objects.filter(
         status=Deployment.Status.STAGED,
         staged_at__lte=threshold,
+    ).filter(
+        Q(target_is_local=True)
+        | (
+            Q(target_server__isnull=True)
+            & (Q(service__server__isnull=True) | Q(service__server__is_primary=True))
+        )
     ).select_related('service')[:STALE_STAGED_GREEN_BATCH_SIZE]
 
     reaped = 0
@@ -419,7 +440,7 @@ def auto_review_deployments():
     approved = 0
     for deployment in reviews:
         try:
-            from ..views._helpers import _resolve_provider_for_target
+            from apps.deployments.views._helpers import _resolve_provider_for_target
             provider = _resolve_provider_for_target(
                 deployment.service,
                 target_is_local=bool(getattr(deployment, 'target_is_local', False)),
@@ -428,11 +449,12 @@ def auto_review_deployments():
                 logger.warning("Auto-review: no provider for %s, skipping", deployment.service.name)
                 continue
 
+            from ..deployment.tasks_deploy import resume_deploy_task
+
             deployment.status = Deployment.Status.BUILDING
             deployment.started_at = timezone.now()
             deployment.save(update_fields=['status', 'started_at'])
 
-            from .build import resume_deploy_task
             resume_deploy_task.delay(
                 deployment_id=str(deployment.id),
                 provider_id=str(provider.id),

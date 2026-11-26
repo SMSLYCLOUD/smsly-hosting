@@ -7,83 +7,105 @@ if ! is_checkpoint_done "memory_hardened"; then
 # ─── Swap: Ensure swap is at least 4x RAM ────────────────────────────────────
 ensure_system_swap
 
-# ─── Auto-Maintenance: Install OOM Swap Adjuster ─────────────────────────────
+# ─── Auto-Maintenance: Install Bounded Emergency Swap Adjuster ───────────────
 OOM_SCRIPT="/opt/smsly/scripts/oom-swap-adjuster.sh"
 mkdir -p /opt/smsly/scripts
 cat << 'EOF' > "$OOM_SCRIPT"
 #!/usr/bin/env bash
 # oom-swap-adjuster.sh
 #
-# Monitors the system for Out Of Memory (OOM) kills. If one is detected within the last
-# X minutes, it automatically increases the swap space by 200MB up to a maximum of 4x RAM.
-# This serves as an auto-maintenance feature to prevent recurring build crashes.
+# Adds bounded emergency swap ONLY when the host itself is under real memory
+# pressure (MemAvailable < 10% of MemTotal) or disk swap is critically low.
+# Ignores isolated container cgroup OOM kills when the host has plenty of
+# MemAvailable. Caps total disk swap at 4096MB (4GB) and max 2 swapfiles,
+# using fixed slot names so /swapfile* can never stack infinitely.
 
 set -euo pipefail
 
 LOG_FILE="/var/log/smsly-oom-adjuster.log"
-MINUTES_BACK=10
 SWAPFILE_PREFIX="/swapfile-smsly-auto"
+MAX_TOTAL_SWAP_MB=4096
+MAX_SWAPFILES=2
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
 }
 
-# Check for OOM events in the last N minutes using journalctl
-OOM_COUNT=$(journalctl -k --since "${MINUTES_BACK} minutes ago" | grep -i "out of memory" | wc -l || true)
-
-if [ "$OOM_COUNT" -eq 0 ]; then
-    # No OOM detected recently, exit quietly.
+MEM_TOTAL_KB=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+MEM_AVAIL_KB=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+if [ "${MEM_TOTAL_KB:-0}" -le 0 ]; then
     exit 0
-
 fi
 
-log "Detected $OOM_COUNT OOM events in the last $MINUTES_BACK minutes. Evaluating swap size."
+MEM_AVAIL_PCT=$((MEM_AVAIL_KB * 100 / MEM_TOTAL_KB))
+SWAP_TOTAL_KB=$(awk '/^SwapTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+SWAP_FREE_KB=$(awk '/^SwapFree:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
 
-# Get RAM size in MB
-RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
+SWAP_CRITICAL=0
+if [ "${SWAP_TOTAL_KB:-0}" -gt 0 ]; then
+    SWAP_FREE_PCT=$((SWAP_FREE_KB * 100 / SWAP_TOTAL_KB))
+    if [ "$SWAP_FREE_PCT" -lt 10 ] && [ "$MEM_AVAIL_PCT" -lt 25 ]; then
+        SWAP_CRITICAL=1
+    fi
+fi
+
+# Only trigger on real host-wide memory pressure (MemAvailable < 10%) or
+# critically low swap while MemAvailable < 25%.
+if [ "$MEM_AVAIL_PCT" -ge 10 ] && [ "$SWAP_CRITICAL" -eq 0 ]; then
+    exit 0
+fi
+
+RAM_MB=$((MEM_TOTAL_KB / 1024))
 CURRENT_SWAP_MB=$(free -m | awk '/^Swap:/{print $2}')
 
-# Maximum allowed swap is 4x RAM
-MAX_SWAP_MB=$((RAM_MB * 4))
+# Hard cap at 4GB (4096MB) total swap (or 2x RAM on <2GB hosts).
+MAX_SWAP_MB=$((RAM_MB * 2))
+[ "$MAX_SWAP_MB" -gt "$MAX_TOTAL_SWAP_MB" ] && MAX_SWAP_MB="$MAX_TOTAL_SWAP_MB"
 
-if [ "$CURRENT_SWAP_MB" -ge "$MAX_SWAP_MB" ]; then
-    log "Swap is already at or above the maximum allowed limit (4x RAM = ${MAX_SWAP_MB}MB). No further auto-adjustment will be made."
+if [ "${CURRENT_SWAP_MB:-0}" -ge "$MAX_SWAP_MB" ]; then
     exit 0
 fi
 
-# Calculate new swap chunk to add (200MB)
-ADD_SWAP_MB=200
-NEW_TOTAL_MB=$((CURRENT_SWAP_MB + ADD_SWAP_MB))
+# Cap at max 2 disk swapfiles total (excluding zram) and never infinitely stack /swapfile*
+ACTIVE_DISK_SWAPS=$(awk 'NR>1 && $1 !~ /^\/dev\/zram/ {c++} END {print c+0}' /proc/swaps 2>/dev/null || echo 0)
+EXISTING_SWAPFILES=$(find / -maxdepth 1 -name 'swapfile*' 2>/dev/null | wc -l || echo 0)
+if [ "${ACTIVE_DISK_SWAPS:-0}" -ge "$MAX_SWAPFILES" ] || [ "${EXISTING_SWAPFILES:-0}" -ge "$MAX_SWAPFILES" ]; then
+    exit 0
+fi
 
-# Cap at max if we would overshoot
+ADD_SWAP_MB=512
+NEW_TOTAL_MB=$((CURRENT_SWAP_MB + ADD_SWAP_MB))
 if [ "$NEW_TOTAL_MB" -gt "$MAX_SWAP_MB" ]; then
     ADD_SWAP_MB=$((MAX_SWAP_MB - CURRENT_SWAP_MB))
     NEW_TOTAL_MB=$MAX_SWAP_MB
 fi
-
-if [ "$ADD_SWAP_MB" -le 0 ]; then
+if [ "$ADD_SWAP_MB" -lt 128 ]; then
     exit 0
 fi
 
-# Skip if root filesystem has less than 2GB headroom beyond the new swapfile.
+# Require at least 4GB disk headroom beyond the new swapfile.
 AVAIL_DISK_MB=$(df -Pm / | awk 'NR==2{print $4}')
-if [ "${AVAIL_DISK_MB:-0}" -lt $((ADD_SWAP_MB + 2048)) ]; then
-    log "Insufficient disk space (${AVAIL_DISK_MB}MB free). Skipping swap adjustment."
+if [ "${AVAIL_DISK_MB:-0}" -lt $((ADD_SWAP_MB + 4096)) ]; then
+    log "Insufficient disk space (${AVAIL_DISK_MB}MB free). Skipping emergency swap."
     exit 0
 fi
 
-# Guard against kernel MAX_SWAPFILES exhaustion (unactivated files would leak disk).
-ACTIVE_SWAPS=$(swapon --noheadings 2>/dev/null | wc -l || echo 0)
-if [ "${ACTIVE_SWAPS:-0}" -ge 24 ]; then
-    log "Active swap area count ($ACTIVE_SWAPS) at safety cap. Skipping swap adjustment."
+# Pick a deterministic bounded slot (never timestamp-stacked)
+NEW_SWAPFILE=""
+for _slot in 1 2; do
+    _cand="${SWAPFILE_PREFIX}-${_slot}"
+    if [ ! -e "$_cand" ]; then
+        NEW_SWAPFILE="$_cand"
+        break
+    fi
+done
+if [ -z "$NEW_SWAPFILE" ]; then
     exit 0
 fi
 
-NEW_SWAPFILE="${SWAPFILE_PREFIX}-$(date '+%s')"
-log "Increasing swap by ${ADD_SWAP_MB}MB. Creating ${NEW_SWAPFILE}..."
+log "Host MemAvailable=${MEM_AVAIL_PCT}% (swap_critical=${SWAP_CRITICAL}). Adding bounded emergency swap ${ADD_SWAP_MB}MB at ${NEW_SWAPFILE}..."
 
 if ! fallocate -l "${ADD_SWAP_MB}M" "$NEW_SWAPFILE" 2>/dev/null; then
-    log "fallocate failed, trying dd..."
     if ! dd if=/dev/zero of="$NEW_SWAPFILE" bs=1M count="$ADD_SWAP_MB" status=none; then
         log "Failed to create swap file."
         rm -f "$NEW_SWAPFILE"
@@ -100,12 +122,11 @@ if ! mkswap "$NEW_SWAPFILE" >/dev/null 2>&1 || ! (swapon -p 10 "$NEW_SWAPFILE" 2
     exit 1
 fi
 
-# Make it permanent
 if ! grep -q "$NEW_SWAPFILE" /etc/fstab ; then
     echo "$NEW_SWAPFILE none swap sw,pri=10 0 0" >> /etc/fstab
 fi
 
-log "Successfully added ${ADD_SWAP_MB}MB of swap. Total swap is now approx ${NEW_TOTAL_MB}MB."
+log "Added ${ADD_SWAP_MB}MB emergency swap (${NEW_SWAPFILE}). Total swap is now approx ${NEW_TOTAL_MB}MB."
 EOF
 chmod +x "$OOM_SCRIPT"
 
@@ -194,18 +215,19 @@ fi
 
 # ─── OOM Protection for critical containers ──────────────────────────────────
 echo -e "${BLUE}  → Setting OOM protection for critical containers...${NC}"
-if [ "$MODE_AGENT_LITE" = "true" ]; then
-    CRITICAL_CONTAINERS=(smsly-hosting-traefik-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1)
+if [ "${MODE_AGENT_LITE:-false}" = "true" ]; then
+    CRITICAL_CONTAINERS=(smsly-hosting-traefik-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-redis-1 smsly-hosting-rabbitmq-1 smsly-hosting-socket-proxy-1)
 elif is_node_mode; then
-    CRITICAL_CONTAINERS=(smsly-hosting-caddy-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1 smsly-postgres-primary)
+    CRITICAL_CONTAINERS=(smsly-hosting-caddy-1 smsly-hosting-traefik-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-celery-beat-1 smsly-hosting-redis-1 smsly-hosting-rabbitmq-1 smsly-hosting-socket-proxy-1 smsly-postgres-primary)
 else
-    CRITICAL_CONTAINERS=(smsly-hosting-backend-1 smsly-postgres-primary smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1)
+    CRITICAL_CONTAINERS=(smsly-hosting-backend-1 smsly-postgres-primary smsly-patroni-1 smsly-haproxy smsly-redis-primary smsly-hosting-rabbitmq-1 smsly-hosting-caddy-1 smsly-hosting-traefik-1 smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1)
 fi
 for CONTAINER in "${CRITICAL_CONTAINERS[@]}"; do
-    resolved_container="$(resolve_container_target "$CONTAINER")"
-    CPID=$(docker inspect --format '{{.State.Pid}}' "$resolved_container"  || echo "")
+    resolved_container="$(resolve_container_target "$CONTAINER" 2>/dev/null || true)"
+    [ -n "$resolved_container" ] || continue
+    CPID=$(docker inspect --format '{{.State.Pid}}' "$resolved_container" 2>/dev/null || echo "")
     if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
-        echo -500 > "/proc/$CPID/oom_score_adj"  || true
+        echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
     fi
 done
 echo -e "${GREEN}  ✓ OOM protection set (${CRITICAL_CONTAINERS[*]})${NC}"
@@ -267,6 +289,11 @@ if command -v ufw ; then
         ufw allow from 172.16.0.0/12 to any port 6379 proto tcp  || true
         ufw allow from 172.16.0.0/12 to any port 5672 proto tcp  || true
     fi
+    # Allow SSH port 22 on master/standalone before enabling UFW; agent-lite/node
+    # restrict SSH to MASTER_IP via the rule above.
+    if [ "$MODE_AGENT_LITE" != "true" ] && [ "$MODE_NODE" != "true" ]; then
+        ufw allow 22/tcp || true
+    fi
     echo "y" | ufw enable  || true
     echo -e "${GREEN}  ✓ Firewall hardened (Inbound blocked, SSH/Web permitted)${NC}"
 fi
@@ -296,22 +323,23 @@ if command -v iptables ; then
     done
 
     for _port in $_infra_ports; do
+        # Insert DROP at index 1 first so it sits BEFORE Docker's -j RETURN rule;
+        # ACCEPT rules inserted at index 1 afterward sit above the DROP.
+        iptables -I DOCKER-USER 1 -p tcp --dport "$_port" -j DROP  || true
+
         # Allow localhost (container-to-container on the same host)
-        iptables -I DOCKER-USER -i lo -p tcp --dport "$_port" -j ACCEPT  || true
+        iptables -I DOCKER-USER 1 -i lo -p tcp --dport "$_port" -j ACCEPT  || true
 
         # Allow Docker bridge networks (172.16.0.0/12 covers docker0 + compose nets)
-        iptables -I DOCKER-USER -s 172.16.0.0/12 -p tcp --dport "$_port" -j ACCEPT  || true
+        iptables -I DOCKER-USER 1 -s 172.16.0.0/12 -p tcp --dport "$_port" -j ACCEPT  || true
 
         # Allow WireGuard mesh (10.100.0.0/24 is the assigned mesh range)
-        iptables -I DOCKER-USER -s 10.100.0.0/24 -p tcp --dport "$_port" -j ACCEPT  || true
+        iptables -I DOCKER-USER 1 -s 10.100.0.0/24 -p tcp --dport "$_port" -j ACCEPT  || true
 
         # Allow known node IPs
         if [ -n "${MASTER_MESH_IP:-}" ]; then
-            iptables -I DOCKER-USER -s "${MASTER_MESH_IP}" -p tcp --dport "$_port" -j ACCEPT  || true
+            iptables -I DOCKER-USER 1 -s "${MASTER_MESH_IP}" -p tcp --dport "$_port" -j ACCEPT  || true
         fi
-
-        # Drop everything else to this port
-        iptables -A DOCKER-USER -p tcp --dport "$_port" -j DROP  || true
     done
 
     # Return to the DOCKER chain for all other traffic
@@ -321,7 +349,8 @@ if command -v iptables ; then
     echo -e "${GREEN}  ✓ Infrastructure ports hardened (5000, 5432, 6379, 5672) — locked to localhost + mesh + docker networks${NC}"
 
     # Allow remote Promtail → Loki on WireGuard interface (VPN mesh)
-    iptables -A INPUT -i wg+ -p tcp --dport 3100 -j ACCEPT  || true
+    iptables -C INPUT -i wg+ -p tcp --dport 3100 -j ACCEPT 2>/dev/null || \
+        iptables -A INPUT -i wg+ -p tcp --dport 3100 -j ACCEPT  || true
 
     # Persist iptables rules across reboots
     if command -v iptables-save ; then

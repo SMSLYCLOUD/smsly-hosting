@@ -48,11 +48,61 @@ class SessionTokenView(GenericAPIView):
 
         class _TokenExchangeThrottle(UserRateThrottle):
             scope = 'token_exchange'
-            rate = '10/hour'
+            rate = '120/hour'
 
         return [_TokenExchangeThrottle()]
 
     def post(self, request):
+        from urllib.parse import urlparse
+        import hashlib
+        import secrets
+        from django.conf import settings
+        from django.core.cache import cache
+
+        meta = request.META
+        sec_fetch_site = str(meta.get("HTTP_SEC_FETCH_SITE") or "").strip().lower()
+        if sec_fetch_site and sec_fetch_site not in ("same-origin", "none"):
+            return Response(
+                {"error": "Cross-site request rejected"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        host = (request.get_host() or "").lower()
+        host_hostname = (urlparse(f"//{host}").hostname or "").lower() if host else ""
+        origin = str(meta.get("HTTP_ORIGIN") or "").strip()
+        referer = str(meta.get("HTTP_REFERER") or "").strip()
+        if origin:
+            if origin.lower() == "null":
+                return Response(
+                    {"error": "Cross-origin request rejected"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            parsed_origin = urlparse(origin)
+            origin_host = (parsed_origin.hostname or "").lower()
+            if (
+                (parsed_origin.scheme or "").lower() not in ("http", "https")
+                or not origin_host
+                or not host_hostname
+                or origin_host != host_hostname
+            ):
+                return Response(
+                    {"error": "Cross-origin request rejected"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+        elif referer:
+            parsed_ref = urlparse(referer)
+            ref_host = (parsed_ref.hostname or "").lower()
+            if (
+                (parsed_ref.scheme or "").lower() not in ("http", "https")
+                or not ref_host
+                or not host_hostname
+                or ref_host != host_hostname
+            ):
+                return Response(
+                    {"error": "Cross-origin referer rejected"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
         user = request.user
         if not user or not user.is_authenticated:
             return Response(
@@ -61,18 +111,27 @@ class SessionTokenView(GenericAPIView):
             )
         # 2FA ENFORCEMENT: an OAuth/SAML login establishes a Django
         # session, but the DRF token must still wait for TOTP when the
-        # user enrolled a device. Stash the pending identity and tell
-        # the SPA to present the authenticator challenge instead.
+        # user enrolled a device. Log out the unverified session first so
+        # it cannot access /admin/ or WebSockets before TOTP completes.
+        from django.contrib.auth import logout as django_logout
         from apps.core.auth_2fa import stash_pending_2fa, user_requires_2fa
-        if user_requires_2fa(user):
+        if user_requires_2fa(user) and not request.session.get('2fa_verified'):
+            django_logout(request)
             stash_pending_2fa(request, user)
             return Response({'requires_2fa': True})
-        # Get-or-create a DRF auth token for this user. The consumer
-        # (TerminalConsumer._authenticate_token) validates the token as
-        # a 40-char hex string against the rest_framework.authtoken
-        # table, so the signed-token approach previously used here was
-        # rejected with "subprotocol is invalid" (colons in the signed
-        # value are not valid in Sec-WebSocket-Protocol).
+
         from rest_framework.authtoken.models import Token
+        from apps.core.auth_cookies import set_auth_cookie
         token, _created = Token.objects.get_or_create(user=user)
-        return Response({'token': token.key})
+        if getattr(settings, 'SMSLY_TOKEN_IN_BODY', False):
+            body_token = token.key
+        else:
+            body_token = f"wst_{secrets.token_hex(24)}"
+            ticket_digest = hashlib.sha256(body_token.encode()).hexdigest()
+            cache.set(f"ws_ticket:{ticket_digest}", user.id, timeout=120)
+        resp = Response({'token': body_token})
+        try:
+            set_auth_cookie(resp, token.key)
+        except Exception:
+            pass
+        return resp

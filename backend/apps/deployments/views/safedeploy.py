@@ -3,12 +3,11 @@ import logging
 from django.conf import settings as django_settings
 from django.db import transaction
 from django.db.models import Q
-from rest_framework import authentication, permissions, status, viewsets
+from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action, throttle_classes
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 
-from apps.core.auth import CsrfExemptSessionAuthentication
 from apps.deployments.models.audit import AuditLog
 from apps.deployments.models.core import Deployment, Service
 from apps.deployments.models.safedeploy import DeploymentApproval, PreviewEnvironment
@@ -114,18 +113,6 @@ def send_approval_notification(approval, service_pk):
 class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
     queryset = PreviewEnvironment.objects.all()
     serializer_class = PreviewEnvironmentSerializer
-    # Use CsrfExemptSessionAuthentication for the session fallback: these
-    # endpoints are called from the same-origin frontend which authenticates
-    # via the HttpOnly auth cookie. The cookie is already a strong
-    # same-origin credential (SameSite=Lax/Strict) and the endpoints
-    # require an explicit permission check (CanManagePreviews) on top of
-    # authentication, so CSRF adds friction without meaningful protection.
-    # Token-based callers (CLI, automations) still get CSRF enforcement
-    # via the default TokenAuthentication path.
-    authentication_classes = [
-        authentication.TokenAuthentication,
-        CsrfExemptSessionAuthentication,
-    ]
     permission_classes = [permissions.IsAuthenticated, CanManagePreviews]
 
     def _user_owns_or_member(self, service):
@@ -212,6 +199,24 @@ class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
         branch_name = serializer.validated_data['branch_name']
         commit_sha = serializer.validated_data['commit_sha']
 
+        duplicate = PreviewEnvironment.objects.filter(
+            service=service,
+            branch_name=branch_name,
+            commit_sha=commit_sha,
+            created_by=request.user,
+            status__in=[
+                PreviewEnvironment.Status.PENDING,
+                PreviewEnvironment.Status.BUILDING,
+                PreviewEnvironment.Status.READY,
+                PreviewEnvironment.Status.HEALTH_CHECK_RUNNING,
+            ],
+        ).exists()
+        if duplicate:
+            return Response(
+                {"error": "An active preview for this branch and commit already exists."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
         manager = BranchPreviewManager()
         preview = manager.create_preview(service, branch_name, commit_sha, user=request.user)
 
@@ -296,18 +301,6 @@ class DeploymentApprovalViewSet(viewsets.ModelViewSet):
     """
     queryset = DeploymentApproval.objects.all()
     serializer_class = DeploymentApprovalSerializer
-    # Use CsrfExemptSessionAuthentication for the session fallback: these
-    # endpoints are called from the same-origin frontend which authenticates
-    # via the HttpOnly auth cookie. The cookie is already a strong
-    # same-origin credential (SameSite=Lax/Strict) and the endpoints
-    # require an explicit permission check (CanManagePreviews) on top of
-    # authentication, so CSRF adds friction without meaningful protection.
-    # Token-based callers (CLI, automations) still get CSRF enforcement
-    # via the default TokenAuthentication path.
-    authentication_classes = [
-        authentication.TokenAuthentication,
-        CsrfExemptSessionAuthentication,
-    ]
     permission_classes = [permissions.IsAuthenticated, CanApproveDeployment]
 
     def get_queryset(self):

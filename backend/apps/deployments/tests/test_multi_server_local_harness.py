@@ -3,7 +3,7 @@ import tempfile
 from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -73,6 +73,7 @@ class MultiServerLocalHarnessTests(TestCase):
         self.assertIn(self.worker_a, list(eligible))
         self.assertIn(self.worker_b, list(eligible))
 
+    @override_settings(GRID_ALLOW_CONTROL_PLANE_WORKLOADS=False)
     @patch("apps.core.views.transfer.execute_server_transfer_task.delay")
     def test_transfer_worker_a_to_worker_b_and_primary_rejection(self, delay_mock):
         response = self.client.post(
@@ -105,6 +106,7 @@ class MultiServerLocalHarnessTests(TestCase):
         self.assertEqual(blocked.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(blocked.data["error"]["code"], "PRIMARY_SERVER_DEPLOYMENT_BLOCKED")
 
+    @patch("apps.deployments.services.transfer_service.ServerTransferService._node_api_request", return_value={"docker_available": True})
     @patch("apps.deployments.services.transfer_service.ServerTransferService._sync_target_dashboard")
     @patch("apps.deployments.services.transfer_service.ServerTransferService._wait_for_remote_backend_ready")
     @patch("apps.deployments.services.transfer_service.BackupService.backup_service")
@@ -115,6 +117,7 @@ class MultiServerLocalHarnessTests(TestCase):
         backup_mock,
         _ready_mock,
         _sync_mock,
+        _node_api_mock,
     ):
         ssh = ssh_cls.return_value
         ssh.connect.return_value = None
@@ -139,6 +142,7 @@ class MultiServerLocalHarnessTests(TestCase):
         self.assertIn("backup failed", transfer.error_message)
         self.assertEqual(self.service.server_id, self.worker_a.id)
 
+    @patch("apps.deployments.services.transfer_service.ServerTransferService._node_api_request")
     @patch("apps.deployments.services.transfer_service.ServerTransferService._regenerate_master_caddyfile")
     @patch("apps.deployments.services.transfer_service.ServerTransferService._sync_target_dashboard")
     @patch("apps.deployments.services.transfer_service.ServerTransferService._verify_between_servers")
@@ -157,6 +161,7 @@ class MultiServerLocalHarnessTests(TestCase):
         _reachability_mock,
         _sync_mock,
         _caddy_mock,
+        node_api_mock,
     ):
         self.service.docker_image = "registry.local/harness-service:abc123"
         self.service.public_domain = "harness-service.example.test"
@@ -181,29 +186,23 @@ class MultiServerLocalHarnessTests(TestCase):
             )
             backup_mock.return_value = backup
 
-            ssh = ssh_cls.return_value
-            ssh.connect.return_value = None
-            ssh.close.return_value = None
-            ssh.check_docker.return_value = True
-            ssh.upload_file.return_value = None
+            api_calls = []
 
-            executed = []
+            def node_api_side_effect(action_name, method="POST", body=None, params=None, timeout=120):
+                api_calls.append((action_name, method, body, params))
+                if action_name == "incoming/ensure-docker":
+                    return {"docker_available": True}
+                if action_name == "incoming/upload-file":
+                    if (body or {}).get("query_size"):
+                        return {"size": 0}
+                    return {"status": "written", "path": (body or {}).get("path", "")}
+                if action_name == "incoming/exec":
+                    return {"exit_code": 0, "stdout": "/health\n", "stderr": ""}
+                if action_name == "incoming/container-status":
+                    return {"running": True}
+                return {"ok": True}
 
-            def exec_side_effect(command, *args, **kwargs):
-                executed.append(command)
-                if "docker ps --filter name=backend" in command:
-                    return "smsly-hosting-backend-1\n"
-                if "restore_trigger" in command and "python3" in command:
-                    return "SUCCESS\n"
-                if "docker inspect -f '{{.Id}}'" in command:
-                    return "container-abc123\n"
-                if "docker inspect -f '{{.State.Running}}'" in command:
-                    return "true\n"
-                if "SMSLY_ROUTE_HTTP" in command:
-                    return "SMSLY_ROUTE_HTTP:200\n"
-                return ""
-
-            ssh.exec_command.side_effect = exec_side_effect
+            node_api_mock.side_effect = node_api_side_effect
 
             transfer = ServerTransfer.objects.create(
                 owner=self.user,
@@ -218,21 +217,23 @@ class MultiServerLocalHarnessTests(TestCase):
 
             transfer.refresh_from_db()
             self.service.refresh_from_db()
-            print("TRANSFER ERROR MESSAGE:", transfer.error_message)
-            print("TRANSFER LOGS:", transfer.logs)
             self.assertEqual(transfer.status, "COMPLETED")
             self.assertEqual(transfer.progress_percent, 100)
             self.assertEqual(transfer.source_backup_id, backup.id)
             self.assertEqual(self.service.server_id, self.worker_b.id)
             self.assertEqual(transfer.target_ssh_password, "")
             self.assertIsNotNone(transfer.rollback_deadline)
-            ssh.upload_file.assert_any_call(
-                backup_file.name,
+            upload_calls = [c for c in api_calls if c[0] == "incoming/upload-file" and not (c[2] or {}).get("query_size")]
+            self.assertTrue(upload_calls, f"Expected incoming/upload-file call, got {api_calls}")
+            self.assertEqual(
+                upload_calls[0][2]["path"],
                 f"/tmp/{os.path.basename(backup_file.name)}",
             )
-            self.assertTrue(
-                any("docker run" in command and "registry.local/harness-service:abc123" in command
-                    for command in executed)
+            deploy_calls = [c for c in api_calls if c[0] == "incoming/deploy"]
+            self.assertTrue(deploy_calls, f"Expected incoming/deploy call, got {api_calls}")
+            self.assertEqual(
+                deploy_calls[0][2]["image"],
+                "registry.local/harness-service:abc123",
             )
         finally:
             if os.path.exists(backup_file.name):

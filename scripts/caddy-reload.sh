@@ -151,60 +151,47 @@ _validate_caddy_candidate() {
     caddy validate --adapter caddyfile --config "$candidate"
 }
 
-normalize_caddy_candidate() {
-    local source="$1"
-    local target="$2"
-
-    cp "$source" "$target"
-    if ! candidate_requires_https "$source" || candidate_has_explicit_443 "$source"; then
-        return 0
-    fi
-
-    echo "$LOG_PREFIX Adding explicit TCP 443 listener to HTTPS Caddyfile candidate"
-    if grep -q 'on_demand_tls' "$source"; then
-        cp "$source" "$target"
-    else
-        {
-            cat <<'CADDY_GLOBAL'
-{
-    on_demand_tls {
-        ask http://localhost:8000/api/v1/services/check-domain/
-    }
-}
-
-CADDY_GLOBAL
-            cat "$source"
-        } > "$target"
-    fi
-
-    cat >> "$target" <<'CADDY_HTTPS_FALLBACK'
-
-:443 {
-    tls {
-        on_demand
-    }
-    reverse_proxy localhost:8000
-}
-CADDY_HTTPS_FALLBACK
-}
-
 restore_previous_caddyfile() {
     local previous="$1"
+    local container="${CADDY_CONTAINER:-smsly-hosting-caddy-1}"
 
     if [ -f "$previous" ]; then
         cp "$previous" "$CADDY_CONF"
     elif [ -f "$LAST_GOOD_CONF" ]; then
         cp "$LAST_GOOD_CONF" "$CADDY_CONF"
     fi
-    true
+    if docker inspect "$container" >/dev/null 2>&1; then
+        timeout 30 docker exec "$container" caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || true
+    elif command -v systemctl >/dev/null 2>&1; then
+        timeout 30 systemctl reload caddy >/dev/null 2>&1 || true
+    fi
 }
 
 apply_validated_caddyfile() {
     local candidate="$1"
     local previous="${CADDY_CONF}.prev.$$"
+    local container="${CADDY_CONTAINER:-smsly-hosting-caddy-1}"
 
     [ -f "$CADDY_CONF" ] && cp "$CADDY_CONF" "$previous"  || true
     cp "$candidate" "$CADDY_CONF"
+
+    local reload_ok=false
+    if docker inspect "$container" >/dev/null 2>&1; then
+        if timeout 30 docker exec "$container" caddy reload --config /etc/caddy/Caddyfile; then
+            reload_ok=true
+        fi
+    elif command -v systemctl >/dev/null 2>&1; then
+        if timeout 30 systemctl reload caddy; then
+            reload_ok=true
+        fi
+    fi
+
+    if [ "$reload_ok" != "true" ]; then
+        echo "$LOG_PREFIX ERROR: caddy reload failed; restoring previous config"
+        restore_previous_caddyfile "$previous"
+        rm -f "$previous"
+        return 1
+    fi
 
     sleep 2
     if candidate_requires_https "$candidate" && ! https_listener_active; then
@@ -242,22 +229,23 @@ while true; do
                 # in the container) so it can be validated in-container.
                 CANDIDATE_CADDY="$(mktemp "$WATCH_DIR/.candidate.XXXXXX")"
                 chmod 644 "$CANDIDATE_CADDY" 2>/dev/null || true
-                normalize_caddy_candidate "$WATCH_CADDY" "$CANDIDATE_CADDY"
+                cp "$WATCH_CADDY" "$CANDIDATE_CADDY"
                 # Validate before applying with simple retry/backoff to avoid transient DNS/ACME race
                 attempts=0
                 delay=2
+                apply_ok=false
                 while [ $attempts -lt 4 ]; do
                     if _validate_caddy_candidate "$CANDIDATE_CADDY" ; then
                         echo "$LOG_PREFIX Validation passed — applying"
-                        if ! apply_validated_caddyfile "$CANDIDATE_CADDY"; then
-                            break
-                        fi
-                        echo "$LOG_PREFIX Caddy reloaded successfully"
-                        # Post-reload smoke (non-blocking)
-                        host_line=$( { grep -m1 -E '^[a-zA-Z0-9.-]+(\.[a-zA-Z0-9-]+)+' "$CANDIDATE_CADDY" || true; } | awk '{print $1}' | tr -d '{' )
-                        wildcard_line=$( { grep -m1 -E '^\*\.' "$CANDIDATE_CADDY" || true; } | awk '{print $1}' | tr -d '{' )
-                        if command -v bash  && [ -x "/opt/smsly-hosting/scripts/smoke_routes.sh" ]; then
-                            /opt/smsly-hosting/scripts/smoke_routes.sh "$host_line" "$wildcard_line" >/var/log/caddy/smoke.log  || true
+                        if apply_validated_caddyfile "$CANDIDATE_CADDY"; then
+                            apply_ok=true
+                            echo "$LOG_PREFIX Caddy reloaded successfully"
+                            # Post-reload smoke (non-blocking)
+                            host_line=$( { grep -m1 -E '^[a-zA-Z0-9.-]+(\.[a-zA-Z0-9-]+)+' "$CANDIDATE_CADDY" || true; } | awk '{print $1}' | tr -d '{' )
+                            wildcard_line=$( { grep -m1 -E '^\*\.' "$CANDIDATE_CADDY" || true; } | awk '{print $1}' | tr -d '{' )
+                            if command -v bash  && [ -x "/opt/smsly-hosting/scripts/smoke_routes.sh" ]; then
+                                /opt/smsly-hosting/scripts/smoke_routes.sh "$host_line" "$wildcard_line" >/var/log/caddy/smoke.log  || true
+                            fi
                         fi
                         break
                     fi
@@ -266,18 +254,18 @@ while true; do
                     sleep $delay
                 delay=$((delay*2))
             done
-            if [ $attempts -ge 4 ]; then
-                echo "$LOG_PREFIX ERROR: Caddyfile validation failed after retries — NOT applying"
+            if [ "$apply_ok" = "true" ]; then
+                # Success clears any previous failure marker.
+                rm -f "$WATCH_DIR/.reload-failed" 2>/dev/null || true
+            else
+                echo "$LOG_PREFIX ERROR: Caddyfile validation or reload failed — NOT applying"
                 # Record the failure where the backend health feed reads it
                 # ($WATCH_DIR/.reload-failed): the edge keeps serving the
                 # previous config, so the dashboard must warn loudly instead
                 # of failing silently (2026-09-10 stale-config incident).
                 _reload_fail_ts="$(date +%s 2>/dev/null || echo 0)"
-                printf '{"ts": %s, "error": "host-side watcher: Caddyfile validation failed after retries; previous config still serving"}' \
+                printf '{"ts": %s, "error": "host-side watcher: Caddyfile validation or reload failed; previous config still serving"}' \
                     "$_reload_fail_ts" > "$WATCH_DIR/.reload-failed" 2>/dev/null || true
-            else
-                # Success clears any previous failure marker.
-                rm -f "$WATCH_DIR/.reload-failed" 2>/dev/null || true
             fi
             # Always clean up the mktemp candidate (it holds a full
             # Caddyfile copy per reload cycle).

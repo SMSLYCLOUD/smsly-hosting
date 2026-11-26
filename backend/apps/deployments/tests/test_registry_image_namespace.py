@@ -46,9 +46,11 @@ class ProjectImageNamespaceTests(SimpleTestCase):
     def test_ecosystem_without_project_stays_global(self):
         self.assertEqual(project_image_namespace(_svc("ECOSYSTEM", None)), "smsly")
 
-    def test_manual_service_with_project_stays_global(self):
+    def test_manual_service_with_project_is_scoped(self):
+        pid = uuid.uuid4()
         self.assertEqual(
-            project_image_namespace(_svc("USER", uuid.uuid4())), "smsly"
+            project_image_namespace(_svc("USER", pid)),
+            f"proj-{str(pid).replace('-', '')[:8]}",
         )
 
     def test_missing_attrs_stays_global(self):

@@ -32,7 +32,6 @@ frontend/.env.*
 secrets/
 *.pem
 *.key
-!certs/registry.key
 
 # Local tooling / generated backups
 .agent/
@@ -94,6 +93,7 @@ auth/htpasswd
 
 # Caddy runtime state (was previously tracked)
 caddy-config/.cloudflare_*
+caddy-config/.cloudflare_token*
 caddy-config/.perm_probe
 caddy-config/.reload
 caddy-config/.update

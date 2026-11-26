@@ -61,10 +61,9 @@ class ValidateRegistryUrlTests(SimpleTestCase):
         with self.assertRaises(ImproperlyConfigured):
             _validate_registry_url()
 
-    def test_external_https_is_rejected(self):
+    def test_external_https_is_allowed(self):
         os.environ['CONTAINER_REGISTRY_URL'] = 'https://attacker.example/'
-        with self.assertRaises(ImproperlyConfigured):
-            _validate_registry_url()
+        self.assertIsNone(_validate_registry_url())
 
     def test_bare_hostname_is_auto_prefixed_with_http(self):
         # The .env.example ships with

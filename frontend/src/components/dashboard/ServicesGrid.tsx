@@ -175,18 +175,31 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
     const title = isAddon ? 'Delete addon?' : 'Delete service?';
     const message = `Are you sure you want to delete "${service.name}"? This cannot be undone.`;
     
-    if (!await confirm({ title, message, variant: 'destructive', confirmText: 'Delete' })) return;
+    if (!await confirm({
+      title,
+      message,
+      variant: 'destructive',
+      confirmText: 'Delete',
+      requireMatchText: service.name,
+    })) return;
     
     setActionLoading(service.id);
     try {
       if (isAddon) {
-        await addonsApi.delete(service.id);
+        await addonsApi.deprovision(service.id, service.name);
+        toast({ title: 'Addon deprovisioning queued', description: `${service.name} is being removed.` });
       } else {
         await servicesApi.delete(service.id);
+        toast({ title: 'Service deletion queued', description: `${service.name} is being removed.` });
       }
       // Parent page polls every 5s — no reload needed
-    } catch (err) {
+    } catch (err: any) {
       console.error('Delete failed:', err);
+      toast({
+        title: isAddon ? 'Failed to delete addon' : 'Failed to delete service',
+        description: err?.response?.data?.error || err?.response?.data?.detail || 'Could not complete deletion.',
+        variant: 'destructive',
+      });
     } finally {
       setActionLoading(null);
     }
@@ -197,7 +210,8 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
       title: 'Force Delete?', 
       message: `CAUTION: This will purge "${service.name}" from the database even if cloud resources cannot be removed. Use this for stuck services only.`, 
       variant: 'destructive', 
-      confirmText: 'Force Purge' 
+      confirmText: 'Force Purge',
+      requireMatchText: service.name,
     })) return;
     
     setActionLoading(service.id);
@@ -260,7 +274,13 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
                   service.latest_deployment?.status === 'QUEUED' || service.latest_deployment?.status === 'REVIEW' ? 'bg-blue-500 animate-pulse' :
                   'bg-yellow-500'
                   }`} />
-              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => router.push(service.isAddon ? `/addons/${service.id}` : `/services/${service.id}`)}>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={`Open ${service.name} details`}
+                className="h-6 w-6"
+                onClick={() => router.push(service.isAddon ? `/addons/${service.id}` : `/services/${service.id}`)}
+              >
                 <MoreVertical size={14} />
               </Button>
             </div>
@@ -345,6 +365,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
               <Button
                 variant="ghost"
                 size="icon"
+                aria-label={`View logs for ${service.name}`}
                 className="h-8 w-8 hover:bg-emerald-500/10 hover:text-emerald-500"
                 title="Logs"
                 onClick={() => router.push(`/services/${service.id}?tab=logs`)}
@@ -355,6 +376,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
                 <Button
                   variant="ghost"
                   size="icon"
+                  aria-label={`Open ${service.name} wildcard URL`}
                   className="h-8 w-8 hover:bg-blue-500/10 hover:text-blue-500"
                   title="Open App (wildcard)"
                   onClick={() => window.open(`https://${service.public_domain}`, '_blank')}
@@ -366,6 +388,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
                 <Button
                   variant="ghost"
                   size="icon"
+                  aria-label={`Open ${service.name} direct node URL`}
                   className="h-8 w-8 hover:bg-blue-500/10 hover:text-blue-500"
                   title="Open App (direct node)"
                   onClick={() => window.open(service.node_url!, '_blank')}
@@ -380,6 +403,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
                 <Button
                   variant="ghost"
                   size="icon"
+                  aria-label={service.autoscale_enabled !== false ? `Disable auto-scaling for ${service.name}` : `Enable auto-scaling for ${service.name}`}
                   className={`h-7 w-7 ${service.autoscale_enabled !== false ? 'text-emerald-500' : 'text-muted-foreground hover:text-emerald-500'}`}
                   title={service.autoscale_enabled !== false ? 'Auto-scaling ON (click to disable)' : 'Auto-scaling OFF (click to enable)'}
                   disabled={actionLoading === service.id}
@@ -395,6 +419,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
                     <Button
                       variant="ghost"
                       size="icon"
+                      aria-label={`Scale ${service.name}`}
                       className="h-7 w-7 text-muted-foreground hover:text-purple-500"
                       title="Scale service"
                       disabled={actionLoading === service.id}
@@ -415,6 +440,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
               <Button
                 variant="ghost"
                 size="icon"
+                aria-label={`Recheck health for ${service.name}`}
                 className="h-7 w-7 text-muted-foreground hover:text-cyan-500"
                 title="Recheck Health"
                 disabled={actionLoading === service.id}
@@ -425,6 +451,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
               <Button
                 variant="ghost"
                 size="icon"
+                aria-label={`Redeploy ${service.name}`}
                 className="h-7 w-7 text-muted-foreground hover:text-emerald-500"
                 title="Redeploy"
                 disabled={actionLoading === service.id}
@@ -436,6 +463,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
                 <Button
                   variant="ghost"
                   size="icon"
+                  aria-label={`Restart ${service.name}`}
                   className="h-7 w-7 text-muted-foreground hover:text-yellow-500"
                   title="Restart"
                   disabled={actionLoading === service.id}
@@ -448,6 +476,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
                 <Button
                   variant="ghost"
                   size="icon"
+                  aria-label={`Start ${service.name}`}
                   className="h-7 w-7 text-muted-foreground hover:text-emerald-500"
                   title="Start"
                   disabled={actionLoading === service.id}
@@ -460,6 +489,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
                 <Button
                   variant="ghost"
                   size="icon"
+                  aria-label={`Stop ${service.name}`}
                   className="h-7 w-7 text-muted-foreground hover:text-red-500"
                   title="Stop"
                   disabled={actionLoading === service.id}
@@ -471,6 +501,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
               <Button
                 variant="ghost"
                 size="icon"
+                aria-label={`Service details for ${service.name}`}
                 className="h-7 w-7 text-muted-foreground hover:text-foreground"
                 title="Service Details"
                 onClick={() => router.push(`/services/${service.id}`)}
@@ -480,6 +511,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
               <Button
                 variant="ghost"
                 size="icon"
+                aria-label={`Delete ${service.name}`}
                 className="h-7 w-7 text-muted-foreground hover:text-red-500"
                 title="Delete Service"
                 disabled={actionLoading === service.id}
@@ -491,6 +523,7 @@ export const ServicesGrid = memo(function ServicesGrid({ services, addons = [] }
                 <Button
                   variant="ghost"
                   size="icon"
+                  aria-label={`Force purge ${service.name}`}
                   className="h-7 w-7 text-red-500 hover:bg-red-500/10"
                   title="Force Purge (stuck)"
                   disabled={actionLoading === service.id}
@@ -560,17 +593,17 @@ function EmptyServicesState() {
         transition={{ delay: 0.4 }}
         className="flex flex-col sm:flex-row gap-3 mt-8"
       >
-        <Link href="/new">
-          <Button size="lg" className="bg-gradient-to-r from-primary to-cyan-500 text-white shadow-lg shadow-primary/30 hover:opacity-90">
+        <Button size="lg" asChild className="bg-gradient-to-r from-primary to-cyan-500 text-white shadow-lg shadow-primary/30 hover:opacity-90">
+          <Link href="/new">
             <Rocket className="mr-2 h-4 w-4" />
             Deploy from GitHub
-          </Button>
-        </Link>
-        <Link href="/store">
-          <Button variant="outline" size="lg">
+          </Link>
+        </Button>
+        <Button variant="outline" size="lg" asChild>
+          <Link href="/store">
             Browse Templates
-          </Button>
-        </Link>
+          </Link>
+        </Button>
       </motion.div>
 
       {/* Quick Start Tips */}

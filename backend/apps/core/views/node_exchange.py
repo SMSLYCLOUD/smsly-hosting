@@ -78,11 +78,8 @@ def node_token_exchange(request):
     """
     raw_body = request.body
     client_ip = _client_ip(request)
-    username_hint = ""
-    try:
-        username_hint = str(request.data.get("username", "") or "")
-    except Exception:
-        username_hint = ""
+    data = request.data if isinstance(request.data, dict) else {}
+    username_hint = str(data.get("username", "") or "")
 
     if not _verify_transfer_sync_hmac(request, client_ip, raw_body):
         _audit_node_token_attempt(
@@ -97,9 +94,28 @@ def node_token_exchange(request):
             status=status.HTTP_401_UNAUTHORIZED,
         )
 
+    if not isinstance(request.data, dict):
+        _audit_node_token_attempt(
+            username_hint, client_ip, success=False, reason='invalid_payload',
+        )
+        return Response(
+            {"error": "JSON object payload is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    raw_password = data.get("password", "")
+    if not isinstance(raw_password, str):
+        _audit_node_token_attempt(
+            username_hint, client_ip, success=False, reason='invalid_payload',
+        )
+        return Response(
+            {"error": "username and password must be strings."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     username = username_hint.strip()
-    password = request.data.get("password", "").strip()
-    node_name = _clean_node_name(request.data.get("node_name", "Remote Node"))
+    password = raw_password.strip()
+    node_name = _clean_node_name(data.get("node_name", "Remote Node"))
 
     if not username or not password:
         _audit_node_token_attempt(
@@ -181,7 +197,8 @@ def node_token_exchange_via_gateway(request):
     timestamp = request.headers.get("X-Request-Timestamp", "")
     nonce = request.headers.get("X-Request-Nonce", "")
     raw_body = request.body
-    node_name = _clean_node_name(request.data.get("node_name", "Remote Node"))
+    data = request.data if isinstance(request.data, dict) else {}
+    node_name = _clean_node_name(data.get("node_name", "Remote Node"))
 
     if not signature or not timestamp or not nonce:
         return Response(
@@ -201,7 +218,7 @@ def node_token_exchange_via_gateway(request):
     # within the freshness window. Claimed only AFTER HMAC verifies
     # (atomic cache.add): claiming before burns nonces on failed attempts
     # and leaves a TOCTOU replay race.
-    from django.core.cache import cache
+    from django.core.cache import caches
     nonce_key = f"node_token_nonce:{nonce}"
 
     # Verify HMAC
@@ -220,7 +237,13 @@ def node_token_exchange_via_gateway(request):
         _audit_node_token_attempt(node_name, _client_ip(request), success=False, reason='invalid_hmac_gateway')
         return Response({"error": "Invalid HMAC signature."}, status=status.HTTP_403_FORBIDDEN)
     try:
-        if not cache.add(nonce_key, "1", timeout=120):
+        default_cache = caches['default']
+        if getattr(default_cache, 'is_degraded', False):
+            return Response({"error": "Replay store unavailable."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        added = default_cache.add(nonce_key, "1", timeout=120)
+        if getattr(default_cache, 'is_degraded', False):
+            return Response({"error": "Replay store unavailable."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        if not added:
             _audit_node_token_attempt(node_name, _client_ip(request), success=False, reason='replayed_nonce')
             return Response({"error": "Nonce already used."}, status=status.HTTP_401_UNAUTHORIZED)
     except Exception:

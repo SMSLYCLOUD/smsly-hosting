@@ -8,19 +8,69 @@
 #   docker compose -f docker-compose.traefik.yml up -d
 
 services:
+  traefik-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.2
+    container_name: smsly-traefik-socket-proxy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /run
+      - /tmp
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      INFO: 1
+      VERSION: 1
+      EVENTS: 1
+      POST: 0
+      PUT: 0
+      DELETE: 0
+      EXEC: 0
+      BUILD: 0
+      VOLUMES: 0
+      IMAGES: 0
+      COMMIT: 0
+      SECRETS: 0
+      SWARM: 0
+      PLUGINS: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - traefik-proxy-net
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 2375"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
   traefik:
     image: traefik:v3.6
     container_name: smsly-traefik
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+      - apparmor:docker-default
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    depends_on:
+      traefik-socket-proxy:
+        condition: service_healthy
     command:
       # API & Dashboard
       - "--api.dashboard=true"
       - "--api.insecure=false"
       
-      # Docker provider (direct socket mount)
+      # Docker provider (via restricted socket proxy)
       - "--providers.docker=true"
+      - "--providers.docker.endpoint=tcp://traefik-socket-proxy:2375"
       - "--providers.docker.exposedbydefault=false"
       
       # Entrypoints (Caddy handles SSL, forwards to traefik:80)
@@ -52,14 +102,14 @@ services:
       - "--entrypoints.metrics.address=:8082"
     
     ports:
-      - "8082:8082"  # Prometheus metrics
+      - "127.0.0.1:8082:8082"  # Prometheus metrics (loopback-only)
     
     volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "traefik_logs:/var/log/traefik"
     
     networks:
       - smsly-proxy
+      - traefik-proxy-net
     
     labels:
       # Dashboard (Caddy routes traefik.${DOMAIN} here)
@@ -68,7 +118,7 @@ services:
       - "traefik.http.routers.traefik.entrypoints=web"
       - "traefik.http.routers.traefik.service=api@internal"
       - "traefik.http.routers.traefik.middlewares=auth"
-      - "traefik.http.middlewares.auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH:-admin:$$apr1$$xyz$$hash}"
+      - "traefik.http.middlewares.auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH:?TRAEFIK_DASHBOARD_AUTH must be set}"
       
       # Security headers middleware
       - "traefik.http.middlewares.secure-headers.headers.stsSeconds=31536000"
@@ -84,3 +134,6 @@ networks:
   smsly-proxy:
     external: true
     name: smsly-proxy
+  traefik-proxy-net:
+    driver: bridge
+    internal: true

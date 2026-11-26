@@ -196,19 +196,27 @@ class PreviewActionsMixin:
                 {'error': 'Preview not found'},
                 status=status.HTTP_404_NOT_FOUND)
 
-        # Stop the container if running
+        # Stop and remove the preview container(s) if running locally
         try:
+            import docker
+            from apps.cloud.models import CloudProvider
             provider = _resolve_provider_for_service(preview)
-            if provider:
-                from apps.cloud.adapter import get_adapter
-                adapter = get_adapter(provider)
-                last_deploy = preview.deployments.filter(
-                    status=Deployment.Status.ACTIVE
-                ).first()
-                if last_deploy and last_deploy.container_id:
-                    adapter.stop_container(last_deploy.container_id)
-        except Exception:
-            logger.warning("Could not stop preview container for %s", preview_id)
+            if provider and provider.provider_type == CloudProvider.ProviderType.LOCAL:
+                client = docker.from_env(timeout=10)
+                candidate_ids = {preview.name}
+                for dep in preview.deployments.exclude(container_id='').exclude(container_id__isnull=True):
+                    candidate_ids.add(dep.container_id)
+                    if dep.green_container_id:
+                        candidate_ids.add(dep.green_container_id)
+                for cid in candidate_ids:
+                    if not cid:
+                        continue
+                    try:
+                        client.containers.get(cid).remove(force=True)
+                    except docker.errors.NotFound:
+                        pass
+        except Exception as exc:
+            logger.warning("Could not stop preview container for %s: %s", preview_id, exc)
 
         preview_name = preview.name
         preview.delete()

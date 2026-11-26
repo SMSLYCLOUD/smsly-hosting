@@ -9,7 +9,7 @@ auth.method = "token"
 auth.token = "{{ .Envs.FRP_AUTH_TOKEN }}"
 
 # Dashboard (internal only)
-webServer.addr = "0.0.0.0"
+webServer.addr = "127.0.0.1"
 webServer.port = 7500
 
 # Logging

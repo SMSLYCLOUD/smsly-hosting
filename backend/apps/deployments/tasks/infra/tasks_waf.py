@@ -217,17 +217,17 @@ def converge_openappsec_stack_task():
         try:
             if enabled:
                 proc = subprocess.run(
-                    base + ["up", "-d", *APPSEC_SERVICES],
+                    base + ["--profile", "appsec", "up", "-d", *APPSEC_SERVICES],
                     capture_output=True, text=True, timeout=540,
                 )
                 action = "started"
             else:
                 subprocess.run(
-                    base + ["stop", "--timeout", "15", *APPSEC_SERVICES],
+                    base + ["--profile", "appsec", "stop", "--timeout", "15", *APPSEC_SERVICES],
                     capture_output=True, text=True, timeout=300,
                 )
                 proc = subprocess.run(
-                    base + ["rm", "-f", *APPSEC_SERVICES],
+                    base + ["--profile", "appsec", "rm", "-f", *APPSEC_SERVICES],
                     capture_output=True, text=True, timeout=300,
                 )
                 action = "stopped+removed"

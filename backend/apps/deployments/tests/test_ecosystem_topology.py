@@ -275,6 +275,8 @@ class HttpCheckTests(TestCase):
 
     @patch('apps.deployments.services.ecosystem_graph_builder._check_http', return_value=True)
     def test_backend_uses_http_check(self, mock_http):
+        from django.core.cache import cache
+        cache.delete(EcosystemGraphBuilder.GRAPH_CACHE_KEY)
         builder = EcosystemGraphBuilder()
         graph = builder.build()
         backend = next(n for n in graph['nodes'] if n['id'] == 'backend')
@@ -292,8 +294,9 @@ class HostPortExtractionTests(TestCase):
         self.assertEqual(port, 6380)
 
     def test_redis_host_port_defaults(self):
+        from django.conf import settings as dj_settings
         host, port = _redis_host_port()
-        self.assertEqual(host, 'redis')
+        self.assertEqual(host, getattr(dj_settings, 'REDIS_HOST', 'redis'))
         self.assertEqual(port, 6379)
 
     def test_db_host_port_from_databases(self):

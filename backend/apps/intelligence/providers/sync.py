@@ -114,12 +114,18 @@ def _effective_env_value(db_value: str | None, env_key: str, default: str = "") 
     return _normalize_model(raw, default) if env_key.endswith("_MODEL") else raw
 
 
+_LOCAL_SETTINGS_CACHE: dict[str, object] = {"ts": 0.0, "env": None}
+
+
 def _sync_db_to_env():
-    """Push DB-stored keys/models into process env so provider classes work (cached 30s)."""
-    cache_key = DB_SETTINGS_SYNC_CACHE_KEY
-    cached = cache.get(cache_key)
-    if cached is not None:
-        os.environ.update(cached)
+    """Push DB-stored keys/models into process env without writing plaintext keys to Redis."""
+    import time as _time
+
+    now = _time.monotonic()
+    cached_env = _LOCAL_SETTINGS_CACHE.get("env")
+    cached_ts = float(_LOCAL_SETTINGS_CACHE.get("ts") or 0.0)
+    if cached_env is not None and (now - cached_ts) < 30.0:
+        os.environ.update(cached_env)
         return
 
     cfg = _get_db_settings()
@@ -190,4 +196,6 @@ def _sync_db_to_env():
         else:
             os.environ.pop(env_key, None)
 
-    cache.set(cache_key, env_snapshot, timeout=30)
+    _LOCAL_SETTINGS_CACHE["env"] = env_snapshot
+    _LOCAL_SETTINGS_CACHE["ts"] = _time.monotonic()
+    cache.delete(DB_SETTINGS_SYNC_CACHE_KEY)

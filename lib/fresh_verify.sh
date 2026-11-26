@@ -144,39 +144,51 @@ fi
 # finishing "green" while blind or unprotected otherwise. Warn loudly
 # (non-blocking: tiny hosts may intentionally skip them).
 echo -e "${BLUE}  → [3/4] Checking observability stack...${NC}"
-OBS_MISSING=""
-for _obs in smsly-loki smsly-promtail smsly-grafana smsly-cadvisor smsly-docker-labels smsly-prometheus smsly-alertmanager smsly-node-exporter; do
-    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$_obs"; then
-        OBS_MISSING="${OBS_MISSING} ${_obs}"
-    fi
-done
-if [ -z "$OBS_MISSING" ]; then
-    echo -e "${GREEN}  ✓ Observability stack present (loki/promtail/grafana/cadvisor/docker-labels/prometheus/alertmanager/node-exporter)${NC}"
+_verify_tier="${STACK_TIER:-}"
+[ -n "$_verify_tier" ] || _verify_tier="$(env_get_value "$INSTALL_DIR/.env" "STACK_TIER" || true)"
+[ -n "$_verify_tier" ] || _verify_tier="full"
+if [ "$_verify_tier" = "lite" ]; then
+    echo -e "${GREEN}  ✓ Observability stack skipped by design (STACK_TIER=lite)${NC}"
 else
-    echo -e "${YELLOW}  ⚠ Observability services missing:${OBS_MISSING}${NC}"
-    echo -e "${YELLOW}    Grafana embeds will 502, Loki stays empty, and autoscaler targets stay incomplete.${NC}"
-    echo -e "${YELLOW}    Ensure COMPOSE_PROFILES in $INSTALL_DIR/.env includes 'medium,full', then:${NC}"
-    echo -e "${YELLOW}    docker compose -f $COMPOSE_FILE up -d loki promtail grafana cadvisor docker-labels alertmanager${NC}"
+    OBS_MISSING=""
+    for _obs in smsly-loki smsly-promtail smsly-grafana smsly-cadvisor smsly-docker-labels smsly-prometheus smsly-alertmanager smsly-node-exporter; do
+        if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$_obs"; then
+            OBS_MISSING="${OBS_MISSING} ${_obs}"
+        fi
+    done
+    if [ -z "$OBS_MISSING" ]; then
+        echo -e "${GREEN}  ✓ Observability stack present (loki/promtail/grafana/cadvisor/docker-labels/prometheus/alertmanager/node-exporter)${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Observability services missing:${OBS_MISSING}${NC}"
+        echo -e "${YELLOW}    Grafana embeds will 502, Loki stays empty, and autoscaler targets stay incomplete.${NC}"
+        echo -e "${YELLOW}    Ensure COMPOSE_PROFILES in $INSTALL_DIR/.env includes 'medium', then:${NC}"
+        echo -e "${YELLOW}    docker compose -f $COMPOSE_FILE up -d loki promtail grafana cadvisor docker-labels alertmanager${NC}"
+    fi
 fi
 # Full-stack presence (warn-only): falco + spire servers + build caches.
 # SPIRE agents are intentionally excluded here — they never start via
 # compose profiles (single-use join tokens, AGENTS.md #18); their owner
 # is lib/harden.sh _harden_spire_bootstrap and harden_security_verify.
 echo -e "${BLUE}  → [3/4] Checking full-profile stack...${NC}"
-FULL_MISSING=""
-for _full in smsly-falco smsly-spire-server smsly-spire-server-ecosystem smsly-apt-cacher smsly-verdaccio; do
-    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$_full"; then
-        FULL_MISSING="${FULL_MISSING} ${_full}"
-    fi
-done
-if [ -z "$FULL_MISSING" ]; then
-    echo -e "${GREEN}  ✓ Full-profile stack present (falco/spire-servers/apt-cacher/verdaccio)${NC}"
+if [ "$_verify_tier" != "full" ]; then
+    echo -e "${GREEN}  ✓ Full-profile stack skipped by design (STACK_TIER=${_verify_tier})${NC}"
 else
-    echo -e "${YELLOW}  ⚠ Full-profile services missing:${FULL_MISSING}${NC}"
-    echo -e "${YELLOW}    Ensure COMPOSE_PROFILES in $INSTALL_DIR/.env includes 'full', then:${NC}"
-    echo -e "${YELLOW}    docker compose -f $COMPOSE_FILE up -d falco spire-server spire-server-ecosystem apt-cacher verdaccio${NC}"
-    echo -e "${YELLOW}    (spire agents start via join-token bootstrap, not compose: see lib/harden.sh)${NC}"
+    FULL_MISSING=""
+    for _full in smsly-falco smsly-spire-server smsly-spire-server-ecosystem smsly-apt-cacher smsly-verdaccio; do
+        if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$_full"; then
+            FULL_MISSING="${FULL_MISSING} ${_full}"
+        fi
+    done
+    if [ -z "$FULL_MISSING" ]; then
+        echo -e "${GREEN}  ✓ Full-profile stack present (falco/spire-servers/apt-cacher/verdaccio)${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Full-profile services missing:${FULL_MISSING}${NC}"
+        echo -e "${YELLOW}    Ensure COMPOSE_PROFILES in $INSTALL_DIR/.env includes 'full', then:${NC}"
+        echo -e "${YELLOW}    docker compose -f $COMPOSE_FILE up -d falco spire-server spire-server-ecosystem apt-cacher verdaccio${NC}"
+        echo -e "${YELLOW}    (spire agents start via join-token bootstrap, not compose: see lib/harden.sh)${NC}"
+    fi
 fi
+unset _verify_tier
 
 # ─── Check 4: Swap is sufficient ──────────────────────────────────────────
 echo -e "${BLUE}  → [3/4] Checking swap...${NC}"
@@ -284,7 +296,7 @@ fi
 # Install encrypted database backup (daily 02:30, 7-day retention).
 # The unit maps BACKUP_ENCRYPTION_KEY from .env to BACKUP_PASS, so no
 # extra secret handling is needed. Non-fatal on hosts without systemd.
-if [ -f "$INSTALL_DIR/scripts/backup.sh" ] && [ -f "$INSTALL_DIR/scripts/smsly-backup.timer" ]; then
+if [ "$MODE_AGENT_LITE" != "true" ] && [ -f "$INSTALL_DIR/scripts/backup.sh" ] && [ -f "$INSTALL_DIR/scripts/smsly-backup.timer" ]; then
     echo -e "${BLUE}  → Installing encrypted database backup timer...${NC}"
     chmod +x "$INSTALL_DIR/scripts/backup.sh"
     cp "$INSTALL_DIR/scripts/smsly-backup.service" /etc/systemd/system/smsly-backup.service  || true
@@ -447,31 +459,6 @@ echo -e "   Install Log: $LOG_FILE"
 echo -e "   Location:    $INSTALL_DIR"
 echo -e "   Memory:      $(free -m | awk '/^Mem:/{print $7}')MB available"
 echo -e "   Swap:        $(free -m | awk '/^Swap:/{print $2}')MB total"
-
-# ─── Custom Domain SSL Integration ───────────────────────────────────────────
-if should_manage_caddy; then  # Only for master mode
-    echo -e "\n${YELLOW}[9/9] Setting up Custom Domain SSL Services...${NC}"
-    
-    # Check if custom domain SSL manager script exists
-    SSL_SCRIPT="install-custom-domain-ssl.sh"
-    [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
-    if [ -f "$SSL_SCRIPT" ]; then
-        echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-        bash "$SSL_SCRIPT" install
-        
-        # Start the services
-        echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-        /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
-        
-        # Enable auto-start on boot
-        echo -e "${BLUE}  → Enabling auto-start on boot...${NC}"
-        /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
-        
-        echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
-    else
-        echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
-    fi
-fi
 
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 if [ "$MODE_AGENT_LITE" != "true" ]; then

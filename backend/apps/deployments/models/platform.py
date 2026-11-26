@@ -1027,7 +1027,7 @@ class PlatformConfig(models.Model):
         import os
 
         from django.core.cache import cache
-        from django.db import connection
+        from django.db import connection, transaction
 
         # Schema Guard: Check if the table exists before querying
         table_name = cls._meta.db_table
@@ -1065,7 +1065,8 @@ class PlatformConfig(models.Model):
             return cached
 
         try:
-            obj, created = cls.objects.get_or_create(pk=1)
+            with transaction.atomic():
+                obj, created = cls.objects.select_for_update().get_or_create(pk=1)
         except (ProgrammingError, OperationalError):
             # Column may not exist yet if a migration is pending.
             # Return a default instance from ENV so the app can start.

@@ -1,13 +1,18 @@
 """Service backup viewset - composed from domain-specific mixins."""
 import logging
 
-from apps.teams.permissions import get_team_q_filter
+from apps.teams.permissions import (
+    assert_can_delete,
+    assert_can_write,
+    get_team_q_filter,
+)
 
 logger = logging.getLogger(__name__)
 
 from rest_framework import permissions, viewsets
 from rest_framework.exceptions import PermissionDenied
 from ...models.backup import ServiceBackup
+from ...models.core import Service
 from ...serializers import ServiceBackupSerializer
 from ...tasks import create_service_backup_task
 from .._helpers import (
@@ -31,9 +36,12 @@ class ServiceBackupViewSet(KeyManagementMixin, DownloadActionsMixin, RestoreActi
     def _user_can_access_service(user, service):
         if not user or not user.is_authenticated or not service:
             return False
-        if user.is_superuser or service.owner_id == user.id:
+        if user.is_superuser:
             return True
-        return service.project_id and service.project.team_id and service.project.team.members.filter(user=user).exists()
+        return Service.objects.filter(
+            get_team_q_filter(user),
+            pk=service.pk,
+        ).exists()
 
 
 
@@ -55,22 +63,7 @@ class ServiceBackupViewSet(KeyManagementMixin, DownloadActionsMixin, RestoreActi
     def get_queryset(self):
         qs = self.queryset
 
-        # `header` and `download_key` are intentionally public actions (see
-        # their docstrings) — the data they return (V2 key_id + fingerprint +
-        # service name + creation timestamp) is non-secret and meant to be
-        # shareable. Those actions override the viewset permission to
-        # `permission_classes=[permissions.AllowAny]` and clear
-        # `authentication_classes`, so `self.request.user` arrives as
-        # `AnonymousUser`. The auth-scoped Q-filter below would then raise
-        # `TypeError: Cannot cast AnonymousUser to int` when Django tries
-        # to coerce it for the FK lookup. Return the unscoped queryset for
-        # those actions instead.
-        if getattr(self, 'action', None) in ('header', 'download_key'):
-            pass
-        elif not self.request.user.is_authenticated:
-            # Defensive: any other action reached without auth (shouldn't
-            # happen given the viewset's IsAuthenticated default, but cheap
-            # to guard against future regressions).
+        if not self.request.user.is_authenticated:
             return qs.none()
         elif self.request.user.is_superuser or is_remote_sync_request(self.request):
             pass
@@ -94,5 +87,13 @@ class ServiceBackupViewSet(KeyManagementMixin, DownloadActionsMixin, RestoreActi
         service = serializer.validated_data.get('service')
         if not self._user_can_access_service(self.request.user, service):
             raise PermissionDenied("You do not have access to this service.")
+        assert_can_write(self.request.user, service, action='create backup')
         backup = serializer.save(created_by=self.request.user, status='PENDING')
         create_service_backup_task.delay(service_id=str(backup.service.id), backup_type='MANUAL', backup_id=str(backup.id))
+
+    def perform_destroy(self, instance):
+        if instance.service is not None:
+            assert_can_delete(self.request.user, instance.service)
+        elif not self.request.user.is_superuser:
+            raise PermissionDenied("Only superusers can delete server-scoped backups.")
+        instance.delete()

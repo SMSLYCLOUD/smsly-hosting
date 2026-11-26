@@ -3,11 +3,12 @@
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.core.models.api_token import APIToken, CanManageAPITokens
+from apps.core.rate_limiting import TokenCreateRateThrottle
 
 
 @extend_schema(responses=OpenApiTypes.OBJECT)
@@ -24,6 +25,7 @@ def list_tokens(request):
 @extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, CanManageAPITokens])
+@throttle_classes([TokenCreateRateThrottle])
 def create_token(request):
     """
     Generate a new API token.

@@ -95,6 +95,7 @@ class Addon(TimeStampedModel):
     class Status(models.TextChoices):
         PROVISIONING = 'PROVISIONING', 'Provisioning'
         ACTIVE = 'ACTIVE', 'Active'
+        STOPPED = 'STOPPED', 'Stopped (Parked on demand)'
         FAILED = 'FAILED', 'Failed'
         BACKEND_MISSING = 'BACKEND_MISSING', 'Backend missing (row kept, needs reprovision)'
         DELETED = 'DELETED', 'Deleted'

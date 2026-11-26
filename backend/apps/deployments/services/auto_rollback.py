@@ -153,6 +153,14 @@ class AutoRollbackEngine:
             )
             return AutoRollbackResult(False, 'disabled_by_service_config')
 
+        # ── 1b. Never roll back FROM a failed rollback (loop guard) ─
+        if failed_deployment is not None and getattr(failed_deployment, 'is_rollback', False):
+            logger.info(
+                'Auto-rollback suppressed for %s: failing deployment %s is itself a rollback.',
+                service.name, getattr(failed_deployment, 'id', '?'),
+            )
+            return AutoRollbackResult(False, 'failed_deployment_is_rollback')
+
         # ── 2. Per-service dedup lock ───────────────────────────────
         lock_key = cls._lock_key(service.id)
         if not cache.add(lock_key, '1', timeout=_AUTO_ROLLBACK_LOCK_TTL_SECONDS):
@@ -197,7 +205,7 @@ class AutoRollbackEngine:
             )
 
             # ── 5. Find rollback target: last ACTIVE / INACTIVE ─────
-            target = (
+            candidates = list(
                 Deployment.objects
                 .filter(
                     service=service,
@@ -206,10 +214,9 @@ class AutoRollbackEngine:
                         Deployment.Status.INACTIVE,
                     ],
                 )
-                .order_by('-finished_at', '-created_at')
-                .first()
+                .order_by('-finished_at', '-created_at')[:10]
             )
-            if not target:
+            if not candidates:
                 logger.warning(
                     'Auto-rollback: no prior successful deployment for %s.',
                     service.name,
@@ -236,22 +243,110 @@ class AutoRollbackEngine:
                 return AutoRollbackResult(False, 'rollback_in_flight')
 
             # ── 7. Cooldown dedup against recent same-commit rollback
+            primary_candidate = candidates[0]
             if Deployment.objects.filter(
                 service=service,
                 is_rollback=True,
-                commit_hash=target.commit_hash,
+                commit_hash=primary_candidate.commit_hash,
                 created_at__gte=cooldown_start,
             ).exclude(status=Deployment.Status.ACTIVE).exists():
                 logger.info(
                     'Auto-rollback suppressed for %s: recent rollback to %s '
                     'within cooldown window.',
                     service.name,
-                    target.commit_hash,
+                    primary_candidate.commit_hash,
                 )
                 return AutoRollbackResult(
                     False,
                     f'cooldown:{AUTO_ROLLBACK_COOLDOWN_MINUTES}m',
                 )
+
+            # ── 7b. Loop guard: cap rollback attempts & skip broken targets
+            failed_rollback_statuses = [
+                Deployment.Status.FAILED,
+                Deployment.Status.BUILD_FAILED,
+                Deployment.Status.HEALTH_CHECK_FAILED,
+                Deployment.Status.MIGRATION_FAILED,
+            ]
+            recent_failed_rollbacks = Deployment.objects.filter(
+                service=service,
+                is_rollback=True,
+                status__in=failed_rollback_statuses,
+                created_at__gte=window_start,
+            ).count()
+            if recent_failed_rollbacks >= 2:
+                logger.warning(
+                    'Auto-rollback suppressed for %s: %d failed rollback(s) in window.',
+                    service.name, recent_failed_rollbacks,
+                )
+                return AutoRollbackResult(False, 'rollback_loop_prevented')
+
+            deploy_type = str(getattr(service, 'deploy_type', 'GIT') or 'GIT').upper()
+            failed_meta = dict(getattr(failed_deployment, 'metadata', None) or {})
+            failed_image = (
+                failed_meta.get('deployed_image')
+                or failed_meta.get('docker_image')
+                or ''
+            ).strip()
+
+            target = None
+            target_image = ''
+            target_repo_url = ''
+            target_fn_code = ''
+            for cand in candidates:
+                # Skip a target whose own rollback already failed after it ran
+                prior_failed_qs = Deployment.objects.filter(
+                    service=service,
+                    is_rollback=True,
+                    status__in=failed_rollback_statuses,
+                    created_at__gte=cand.created_at,
+                )
+                already_failed_this_target = False
+                for rb in prior_failed_qs.only('commit_hash', 'metadata'):
+                    rb_meta = rb.metadata if isinstance(rb.metadata, dict) else {}
+                    if rb_meta.get('rollback_target_id') == str(cand.id):
+                        already_failed_this_target = True
+                        break
+                    if cand.commit_hash and rb.commit_hash == cand.commit_hash:
+                        already_failed_this_target = True
+                        break
+                if already_failed_this_target:
+                    continue
+
+                cand_meta = dict(getattr(cand, 'metadata', None) or {})
+                cand_img = (
+                    cand_meta.get('deployed_image')
+                    or cand_meta.get('docker_image')
+                    or cand_meta.get('image_name')
+                    or ''
+                ).strip()
+                cand_repo = str(cand_meta.get('repository_url') or '').strip()
+                cand_fn = str(cand_meta.get('function_code') or '')
+
+                if deploy_type == 'DOCKER':
+                    effective_img = cand_img or str(getattr(service, 'docker_image', '') or '').strip()
+                    if not effective_img:
+                        continue
+                    # Do not re-pull the exact image known to have just failed
+                    if failed_image and effective_img == failed_image:
+                        continue
+                    if not cand_img and failed_deployment is not None:
+                        # No distinct historical image recorded on target — rolling back
+                        # would re-pull the mutated service.docker_image that just failed.
+                        continue
+
+                target = cand
+                target_image = cand_img
+                target_repo_url = cand_repo
+                target_fn_code = cand_fn
+                break
+
+            if target is None:
+                logger.warning(
+                    'Auto-rollback suppressed for %s: all prior targets are broken, missing image, or already failed rollback.',
+                    service.name,
+                )
+                return AutoRollbackResult(False, 'no_viable_rollback_target')
 
             # ── 8. Create rollback + heartbeat (atomic) ──────────────
             # The row is created BEFORE the notification is dispatched
@@ -260,6 +355,26 @@ class AutoRollbackEngine:
             # ``rollback_from`` is the failed deployment we're recovering
             # FROM — NOT the target we're rolling back to.
             with transaction.atomic():
+                svc_updates = []
+                if target_image and target_image != (getattr(service, 'docker_image', '') or '').strip():
+                    service.docker_image = target_image
+                    svc_updates.append('docker_image')
+                if deploy_type == 'UPLOAD' and target_repo_url and target_repo_url != (getattr(service, 'repository_url', '') or '').strip():
+                    service.repository_url = target_repo_url
+                    svc_updates.append('repository_url')
+                if deploy_type == 'FUNCTION' and target_fn_code and target_fn_code != (getattr(service, 'function_code', '') or ''):
+                    service.function_code = target_fn_code
+                    svc_updates.append('function_code')
+                if svc_updates:
+                    svc_updates.append('updated_at')
+                    service.save(update_fields=svc_updates)
+
+                rollback_meta = {'rollback_target_id': str(target.id)}
+                if target_image:
+                    rollback_meta['deployed_image'] = target_image
+                if target_repo_url:
+                    rollback_meta['repository_url'] = target_repo_url
+
                 rollback = Deployment.objects.create(
                     service=service,
                     status=Deployment.Status.QUEUED,
@@ -270,6 +385,7 @@ class AutoRollbackEngine:
                     ),
                     is_rollback=True,
                     rollback_from=failed_deployment,
+                    metadata=rollback_meta,
                 )
                 # Heartbeat key — the monitoring loop watches this to
                 # alert if the rollback doesn't transition out of QUEUED
@@ -454,9 +570,10 @@ def get_stuck_rollback_heartbeats():
         if queued_at < cutoff:
             # Confirm the rollback is still QUEUED — if it's progressed,
             # clear the heartbeat instead of alerting.
+            from django.core.exceptions import ValidationError
             try:
                 deployment = Deployment.objects.get(id=rollback_id)
-            except Deployment.DoesNotExist:
+            except (Deployment.DoesNotExist, ValidationError, ValueError):
                 registry.discard(rollback_id)
                 cache.delete(AutoRollbackEngine._heartbeat_key(rollback_id))
                 continue

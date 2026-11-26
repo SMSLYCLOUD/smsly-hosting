@@ -1,7 +1,31 @@
 import base64
+import hashlib
+import hmac
+import os
 import textwrap
 
 from ._utils import _yaml_scalar
+
+
+def _patroni_restapi_credentials(mesh=None) -> tuple[str, str]:
+    """Return (username, password) for Patroni REST API Basic Auth."""
+    username = (os.environ.get("PATRONI_RESTAPI_USERNAME") or "patroni").strip() or "patroni"
+    password = (os.environ.get("PATRONI_RESTAPI_PASSWORD") or "").strip()
+    if not password:
+        secret_key = (os.environ.get("DJANGO_SECRET_KEY") or os.environ.get("SECRET_KEY") or "").strip()
+        if not secret_key:
+            try:
+                from django.conf import settings
+                secret_key = str(getattr(settings, "SECRET_KEY", "") or "")
+            except Exception:
+                secret_key = ""
+        mesh_id = str(getattr(mesh, "id", "default") or "default")
+        password = hmac.new(
+            (secret_key or "smsly-patroni-fallback").encode("utf-8"),
+            f"patroni-restapi:{mesh_id}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()[:32]
+    return username, password
 
 
 class ConfigMixin:
@@ -34,6 +58,7 @@ class ConfigMixin:
             )
 
         configs = {}
+        restapi_user, restapi_password = _patroni_restapi_credentials(mesh)
         for idx, peer in enumerate(peers, 1):
             wg_ip = peer.wg_address
             node_name = f"patroni{idx}"
@@ -76,6 +101,8 @@ class ConfigMixin:
                       PATRONI_NAME: {node_name}
                       PATRONI_RESTAPI_CONNECT_ADDRESS: "{wg_ip}:8008"
                       PATRONI_RESTAPI_LISTEN: "{wg_ip}:8008"
+                      PATRONI_RESTAPI_USERNAME: {_yaml_scalar(restapi_user)}
+                      PATRONI_RESTAPI_PASSWORD: {_yaml_scalar(restapi_password)}
                       PATRONI_POSTGRESQL_CONNECT_ADDRESS: "{wg_ip}:{cls.PATRONI_POSTGRES_PORT}"
                       PATRONI_POSTGRESQL_LISTEN: "{wg_ip}:{cls.PATRONI_POSTGRES_PORT}"
                       PATRONI_POSTGRESQL_DATA_DIR: /home/postgres/pgdata/pgroot/data

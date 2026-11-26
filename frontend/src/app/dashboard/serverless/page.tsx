@@ -8,7 +8,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
 import { Loader2, Rocket, Code2, Zap } from 'lucide-react';
-import api from '@/lib/api';
+import { servicesApi } from '@/lib/api';
+import { slugify } from '@/lib/utils';
 
 export default function ServerlessPage() {
   const { toast } = useToast();
@@ -18,27 +19,42 @@ export default function ServerlessPage() {
   const [deploying, setDeploying] = useState(false);
 
   const handleDeploy = async () => {
-    if (!functionName.trim() || !code.trim()) {
+    const trimmedName = slugify(functionName.trim());
+    if (!trimmedName || !code.trim()) {
       toast({ title: 'Missing fields', description: 'Function name and handler code are required.', variant: 'destructive' });
       return;
     }
     setDeploying(true);
     try {
-      const response = await api.post('/deployments/upload/', {
-        name: functionName,
-        runtime,
-        code,
-        type: 'function'
+      const created = await servicesApi.create({
+        name: trimmedName,
+        deploy_type: 'FUNCTION',
+        function_runtime: runtime,
+        function_code: code,
       });
-      toast({
-        title: 'Deployed successfully',
-        description: `Function "${functionName}" deployed. ID: ${response.data.deployment_id || response.data.id || 'created'}`,
-      });
+      const deployResult = await servicesApi.deploy(created.id);
+      if (deployResult?.existing_deployment) {
+        const statusLabel = deployResult.existing_deployment.status || 'in progress';
+        toast({
+          title: 'Deployment already in progress',
+          description: `Function "${created.name}" deployment status: ${statusLabel}.`,
+        });
+      } else {
+        toast({
+          title: 'Deployed successfully',
+          description: `Function "${created.name}" created and deployment triggered.`,
+        });
+      }
       setFunctionName('');
       setCode('');
     } catch (err: any) {
-      const msg = err?.response?.data?.detail || err?.response?.data?.error || 'Failed to deploy function.';
-      toast({ title: 'Deploy failed', description: msg, variant: 'destructive' });
+      const msg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.error ||
+        err?.response?.data?.detail ||
+        err?.message ||
+        'Failed to deploy function.';
+      toast({ title: 'Deploy failed', description: String(msg), variant: 'destructive' });
     } finally {
       setDeploying(false);
     }

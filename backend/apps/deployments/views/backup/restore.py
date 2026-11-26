@@ -7,6 +7,10 @@ from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.core.validators import validate_ssrf
+from apps.deployments.services.task_encryption import encrypt_arg
+from apps.teams.permissions import assert_can_write
+
 from .._helpers import _resolve_encryption_key
 
 logger = logging.getLogger(__name__)
@@ -26,6 +30,8 @@ class RestoreActionsMixin:
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
         backup = self.get_object()
+        if getattr(backup, 'service', None) is not None:
+            assert_can_write(request.user, backup.service, action='restore backup for')
 
         # Enforce explicit confirmation for destructive actions
         confirm = request.data.get('confirm')
@@ -48,6 +54,7 @@ class RestoreActionsMixin:
                 )
         else:
             target_service = backup.service
+        assert_can_write(request.user, target_service, action='restore backup into')
 
         guard = ServerGuard.check_user_workload_allowed(getattr(target_service, 'server', None))
         if not guard["ok"]:
@@ -156,12 +163,13 @@ class RestoreActionsMixin:
                     status=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 )
 
+        enc_key_arg = encrypt_arg(key_provided, service=target_service) if key_provided else None
         restore_service_backup_task.delay(
             backup_id=str(backup.id),
             target_service_id=str(target_service_id) if target_service_id else None,
             requesting_user_id=request.user.id,
             raise_on_snapshot_failure=not force,
-            encryption_key=key_provided or None,
+            encryption_key=enc_key_arg,
         )
         return Response({'status': 'restore_started'})
 
@@ -193,6 +201,7 @@ class RestoreActionsMixin:
                 return Response({'error': 'Service not found or access denied.'}, status=status.HTTP_404_NOT_FOUND)
         except Service.DoesNotExist:
             return Response({'error': 'Service not found.'}, status=status.HTTP_404_NOT_FOUND)
+        assert_can_write(request.user, target_service, action='upload and restore backup into')
 
         import uuid as _uuid
         dest_filename = f"local_restore_{_uuid.uuid4().hex[:8]}.tar.gz"
@@ -207,7 +216,16 @@ class RestoreActionsMixin:
         file_size = os.path.getsize(dest_path)
         svc = BackupService()
         try:
-            dest_path = svc._maybe_encrypt(dest_path)
+            is_already_encrypted = bool(BackupService.get_encryption_header(dest_path)) or (
+                str(getattr(file, 'name', '') or '').lower().endswith('.enc')
+            )
+            if is_already_encrypted:
+                if not dest_path.endswith('.enc'):
+                    enc_dest_path = dest_path + '.enc'
+                    os.replace(dest_path, enc_dest_path)
+                    dest_path = enc_dest_path
+            else:
+                dest_path = svc._maybe_encrypt(dest_path)
         except Exception as exc:
             with contextlib.suppress(OSError):
                 os.remove(dest_path)
@@ -223,12 +241,13 @@ class RestoreActionsMixin:
         )
 
         encryption_key = _resolve_encryption_key(request)
+        enc_key_arg = encrypt_arg(encryption_key, service=target_service) if encryption_key else None
         from apps.deployments.tasks import restore_service_backup_task
         restore_service_backup_task.delay(
             backup_id=str(backup.id),
             target_service_id=str(service_id),
             requesting_user_id=request.user.id,
-            encryption_key=encryption_key,
+            encryption_key=enc_key_arg,
             raise_on_snapshot_failure=False,
         )
 
@@ -257,13 +276,14 @@ class RestoreActionsMixin:
                 return Response({'error': 'Target service not found or access denied.'}, status=status.HTTP_404_NOT_FOUND)
         except Service.DoesNotExist:
             return Response({'error': 'Target service not found.'}, status=status.HTTP_404_NOT_FOUND)
+        assert_can_write(request.user, target_service, action='restore cloud backup into')
 
         if cloud_storage_id:
             from apps.deployments.models.cloud_storage import CloudStorageDestination
             try:
                 dest = CloudStorageDestination.objects.get(id=cloud_storage_id)
                 # Scope: only platform-wide or same-service destinations
-                if dest.service is not None and str(dest.service.id) != service_id:
+                if dest.service is not None and str(dest.service.id) != str(target_service.id):
                     return Response(
                         {'error': 'This cloud destination belongs to a different service.'},
                         status=status.HTTP_403_FORBIDDEN,
@@ -282,7 +302,24 @@ class RestoreActionsMixin:
             access_key = request.data.get('s3_access_key', '').strip()
             secret_key = request.data.get('s3_secret_key', '').strip()
 
+        if endpoint:
+            try:
+                validate_ssrf(endpoint, fail_closed_dns=True)
+            except Exception as ssrf_exc:
+                return Response({'error': f'Invalid s3_endpoint: {ssrf_exc}'}, status=status.HTTP_400_BAD_REQUEST)
+
         s3_key = normalize_s3_key(s3_key, s3_bucket)
+        if not getattr(request.user, 'is_superuser', False):
+            allowed_prefixes = (
+                f"smsly-backups/{target_service.id}/",
+                f"smsly-backups/{target_service.name}/",
+                f"{target_service.id}/",
+            )
+            if '..' in s3_key.split('/') or not any(s3_key.startswith(p) for p in allowed_prefixes):
+                return Response(
+                    {'error': 's3_key must be scoped to the target service backup prefix.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
         if not s3_bucket or not s3_key or not access_key or not secret_key:
             return Response({'error': 'Missing required S3 configuration fields or cloud_storage_id.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -297,7 +334,16 @@ class RestoreActionsMixin:
 
         svc = BackupService()
         try:
-            dest_path = svc._maybe_encrypt(dest_path)
+            is_already_encrypted = bool(BackupService.get_encryption_header(dest_path)) or (
+                s3_key.lower().endswith('.enc')
+            )
+            if is_already_encrypted:
+                if not dest_path.endswith('.enc'):
+                    enc_dest_path = dest_path + '.enc'
+                    os.replace(dest_path, enc_dest_path)
+                    dest_path = enc_dest_path
+            else:
+                dest_path = svc._maybe_encrypt(dest_path)
         except Exception as exc:
             with contextlib.suppress(OSError):
                 os.remove(dest_path)
@@ -351,12 +397,13 @@ class RestoreActionsMixin:
                 )
 
         encryption_key = _resolve_encryption_key(request)
+        enc_key_arg = encrypt_arg(encryption_key, service=target_service) if encryption_key else None
         from apps.deployments.tasks import restore_service_backup_task
         restore_service_backup_task.delay(
             backup_id=str(backup.id),
             target_service_id=str(service_id),
             requesting_user_id=request.user.id,
-            encryption_key=encryption_key,
+            encryption_key=enc_key_arg,
             raise_on_snapshot_failure=not force,
         )
 
@@ -372,11 +419,26 @@ class RestoreActionsMixin:
         """List available backup files in a cloud storage bucket (service scope)."""
         cloud_storage_id = request.data.get('cloud_storage_id', '').strip()
         prefix = request.data.get('prefix', 'smsly-backups/').strip()
-        service_id = request.data.get('service_id', '').strip()
+        service_id = str(request.data.get('service_id', '') or '').strip()
 
         if not cloud_storage_id:
             return Response(
                 {'error': 'cloud_storage_id is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        target_service = None
+        if service_id:
+            target_service = Service.objects.filter(id=service_id).first()
+            if not target_service or not self._user_can_access_service(request.user, target_service):
+                return Response(
+                    {'error': 'Service not found or access denied.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            assert_can_write(request.user, target_service, action='list cloud backups for')
+        elif not getattr(request.user, 'is_superuser', False):
+            return Response(
+                {'error': 'service_id is required.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -391,11 +453,31 @@ class RestoreActionsMixin:
             )
 
         # Scope: only platform-wide destinations or same-service destinations
-        if dest.service is not None and str(dest.service.id) != service_id:
-            return Response(
-                {'error': 'This cloud destination belongs to a different service.'},
-                status=status.HTTP_403_FORBIDDEN,
+        if dest.service is not None:
+            if not target_service or str(dest.service.id) != str(target_service.id):
+                return Response(
+                    {'error': 'This cloud destination belongs to a different service.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+        elif not getattr(request.user, 'is_superuser', False):
+            allowed_prefixes = (
+                f"smsly-backups/{target_service.id}/",
+                f"smsly-backups/{target_service.name}/",
+                f"{target_service.id}/",
             )
+            if not prefix or prefix == 'smsly-backups/':
+                prefix = f"smsly-backups/{target_service.name}/"
+            elif '..' in prefix.split('/') or not any(prefix.startswith(p) for p in allowed_prefixes):
+                return Response(
+                    {'error': 'prefix must be scoped to the target service.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        if dest.endpoint:
+            try:
+                validate_ssrf(dest.endpoint, fail_closed_dns=True)
+            except Exception as ssrf_exc:
+                return Response({'error': f'Invalid destination endpoint: {ssrf_exc}'}, status=status.HTTP_400_BAD_REQUEST)
 
         from ...services.backup_service import list_s3_objects
 

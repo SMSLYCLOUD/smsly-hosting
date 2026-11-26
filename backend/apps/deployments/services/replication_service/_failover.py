@@ -1,5 +1,6 @@
 import logging
 
+from ._config import _patroni_restapi_credentials
 from ._utils import _bounded_error
 
 logger = logging.getLogger(__name__)
@@ -12,6 +13,7 @@ class FailoverMixin:
         import requests
 
         cls.validate_mesh_for_replication(mesh)
+        api_auth = _patroni_restapi_credentials(mesh)
         peers = list(mesh.peers.filter(is_active=True).order_by("wg_address"))
         if not any(peer.wg_address == target_wg_address for peer in peers):
             raise ValueError(f"Target {target_wg_address} not found in mesh")
@@ -22,6 +24,7 @@ class FailoverMixin:
             try:
                 resp = requests.get(
                     f"http://{peer.wg_address}:8008/patroni",
+                    auth=api_auth,
                     timeout=(2, 5),
                     allow_redirects=False,
                 )
@@ -55,6 +58,7 @@ class FailoverMixin:
         try:
             target_resp = requests.get(
                 f"http://{target_wg_address_for_check}:8008/replica",
+                auth=api_auth,
                 timeout=(2, 5),
                 allow_redirects=False,
             )
@@ -82,6 +86,7 @@ class FailoverMixin:
                 "leader": primary_name,
                 "candidate": target_name,
             },
+            auth=api_auth,
             timeout=(3, 30),
             allow_redirects=False,
         )
@@ -100,6 +105,7 @@ class FailoverMixin:
         import requests
 
         cls.validate_mesh_for_replication(mesh)
+        api_auth = _patroni_restapi_credentials(mesh)
 
         peers = list(mesh.peers.filter(is_active=True).order_by("wg_address"))
         target_name = None
@@ -116,6 +122,7 @@ class FailoverMixin:
                 resp = requests.post(
                     f"http://{peer.wg_address}:8008/reinitialize",
                     json={"member": target_name},
+                    auth=api_auth,
                     timeout=(3, 30),
                     allow_redirects=False,
                 )

@@ -273,7 +273,7 @@ def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
             }
 
         elif command_flag in ['--update', '--update-frontend']:
-            from .models.updates import PlatformUpdate
+            from apps.deployments.models.updates import PlatformUpdate
 
             stale_in_progress = PlatformUpdate.objects.filter(
                 status__in=['PENDING', 'PULLING', 'BACKING_UP', 'RESTARTING', 'HEALTH_CHECK', 'MIGRATING']
@@ -516,24 +516,34 @@ def _registry_session():
     password = str(getattr(settings, "REGISTRY_PASSWORD", "") or "")
     if user:
         session.auth = (user, password)
+    from apps.deployments.services.tls_verify import audit_verify, should_verify
+
     # The private registry speaks TLS on some installs (live: plain http
     # to :5000 answers "Client sent an HTTP request to an HTTPS server").
-    # Prefer https (verified), then https unverified for host-local
-    # self-signed certs, then plain http. Traffic never leaves the host.
+    # Prefer https (verified), then fall back to should_verify(candidate)
+    # (which permits unverified TLS only for loopback / docker-internal
+    # hosts or RFC1918 when ALLOW_INSECURE_INTER_NODE_TLS is enabled),
+    # then plain http.
     candidate = f"https://{host}"
     try:
         probe = session.get(candidate + "/v2/", timeout=10)
         if probe.status_code in (200, 401):
             return session, candidate
     except requests.exceptions.SSLError:
-        try:
-            probe = session.get(candidate + "/v2/", timeout=10, verify=False)
-            if probe.status_code in (200, 401):
-                logger.warning("registry retention: registry TLS cert unverified (host-local, continuing)")
-                session.verify = False
-                return session, candidate
-        except requests.RequestException:
-            pass
+        verify = should_verify(candidate)
+        if not verify:
+            audit_verify(candidate, verify)
+            try:
+                probe = session.get(candidate + "/v2/", timeout=10, verify=verify)
+                if probe.status_code in (200, 401):
+                    logger.warning(
+                        "registry retention: registry TLS cert unverified (%s, continuing)",
+                        candidate,
+                    )
+                    session.verify = verify
+                    return session, candidate
+            except requests.RequestException:
+                pass
     except requests.RequestException:
         pass
     return session, f"http://{host}"

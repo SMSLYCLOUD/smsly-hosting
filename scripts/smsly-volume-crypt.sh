@@ -34,7 +34,7 @@ err() {
 
 validate_vol_name() {
     local vol="$1"
-    if [[ -z "$vol" || ! "$vol" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    if [[ -z "$vol" || "$vol" == *".."* || ! "$vol" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,126}$ ]]; then
         err "invalid volume name: ${vol}"
         return 1
     fi
@@ -125,7 +125,7 @@ read_dek_hex_stdin() {
 hex_to_raw_pipe() {
     local hex="$1"
     if command -v python3 >/dev/null 2>&1; then
-        python3 -c 'import sys; sys.stdout.buffer.write(bytes.fromhex(sys.argv[1]))' "$hex"
+        printf '%s' "$hex" | python3 -c 'import sys; sys.stdout.buffer.write(bytes.fromhex(sys.stdin.read().strip()))'
     elif command -v xxd >/dev/null 2>&1; then
         printf '%s' "$hex" | xxd -r -p
     else
@@ -181,15 +181,23 @@ cmd_provision() {
     shift || true
     validate_vol_name "$vol"
 
-    local backend="auto" uid="" gid=""
+    local backend="auto" uid="" gid="" size_mb=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --backend) backend="${2:-auto}"; shift 2 ;;
             --uid) uid="${2:-}"; shift 2 ;;
             --gid) gid="${2:-}"; shift 2 ;;
+            --size-mb) size_mb="${2:-}"; shift 2 ;;
             *) err "unknown flag: $1"; return 1 ;;
         esac
     done
+    if [ -n "$size_mb" ]; then
+        if [[ ! "$size_mb" =~ ^[0-9]+$ ]] || [ "$size_mb" -le 0 ]; then
+            err "invalid --size-mb: ${size_mb}"
+            return 1
+        fi
+        VOLUME_SIZE_MB="$size_mb"
+    fi
 
     local chosen=""
     chosen=$(select_backend "$backend") || {
@@ -206,7 +214,7 @@ cmd_provision() {
         local enc_dir="${FSCRYPT_DIR}/${vol}"
         local data_dir="${enc_dir}/data"
         mkdir -p "$enc_dir"
-        chmod 0700 "$enc_dir"
+        chmod 0755 "$enc_dir"
         hex_to_raw_pipe "$dek_hex" | timeout -k 5 30 fscrypt encrypt \
             --source=raw_key --name="smsly-${vol}" --no-recovery --quiet "$enc_dir"
         mkdir -p "$data_dir"
@@ -248,7 +256,11 @@ cmd_provision() {
 
     local data_dir="${mnt}/data"
     mkdir -p "$data_dir"
-    chmod 0755 "$data_dir"
+    if [ "$uid" = "999" ] && [ "$gid" = "999" ]; then
+        chmod 0700 "$data_dir"
+    else
+        chmod 0755 "$data_dir"
+    fi
     create_docker_bind_volume "$vol" "$data_dir" "$uid" "$gid"
     printf '{"ok":true,"backend":"luks","host_path":"%s","cipher":"aes-256-xts-luks2"}\n' "$data_dir"
 }
@@ -273,6 +285,7 @@ cmd_unlock() {
     local img="${IMAGES_DIR}/${vol}.img"
     local enc_dir="${FSCRYPT_DIR}/${vol}"
     if [ "$backend" = "fscrypt" ] || { [ "$backend" = "auto" ] && [ -d "$enc_dir" ]; }; then
+        chmod 0755 "$enc_dir"
         hex_to_raw_pipe "$dek_hex" | timeout -k 5 30 fscrypt unlock --quiet "$enc_dir"
         if [ ! -d "${enc_dir}/data" ]; then
             err "fscrypt data dir missing after unlock: ${enc_dir}/data"
@@ -416,21 +429,53 @@ cmd_lock() {
     local mapper=""
     mapper=$(mapper_name_for "$vol")
 
-    if [ -d "$enc_dir" ] && command -v fscrypt >/dev/null 2>&1; then
-        timeout -k 5 30 fscrypt lock "$enc_dir" >/dev/null 2>&1 || true
-    fi
-    if [ -d "$mnt" ] && timeout -k 5 10 mountpoint -q "$mnt"; then
-        timeout -k 5 30 umount "$mnt" || timeout -k 5 15 umount -l "$mnt" || true
-    fi
-    if [ -d "$mnt" ]; then
-        chmod 0000 "$mnt" || true
-    fi
-    if [ -e "/dev/mapper/${mapper}" ] && command -v cryptsetup >/dev/null 2>&1; then
-        timeout -k 5 30 cryptsetup luksClose "$mapper" || true
-    fi
     if [ ! -d "$enc_dir" ] && [ ! -f "$img" ] && [ ! -d "$mnt" ]; then
         err "no encrypted volume found for ${vol}"
         return 1
+    fi
+
+    if command -v docker >/dev/null 2>&1 && timeout -k 5 10 docker info >/dev/null 2>&1; then
+        local c_ids=""
+        c_ids=$(timeout -k 5 15 docker ps -q --filter "volume=${vol}")
+        if [ -n "$c_ids" ]; then
+            timeout -k 5 60 docker stop $c_ids >/dev/null
+        fi
+    fi
+
+    if [ -d "$enc_dir" ]; then
+        if ! command -v fscrypt >/dev/null 2>&1; then
+            err "fscrypt binary not found to lock ${enc_dir}"
+            return 1
+        fi
+        if timeout -k 5 10 fscrypt status "$enc_dir" 2>/dev/null | grep -qi "Unlocked:.*Yes"; then
+            timeout -k 5 30 fscrypt lock "$enc_dir" >/dev/null
+        fi
+        if timeout -k 5 10 fscrypt status "$enc_dir" 2>/dev/null | grep -qi "Unlocked:.*Yes"; then
+            err "fscrypt directory remained unlocked: ${enc_dir}"
+            return 1
+        fi
+    fi
+    if [ -d "$mnt" ] && timeout -k 5 10 mountpoint -q "$mnt"; then
+        timeout -k 5 30 umount "$mnt"
+    fi
+    if [ -d "$mnt" ]; then
+        if ! timeout -k 5 10 mountpoint -q "$mnt"; then
+            chmod 0000 "$mnt"
+        else
+            err "LUKS volume remained mounted: ${mnt}"
+            return 1
+        fi
+    fi
+    if [ -e "/dev/mapper/${mapper}" ]; then
+        if ! command -v cryptsetup >/dev/null 2>&1; then
+            err "cryptsetup binary not found to close ${mapper}"
+            return 1
+        fi
+        timeout -k 5 30 cryptsetup luksClose "$mapper"
+        if [ -e "/dev/mapper/${mapper}" ]; then
+            err "LUKS mapper remained open: ${mapper}"
+            return 1
+        fi
     fi
     printf '{"ok":true,"locked":"%s"}\n' "$vol"
 }

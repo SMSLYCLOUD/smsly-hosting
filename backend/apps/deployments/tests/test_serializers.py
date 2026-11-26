@@ -144,6 +144,12 @@ class ServiceListSerializerTests(TestCase):
             "server", "public_domain", "custom_domains", "internal_port",
             "health_status", "deploy_type", "buildpack", "created_at",
             "updated_at", "latest_deployment", "node_metadata",
+            "node_url", "node_url_nested", "wildcard_url_enabled",
+            "node_url_enabled", "wildcard_redirect_custom_domain",
+            "wildcard_internal_only", "path_redirects", "host_aliases",
+            "env_scan_depth", "running_replicas", "deploy_strategy",
+            "canary_percentage", "promotion_policy", "sablier_enabled",
+            "sablier_session", "addon_placement", "sleep_state",
         }
         self.assertEqual(set(data.keys()), expected)
 

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Github, Loader2, Link as LinkIcon, GitBranch, GitMerge, Package, ExternalLink, Trash2, Chrome } from "lucide-react";
 import api from "@/lib/api";
+import { getSafeRedirectUrl, safeAssignUrl } from "@/lib/paths";
 
 type GitConnection = {
   connected: boolean;
@@ -80,8 +81,8 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
     try {
       const res = await api.get(`/integrations/${provider}/oauth-url/`);
       const target = res.data?.url;
-      if (!target) throw new Error("No OAuth URL returned");
-      window.location.assign(target);
+      if (!target || !safeAssignUrl(target)) throw new Error("No valid OAuth URL returned");
+
     } catch (e: any) {
       const message =
         e?.response?.data?.detail ||
@@ -102,8 +103,8 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
         : "/integrations/github/app/install/";
       const res = await api.get(endpoint);
       const target = res.data?.url;
-      if (!target) throw new Error("No install URL returned");
-      window.location.assign(target);
+      if (!target || !safeAssignUrl(target)) throw new Error("No valid install URL returned");
+
     } catch (e: any) {
       const message =
         e?.response?.data?.error || "Unable to start GitHub App installation.";
@@ -137,11 +138,11 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
     try {
       const res = await api.get("/integrations/github/app-manifest/url/");
       const manifest = res.data?.manifest;
-      const postUrl: string = res.data?.post_url || "https://github.com/settings/apps/new";
-      if (!manifest) throw new Error("No manifest returned");
+      const safePostUrl = getSafeRedirectUrl(res.data?.post_url || "https://github.com/settings/apps/new");
+      if (!manifest || !safePostUrl) throw new Error("No valid manifest returned");
       const form = document.createElement("form");
       form.method = "POST";
-      form.action = postUrl;
+      form.action = safePostUrl;
       const input = document.createElement("input");
       input.type = "hidden";
       input.name = "manifest";
@@ -190,9 +191,9 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
       await fetchInstallations();
       const slug = res.data?.app_slug;
       if (res.data?.install_url) {
-        window.location.assign(res.data.install_url as string);
+        safeAssignUrl(res.data.install_url);
       } else if (slug) {
-        window.location.assign(`https://github.com/apps/${slug}/installations/new`);
+        safeAssignUrl(`https://github.com/apps/${encodeURIComponent(String(slug))}/installations/new`);
       }
     } catch (e: any) {
       const message =

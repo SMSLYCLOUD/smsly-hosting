@@ -54,28 +54,44 @@ export default function DeploymentsPage() {
 
   const getStatusIcon = (status: string) => {
     switch (status?.toUpperCase()) {
+      case "ACTIVE":
       case "RUNNING":
       case "SUCCESS":
         return <CheckCircle className="h-4 w-4 text-emerald-500" />;
       case "FAILED":
         return <XCircle className="h-4 w-4 text-red-500" />;
+      case "CANCELLED":
+        return <XCircle className="h-4 w-4 text-orange-500" />;
+      case "QUEUED":
       case "BUILDING":
+      case "DEPLOYING":
+      case "HEALTH_CHECK":
       case "PENDING":
         return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />;
+      case "STAGED":
+      case "REVIEW":
+        return <Clock className="h-4 w-4 text-amber-500" />;
       default:
-        return <Clock className="h-4 w-4 text-gray-500" />;
+        return <Clock className="h-4 w-4 text-muted-foreground" />;
     }
   };
 
   const getStatusBadge = (status: string) => {
     const colors: Record<string, string> = {
+      ACTIVE: "bg-emerald-500/20 text-emerald-500 border-emerald-500/30",
       RUNNING: "bg-emerald-500/20 text-emerald-500 border-emerald-500/30",
       SUCCESS: "bg-emerald-500/20 text-emerald-500 border-emerald-500/30",
       FAILED: "bg-red-500/20 text-red-500 border-red-500/30",
+      CANCELLED: "bg-orange-500/20 text-orange-500 border-orange-500/30",
       BUILDING: "bg-blue-500/20 text-blue-500 border-blue-500/30",
+      DEPLOYING: "bg-indigo-500/20 text-indigo-500 border-indigo-500/30",
+      HEALTH_CHECK: "bg-cyan-500/20 text-cyan-500 border-cyan-500/30",
+      QUEUED: "bg-yellow-500/20 text-yellow-500 border-yellow-500/30",
       PENDING: "bg-yellow-500/20 text-yellow-500 border-yellow-500/30",
+      STAGED: "bg-amber-500/20 text-amber-500 border-amber-500/30",
+      REVIEW: "bg-purple-500/20 text-purple-500 border-purple-500/30",
     };
-    return colors[status?.toUpperCase()] || "bg-gray-500/20 text-gray-500 border-gray-500/30";
+    return colors[status?.toUpperCase()] || "bg-muted text-muted-foreground border-border";
   };
 
   if (loading) {
@@ -105,12 +121,12 @@ export default function DeploymentsPage() {
               <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`} />
               Refresh
             </Button>
-            <Link href="/new">
-              <Button size="sm">
+            <Button size="sm" asChild>
+              <Link href="/new">
                 <Rocket className="h-4 w-4 mr-2" />
                 New Deployment
-              </Button>
-            </Link>
+              </Link>
+            </Button>
           </div>
         }
       />
@@ -121,12 +137,12 @@ export default function DeploymentsPage() {
             <Rocket className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
             <h3 className="font-semibold text-lg mb-2">No deployments yet</h3>
             <p className="text-muted-foreground mb-4">Deploy your first service to see activity here.</p>
-            <Link href="/new">
-              <Button>
+            <Button asChild>
+              <Link href="/new">
                 <Rocket className="h-4 w-4 mr-2" />
                 Create First Deployment
-              </Button>
-            </Link>
+              </Link>
+            </Button>
           </CardContent>
         </Card>
       ) : (

@@ -47,8 +47,12 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'open' | 'closed' | 'error'>('closed');
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
+  const disposedRef = useRef(false);
 
   const connect = () => {
+    if (disposedRef.current) {
+      return;
+    }
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       return;
     }
@@ -71,14 +75,14 @@ export function useWebSocket(options: UseWebSocketOptions) {
       wsRef.current = socket;
 
       socket.onopen = () => {
-        if (wsRef.current !== socket) return;
+        if (disposedRef.current || wsRef.current !== socket) return;
         setConnectionStatus('open');
         reconnectAttempts.current = 0;
         onOpen?.();
       };
 
       socket.onmessage = (event) => {
-        if (wsRef.current !== socket) return;
+        if (disposedRef.current || wsRef.current !== socket) return;
         try {
           const message: WebSocketMessage = JSON.parse(event.data);
           onMessage?.(message);
@@ -88,17 +92,22 @@ export function useWebSocket(options: UseWebSocketOptions) {
       };
 
       socket.onclose = (event) => {
-        if (wsRef.current !== socket) return;
-        wsRef.current = null;
+        if (wsRef.current === socket) {
+          wsRef.current = null;
+        } else if (!disposedRef.current) {
+          return;
+        }
+        if (disposedRef.current) return;
         setConnectionStatus('closed');
         onClose?.(event);
         
-        if (reconnect && reconnectAttempts.current < maxReconnectAttempts) {
+        if (reconnect && !disposedRef.current && reconnectAttempts.current < maxReconnectAttempts) {
           // Exponential backoff: base * 2^attempt, capped at 30s
           // e.g. base=2000 → 2s, 4s, 8s, 16s, 30s, 30s, ...
           const delay = Math.min(reconnectInterval * Math.pow(2, reconnectAttempts.current), 30000);
           reconnectTimeoutRef.current = setTimeout(() => {
             reconnectTimeoutRef.current = null;
+            if (disposedRef.current) return;
             reconnectAttempts.current++;
             connect();
           }, delay);
@@ -106,7 +115,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
       };
 
       socket.onerror = (event) => {
-        if (wsRef.current !== socket) return;
+        if (disposedRef.current || wsRef.current !== socket) return;
         setConnectionStatus('error');
         onError?.(event);
       };
@@ -138,9 +147,11 @@ export function useWebSocket(options: UseWebSocketOptions) {
   };
 
   useEffect(() => {
+    disposedRef.current = false;
     connect();
 
     return () => {
+      disposedRef.current = true;
       disconnect();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps

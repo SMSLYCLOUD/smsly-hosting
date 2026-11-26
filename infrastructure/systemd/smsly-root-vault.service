@@ -2,6 +2,7 @@
 Description=Trulay Grid External Root Vault Server (holds MK, derives weekly SMK_w)
 After=network-online.target
 Wants=network-online.target
+ConditionPathExists=/etc/smsly/root-vault.env
 
 [Service]
 Type=simple
@@ -20,6 +21,8 @@ AmbientCapabilities=CAP_IPC_LOCK CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
+StateDirectory=smsly-root-vault
+StateDirectoryMode=0700
 ProtectHome=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes

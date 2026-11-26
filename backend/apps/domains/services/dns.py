@@ -146,16 +146,10 @@ def _desired_proxied_state(domain: str | None = None) -> bool:
         depth_over = len(name.split(".")) - len(platform.split("."))
         if depth_over > 1:
             # Deep third-level names (slug.nodeN.zone): Cloudflare free
-            # plans cannot proxy these (no Universal SSL coverage).
-            # Grey/DNS-only by default; orange only when the operator
-            # opts into paid certs (edge_proxy_wildcards).
-            return bool(getattr(cfg, "edge_proxy_wildcards", False))
-        # Flat second-level names (slug-nodeN.zone, master public):
-        # orange-capable on free plans — follow the general edge flag.
-        try:
-            return bool(cfg.edge_proxy_records)
-        except Exception:
+            # and single-wildcard plans cannot cover these — always DNS-only.
             return False
+        # Flat second-level names (svc.zone): follow edge_proxy_wildcards.
+        return bool(getattr(cfg, "edge_proxy_records", False) and getattr(cfg, "edge_proxy_wildcards", False))
     try:
         return bool(cfg.edge_proxy_records)
     except Exception:

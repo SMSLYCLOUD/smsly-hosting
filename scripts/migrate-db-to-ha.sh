@@ -22,13 +22,39 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+INSTALL_DIR="${INSTALL_DIR:-/opt/smsly-hosting}"
 COMPOSE_FILE="docker-compose.prod.yml"
 OLD_DB_CONTAINER="smsly-hosting-db-1"
 NEW_DB_CONTAINER="smsly-postgres-primary"
 OLD_REDIS_CONTAINER="smsly-hosting-redis-1"
 DB_NAME="${POSTGRES_DB:-smsly_hosting}"
 DB_USER="${POSTGRES_USER:-smsly_admin}"
-DUMP_FILE="/tmp/smsly_db_migration_$(date +%Y%m%d_%H%M%S).sql"
+BACKUP_DIR="$INSTALL_DIR/.update-backups"
+umask 077
+mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR" || true
+DUMP_FILE="$BACKUP_DIR/smsly_db_migration_$(date +%Y%m%d_%H%M%S)_$$.sql"
+SVCS_STOPPED=false
+SVCS_TO_STOP="backend celery celery-deploy celery-fast celery-beat"
+
+cleanup_migration() {
+    rm -f "$DUMP_FILE" 2>/dev/null || true
+    if [ "$SVCS_STOPPED" = "true" ]; then
+        for svc in $SVCS_TO_STOP; do
+            docker compose -f "$COMPOSE_FILE" start "$svc" >/dev/null 2>&1 || true
+        done
+    fi
+}
+trap cleanup_migration EXIT
+
+if [[ ! "$DB_NAME" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+    echo -e "${RED}✗ Invalid POSTGRES_DB identifier: '$DB_NAME'${NC}"
+    exit 1
+fi
+if [[ ! "$DB_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+    echo -e "${RED}✗ Invalid POSTGRES_USER identifier: '$DB_USER'${NC}"
+    exit 1
+fi
 
 DO_CLEANUP=false
 for arg in "$@"; do
@@ -66,7 +92,12 @@ fi
 # Check new container exists — if not, start the HA stack and wait for it
 if ! docker ps --format '{{.Names}}' | grep -qx "$NEW_DB_CONTAINER"; then
     echo -e "${YELLOW}⚠ $NEW_DB_CONTAINER is not running — starting HA stack...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d db postgres-replica 
+    _mig_tier="$(grep -E '^STACK_TIER=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+    if [ "$_mig_tier" = "lite" ]; then
+        docker compose -f "$COMPOSE_FILE" --profile local-ha up -d db
+    else
+        docker compose -f "$COMPOSE_FILE" --profile local-ha --profile local-ha-replica up -d db postgres-replica
+    fi
     echo -e "  → Waiting for postgres-primary to become healthy..."
     for _i in $(seq 1 30); do
         if docker ps --format '{{.Names}}' | grep -qx "$NEW_DB_CONTAINER" && \
@@ -119,9 +150,19 @@ if [ "$TABLE_COUNT" -gt 0 ]; then
     echo -e "${YELLOW}  → Old db has more data — proceeding with migration${NC}"
 fi
 
-# ── Step 1: Dump from old db ─────────────────────────────────────────────────
+# ── Step 1: Stop backend/celery BEFORE pg_dump to prevent writes ────────────
 echo ""
-echo -e "${BLUE}→ Step 1: Dumping database from $OLD_DB_CONTAINER...${NC}"
+echo -e "${BLUE}→ Step 1: Pausing backend services before dump to prevent writes...${NC}"
+
+for svc in $SVCS_TO_STOP; do
+    timeout 30 docker compose -f "$COMPOSE_FILE" stop "$svc" || echo -e "${YELLOW}    ⚠ Failed to stop $svc${NC}"
+done
+SVCS_STOPPED=true
+echo -e "${GREEN}  ✓ Backend services paused${NC}"
+
+# ── Step 2: Dump from old db ─────────────────────────────────────────────────
+echo ""
+echo -e "${BLUE}→ Step 2: Dumping database from $OLD_DB_CONTAINER...${NC}"
 
 timeout 600 docker exec "$OLD_DB_CONTAINER" \
     pg_dump -U "$DB_USER" -d "$DB_NAME" \
@@ -136,16 +177,6 @@ if [ "$DUMP_SIZE" -lt 100 ]; then
     rm -f "$DUMP_FILE"
     exit 1
 fi
-
-# ── Step 2: Stop backend/celery to prevent writes during restore ─────────────
-echo ""
-echo -e "${BLUE}→ Step 2: Pausing backend services to prevent writes...${NC}"
-
-SVCS_TO_STOP="backend celery celery-deploy celery-fast celery-beat"
-for svc in $SVCS_TO_STOP; do
-    docker compose -f "$COMPOSE_FILE" stop "$svc" || echo -e "${YELLOW}    ⚠ Failed to stop $svc${NC}"
-done
-echo -e "${GREEN}  ✓ Backend services paused${NC}"
 
 # ── Step 3: Restore to postgres-primary ──────────────────────────────────────
 echo ""
@@ -253,8 +284,9 @@ echo ""
 echo -e "${BLUE}→ Step 5: Restarting backend services...${NC}"
 
 for svc in $SVCS_TO_STOP; do
-    docker compose -f "$COMPOSE_FILE" start "$svc" || echo -e "${YELLOW}    ⚠ Failed to start $svc${NC}"
+    timeout 30 docker compose -f "$COMPOSE_FILE" start "$svc" || echo -e "${YELLOW}    ⚠ Failed to start $svc${NC}"
 done
+SVCS_STOPPED=false
 echo -e "${GREEN}  ✓ Backend services restarted${NC}"
 
 # ── Step 6: Cleanup (optional) ──────────────────────────────────────────────

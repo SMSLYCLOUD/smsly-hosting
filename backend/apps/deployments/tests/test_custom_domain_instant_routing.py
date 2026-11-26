@@ -95,7 +95,11 @@ class CaddyCustomDomainRoutingTests(TestCase):
         caddyfile = generate_caddyfile(config)
 
         self.assertIn(
-            'service-domain.cloud.smsly.cloud {\n    reverse_proxy traefik:80',
+            'service-domain.cloud.smsly.cloud {',
+            caddyfile,
+        )
+        self.assertIn(
+            '    reverse_proxy traefik:80',
             caddyfile,
         )
         self.assertNotIn(
@@ -170,7 +174,16 @@ class CaddyCustomDomainRoutingTests(TestCase):
         caddyfile = generate_caddyfile(config)
 
         self.assertIn('@known_hosts host known.cloud.smsly.cloud', caddyfile)
-        self.assertIn('handle @known_hosts {\n        reverse_proxy traefik:80', caddyfile)
+        self.assertIn(
+            'handle @known_hosts {\n'
+            '        route {\n'
+            '            request_header -X-SMSLY-Remote-Sync\n'
+            '            import coraza_waf\n'
+            '            reverse_proxy traefik:80\n'
+            '        }\n'
+            '    }',
+            caddyfile,
+        )
         # Unknown hosts used to hit a Caddy-level `respond 404` notice;
         # they now fall through to Traefik, whose route-fallback service
         # serves the notice page (infrastructure/route-fallback).
@@ -206,8 +219,8 @@ class CaddyCustomDomainRoutingTests(TestCase):
 
         caddyfile = generate_caddyfile(config)
 
-        self.assertIn('@remote_hosts_0 host remote-api.cloud.smsly.cloud', caddyfile)
-        self.assertIn('reverse_proxy http://10.150.0.2 http://203.0.113.50 {', caddyfile)
+        self.assertIn('@remote_hosts_0_0 host remote-api.cloud.smsly.cloud', caddyfile)
+        self.assertIn('reverse_proxy https://10.150.0.2:443 https://203.0.113.50:443 {', caddyfile)
         self.assertIn('lb_try_duration 5s', caddyfile)
         self.assertIn('header_up Host {host}', caddyfile)
 

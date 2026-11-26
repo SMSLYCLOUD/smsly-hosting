@@ -26,7 +26,7 @@ class TestRemoteOrchestratorErrors3(TestCase):
         self.server.delete()
         self.user.delete()
 
-    @patch("apps.deployments.services.remote_orchestrator.requests.request")
+    @patch("apps.deployments.services.remote_orchestrator.client.requests.request")
     def test_sync_service_redirects(self, mock_request):
         orch = RemoteOrchestrator(self.server)
 

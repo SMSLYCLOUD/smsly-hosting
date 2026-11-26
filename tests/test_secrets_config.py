@@ -157,6 +157,36 @@ class TestSecretsConsumers(unittest.TestCase):
         self.assertNotIn("smsly/backend:latest", post)
         self.assertIn("smsly-hosting-backend:latest", post)
 
+    def test_no_raw_source_env_across_shell_scripts(self):
+        import glob
+        files = ["install.sh", "backend/install.sh"]
+        files.extend(sorted(glob.glob(os.path.join(REPO_ROOT, "lib", "*.sh"))))
+        files.extend(sorted(glob.glob(os.path.join(REPO_ROOT, "scripts", "*.sh"))))
+        files.extend(sorted(glob.glob(os.path.join(REPO_ROOT, "scripts", "*.service"))))
+        files.extend(sorted(glob.glob(os.path.join(REPO_ROOT, "infrastructure", "systemd", "*.service"))))
+        raw_source_re = re.compile(
+            r'(?:^|[;&|"\']\s*|&&\s*|\|\|\s*)\s*(?:source|\.)\s+[^\n#]*(?:\.env\b|env_file|ENV_FILE)'
+        )
+        offenders = []
+        for path in files:
+            rel = os.path.relpath(path, REPO_ROOT).replace("\\", "/")
+            text = read(rel)
+            for lineno, line in enumerate(text.splitlines(), 1):
+                if line.lstrip().startswith("#"):
+                    continue
+                if raw_source_re.search(line):
+                    offenders.append(f"{rel}:{lineno}: {line.strip()}")
+        self.assertEqual(offenders, [], "Raw source .env found:\n" + "\n".join(offenders))
+
+    def test_cosign_v241_sha256_parity(self):
+        amd64_sha = "8b24b946dd5809c6bd93de08033bcf6bc0ed7d336b7785787c080f574b89249b"
+        arm64_sha = "3b2e2e3854d0356c45fe6607047526ccd04742d20bd44afb5be91fa2a6e7cb4a"
+        for rel in ("Dockerfile", "backend/Dockerfile", "scripts/cosign-verify.sh"):
+            content = read(rel)
+            self.assertIn("v2.4.1", content, f"{rel} missing cosign v2.4.1")
+            self.assertIn(amd64_sha, content, f"{rel} amd64 cosign SHA256 mismatch")
+            self.assertIn(arm64_sha, content, f"{rel} arm64 cosign SHA256 mismatch")
+
 
 if __name__ == "__main__":
     unittest.main()

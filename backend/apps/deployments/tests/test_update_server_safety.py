@@ -44,7 +44,7 @@ class UpdateServerSafetyTests(TestCase):
         ) as mock_provision:
             mock_provision.delay = MagicMock()
             with self.assertLogs("apps.deployments.views_servers", level="WARNING") as log_cm:
-                resp = self.client.post(url)
+                resp = self.client.post(url, {"force": True}, format="json")
             self.assertEqual(resp.status_code, 202)
             joined = "\n".join(log_cm.output)
             self.assertIn("PENDING", joined)

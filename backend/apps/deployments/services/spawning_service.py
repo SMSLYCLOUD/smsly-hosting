@@ -274,6 +274,169 @@ def _replica_healthcheck_spec(service, ref_healthcheck, env_vars) -> dict | None
         return None
 
 
+def _safe_str_attr(obj, attr: str, default: str = "") -> str:
+    val = getattr(obj, attr, default)
+    if isinstance(val, (str, int, float)):
+        return str(val).strip()
+    if val is not None and type(val).__name__ == "UUID":
+        return str(val).strip()
+    return default
+
+
+_VALID_TRAEFIK_HOST_RE = None
+
+
+def _is_valid_traefik_host(hostname: str) -> bool:
+    import re as _re
+
+    global _VALID_TRAEFIK_HOST_RE
+    if _VALID_TRAEFIK_HOST_RE is None:
+        _VALID_TRAEFIK_HOST_RE = _re.compile(
+            r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+            r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        )
+    return bool(_VALID_TRAEFIK_HOST_RE.match(str(hostname or "").strip().lower()))
+
+
+def _overflow_router_labels(service, node, port: str, net: str, svc_key: str) -> list[str]:
+    """Router + service labels for a remote overflow replica when no primary exists on *node*.
+
+    Ensures Traefik on the overflow node exposes the service domains (and the
+    node's own grid/node hostnames) rather than creating an unroutable orphan.
+    """
+    import re as _re
+
+    domains: list[str] = []
+
+    def _add_domain(candidate: str) -> None:
+        host = str(candidate or "").strip().lower().rstrip(".")
+        if host and _is_valid_traefik_host(host) and host not in domains:
+            domains.append(host)
+
+    public_dom = _safe_str_attr(service, "public_domain")
+    if public_dom:
+        _add_domain(public_dom)
+    customs = getattr(service, "custom_domains", None)
+    if isinstance(customs, (list, tuple)):
+        for item in customs:
+            _add_domain(item)
+    aliases = getattr(service, "host_aliases", None)
+    if isinstance(aliases, (list, tuple)):
+        for item in aliases:
+            raw = item.get("host") if isinstance(item, dict) else item
+            _add_domain(raw)
+    try:
+        from apps.deployments.services.caddy_manager.config_generation import (
+            node_service_domains_for_service,
+        )
+        for h in node_service_domains_for_service(service, node=node):
+            _add_domain(h)
+    except Exception:
+        pass
+    if not domains:
+        raw_svc = _safe_str_attr(service, "name", "app").lower()
+        safe_svc = _re.sub(r"[^a-z0-9-]+", "-", raw_svc).strip("-") or "app"
+        _add_domain(f"{safe_svc[:63].strip('-') or 'app'}.localhost")
+
+    host_rule = " || ".join(f"Host(`{d}`)" for d in domains)
+    labels = [
+        f"traefik.http.services.{svc_key}.loadbalancer.server.port={port}",
+    ]
+    svc_id = _safe_str_attr(service, "id")
+    if svc_id:
+        labels.append(f"smsly.service_id={svc_id}")
+
+    sablier_enrolled = False
+    if getattr(service, "sablier_enabled", False) is True:
+        try:
+            from apps.deployments.services.internal_wake import (
+                internal_wake_host,
+            )
+            from apps.deployments.services.traefik_labels import (
+                internal_wake_labels,
+                normalize_sablier_session,
+                sablier_retry_labels,
+                sablier_retry_ref,
+                sablier_service_labels,
+                service_supports_sablier,
+            )
+            if service_supports_sablier(service)[0]:
+                session = normalize_sablier_session(
+                    getattr(service, "sablier_session", "") or "10m",
+                    default="10m",
+                )
+                group = _safe_str_attr(service, "name") or svc_key
+                sablier_map: dict[str, str] = {}
+                sablier_map.update(sablier_service_labels(
+                    router_name=svc_key, group=group, session=session,
+                ))
+                sablier_map.update(sablier_retry_labels(router_name=svc_key))
+                sablier_map.update(internal_wake_labels(
+                    router_name=svc_key,
+                    service_ref=svc_key,
+                    internal_host=internal_wake_host(group),
+                    group=group,
+                    session=session,
+                ))
+                if getattr(service, "is_public", True) is not False:
+                    sablier_map[f"traefik.http.routers.{svc_key}.middlewares"] = (
+                        f"{sablier_retry_ref(svc_key)},{svc_key}-sablier"
+                    )
+                for sk, sv in sablier_map.items():
+                    labels.append(f"{sk}={sv}")
+                sablier_enrolled = True
+        except Exception as exc:
+            logger.debug("Overflow Sablier labels skipped for %s: %s", svc_key, exc)
+
+    is_public = getattr(service, "is_public", True)
+    if is_public is not False:
+        labels.extend([
+            f"traefik.http.routers.{svc_key}.rule={host_rule}",
+            f"traefik.http.routers.{svc_key}.entrypoints=web",
+            f"traefik.http.routers.{svc_key}.service={svc_key}",
+            f"traefik.http.routers.{svc_key}.priority=100",
+        ])
+        hc_path = _safe_str_attr(service, "health_check_path")
+        if hc_path and not sablier_enrolled:
+            labels.extend([
+                f"traefik.http.services.{svc_key}.loadbalancer.healthcheck.path={hc_path}",
+                f"traefik.http.services.{svc_key}.loadbalancer.healthcheck.interval=20s",
+                f"traefik.http.services.{svc_key}.loadbalancer.healthcheck.timeout=8s",
+            ])
+    return labels
+
+
+def _sync_routing_after_replica_change(service, node=None) -> None:
+    """Best-effort convergence for Traefik overflow files and Master/Node Caddyfiles."""
+    from django.db import models as django_models
+
+    if not isinstance(service, django_models.Model):
+        return
+    svc_id = _safe_str_attr(service, "id")
+    if not svc_id:
+        return
+    try:
+        from apps.deployments.services.traefik_manager.overflow_file import (
+            sync_overflow_file,
+        )
+        sync_overflow_file(service)
+    except Exception as exc:
+        logger.debug("Overflow Traefik sync skipped for %s: %s", getattr(service, "name", "?"), exc)
+
+    if node is not None:
+        try:
+            from apps.deployments.tasks.deploy.helpers import _regenerate_caddyfile
+            _regenerate_caddyfile()
+        except Exception as exc:
+            logger.debug("Master Caddy regeneration skipped: %s", exc)
+        if not getattr(node, "is_lite_agent", False):
+            try:
+                from apps.deployments.tasks.deploy.caddy import push_caddy_to_node
+                push_caddy_to_node(str(node.id))
+            except Exception as exc:
+                logger.debug("Node Caddy push skipped for %s: %s", getattr(node, "name", "?"), exc)
+
+
 class SpawningService:
     """Creates and destroys service replicas on remote managed servers."""
 
@@ -365,16 +528,21 @@ class SpawningService:
         from .replica_parity import (
             merge_replica_env,
             parse_env_list,
+            replica_sablier_labels,
+            resolve_traefik_service_name,
             traefik_service_block,
         )
         follower_env: dict = {}
         follower_block: dict = {}
+        follower_labels: dict = {}
         ref: dict = {}
         try:
             ref = self._inspect_remote_container(ssh, service.name)
             follower_env = parse_env_list(ref.get("Env", []))
+            follower_labels = ref.get("Labels", {}) or {}
+            resolved_svc = resolve_traefik_service_name(follower_labels, service.name)
             follower_block = traefik_service_block(
-                ref.get("Labels", {}), service.name)
+                follower_labels, service.name, resolved_service_name=resolved_svc)
         except Exception as exc:
             logger.debug("Follower primary inspect failed for %s: %s",
                          service.name, exc)
@@ -400,39 +568,48 @@ class SpawningService:
             # sleepers wake on internal traffic. No-op for always-on
             # services and mesh-served apps (see internal_wake).
             from apps.deployments.services.internal_wake import (
-                ensure_internal_wake_alias,
+                ensure_remote_internal_wake_alias,
             )
-            if bool(getattr(service, "sablier_enabled", False)):
-                ensure_internal_wake_alias(service.name, scoped_net)
+            from apps.deployments.services.traefik_labels import (
+                service_supports_sablier,
+            )
+            if (
+                getattr(service, "sablier_enabled", False) is True
+                and service_supports_sablier(service)[0]
+            ):
+                ensure_remote_internal_wake_alias(ssh, service.name, scoped_net)
         except Exception:
             pass
         router = name.replace('.', '-').replace('_', '-')
+        svc_router = service.name.replace('.', '-').replace('_', '-')
 
         # Traefik labels — point Traefik at the scoped bridge for routing
-        # LB POOLING: the replica carries the CANONICAL service label (same
-        # traefik.http.services.<service> key as the primary) so Traefik's
-        # Docker provider pools both containers behind ONE service and
-        # round-robins with per-server health checks. A replica-specific
-        # router/service previously created a competing router with the same
-        # Host rule but lower priority — it never received traffic.
-        # No router labels here: the primary's router already matches the
-        # host and references the shared service name.
-        # The service block is COPIED from the live follower primary:
-        # any disagreement drops the entire service in Traefik.
+        # LB POOLING: the replica carries the CANONICAL (or active -bg-*)
+        # service label so Traefik pools primary + replicas behind ONE service.
+        # On pure overflow nodes (no follower primary on this node), also
+        # emit router labels so node Traefik exposes the service domains.
         labels = [
             "traefik.enable=true",
             f"traefik.docker.network={net}",
         ]
-        labels.extend(f"{k}={v}" for k, v in follower_block.items())
-        if not follower_block:
+        if follower_block:
+            labels.extend(f"{k}={v}" for k, v in follower_block.items())
+        elif not ref:
+            labels.extend(_overflow_router_labels(service, node, port, net, svc_router))
+        else:
             labels.append(
-                f"traefik.http.services.{service.name}.loadbalancer.server.port={port}"
+                f"traefik.http.services.{svc_router}.loadbalancer.server.port={port}"
             )
         labels.extend([
             "managed_by=smsly-hosting",
-            f"smsly.blue_green.canonical_name={shlex.quote(service.name)}",
+            f"smsly.blue_green.canonical_name={service.name}",
             "smsly.replica=true",
         ])
+        svc_id_str = _safe_str_attr(service, "id")
+        if svc_id_str:
+            labels.append(f"smsly.service_id={svc_id_str}")
+        for sk, sv in replica_sablier_labels(service, follower_labels).items():
+            labels.append(f"{sk}={sv}")
 
         # --- mTLS: Add SPIRE workload attestation labels ---
         try:
@@ -457,16 +634,14 @@ class SpawningService:
         merged_remote_pre = dict(remote_env)
         merged_remote_pre.update(mesh_overrides)
         apply_cryptd_remote_runtime_env(service, merged_remote_pre, unlock_now=True)
-        env_args = ""
         final_env = {}
         for key, value in merged_remote_pre.items():
-            final_env[key] = value
-            env_args += f" -e {shlex.quote(key)}={shlex.quote(value)}"
+            final_env[str(key)] = "" if value is None else str(value)
 
         # --- mTLS: Add SPIFFE env vars ---
         try:
             for k, v in get_mtls_env_vars(service).items():
-                env_args += f" -e {shlex.quote(k)}={shlex.quote(v)}"
+                final_env[str(k)] = "" if v is None else str(v)
         except Exception as e:
             logger.debug("mTLS env injection skipped: %s", e)
 
@@ -540,6 +715,9 @@ class SpawningService:
         mem_mb = getattr(service, 'memory_mb', 2048) or 2048
         cpus = getattr(service, 'cpu_cores', 1.0) or 1.0
         sec_flags = (
+            "--init --read-only "
+            "--tmpfs /tmp:size=100m --tmpfs /run:size=20m "
+            "--tmpfs /app/.next/cache:size=256m --tmpfs /app/tmp:size=100m "
             "--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
             "--cap-drop=ALL --cap-add=NET_BIND_SERVICE --cap-add=CHOWN --cap-add=SETUID --cap-add=SETGID "
             f"--memory={mem_mb}m --cpus={cpus} --pids-limit=1024 "
@@ -552,24 +730,74 @@ class SpawningService:
             logger.debug("mTLS volume injection skipped: %s", e)
             mtls_volumes = ""
 
+        # Upload secrets via a 0600 SFTP --env-file instead of passing raw
+        # -e KEY=VAL arguments on the remote docker run command line.
+        import tempfile as _tempfile
+        import uuid as _uuid
+
+        remote_env_path = None
+        env_file_arg = ""
+        if final_env:
+            remote_env_path = f"/tmp/smsly-replica-{_uuid.uuid4().hex}.env"
+            fd, local_env_path = _tempfile.mkstemp(
+                prefix="smsly-replica-", suffix=".env", text=True,
+            )
+            try:
+                with contextlib.suppress(OSError):
+                    os.chmod(local_env_path, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    for key, value in final_env.items():
+                        clean_key = str(key).replace("\r", "").replace("\n", "")
+                        if not clean_key or "=" in clean_key:
+                            continue
+                        clean_val = str(value).replace("\r", "").replace("\n", " ")
+                        f.write(f"{clean_key}={clean_val}\n")
+                ssh.upload_file(local_env_path, remote_env_path)
+                if getattr(ssh, "sftp", None) is not None:
+                    with contextlib.suppress(Exception):
+                        ssh.sftp.chmod(remote_env_path, 0o600)
+                env_file_arg = f"--env-file {shlex.quote(remote_env_path)} "
+            finally:
+                with contextlib.suppress(OSError):
+                    os.remove(local_env_path)
+
+        q_net = shlex.quote(net)
+        remote_net_cmd = (
+            f"docker network inspect {q_net} >/dev/null 2>&1 || "
+            f"docker network create --driver bridge {q_net} >/dev/null 2>&1 || true; "
+            f"for _t in smsly-hosting-traefik-1 smsly-traefik traefik; do "
+            f"docker network connect {q_net} \"$_t\" 2>/dev/null || true; done; "
+        )
+        chmod_cmd = f"chmod 600 {shlex.quote(remote_env_path)} && " if remote_env_path else ""
         cmd = (
             f"{login_cmd}"
+            f"{remote_net_cmd}"
             f"docker pull {shlex.quote(pull_image)} 2>/dev/null; "
             f"docker rm -f {shlex.quote(name)} 2>/dev/null; "
+            f"{chmod_cmd}"
             f"docker run -d --name {shlex.quote(name)} "
             f"{sec_flags}"
             f"{runtime_flag} "
             f"{extra_hosts_flags} "
             f"{health_flags}"
-            f"--restart unless-stopped --network {shlex.quote(net)} "
+            f"--restart unless-stopped --network {q_net} "
             f"{mtls_volumes}"
-            f"{label_args} {env_args} "
+            f"{label_args} {env_file_arg}"
             f"{shlex.quote(pull_image)}; "
         )
 
-        _out, err, exit_code = ssh.exec_command(cmd, raise_on_error=False, timeout=300)
-        if exit_code != 0:
-            raise RuntimeError(f"Failed to spawn replica on {node.name}: {err}")
+        try:
+            _out, err, exit_code = ssh.exec_command(cmd, raise_on_error=False, timeout=300)
+            if exit_code != 0:
+                raise RuntimeError(f"Failed to spawn replica on {node.name}: {err}")
+        finally:
+            if remote_env_path:
+                with contextlib.suppress(Exception):
+                    ssh.exec_command(
+                        f"rm -f {shlex.quote(remote_env_path)}",
+                        raise_on_error=False,
+                        timeout=30,
+                    )
 
         # Get container ID
         cid_out, _, _ = ssh.exec_command(
@@ -582,6 +810,7 @@ class SpawningService:
         replica.status = 'RUNNING'
         replica.save(update_fields=['container_id', 'container_name', 'status'])
 
+        _sync_routing_after_replica_change(service, node=node)
         logger.info("Spawned replica %s on %s (%s)", name, node.name, node.host)
         return replica
 
@@ -607,6 +836,7 @@ class SpawningService:
         replica.status = 'DESTROYED'
         replica.destroyed_at = timezone.now()
         replica.save(update_fields=['status', 'destroyed_at'])
+        _sync_routing_after_replica_change(getattr(replica, "service", None), node=replica.node)
         logger.info("Destroyed replica %s on %s", replica.container_name, replica.node.name)
 
     def destroy_local(self, replica):
@@ -634,6 +864,11 @@ class SpawningService:
                     except docker_lib.errors.NotFound:
                         pass
                     logger.info("Destroyed local replica container %s", name)
+                    try:
+                        from apps.deployments.services.mesh_dns import sync_dns_now
+                        sync_dns_now(client=client)
+                    except Exception:
+                        pass
             except Exception as exc:
                 logger.warning(
                     "Failed to remove local replica container %s: %s", name, exc
@@ -641,6 +876,7 @@ class SpawningService:
         replica.status = 'DESTROYED'
         replica.destroyed_at = timezone.now()
         replica.save(update_fields=['status', 'destroyed_at'])
+        _sync_routing_after_replica_change(getattr(replica, "service", None), node=None)
 
     def replica_container_missing(self, replica) -> bool | None:
         """True if the replica's container is certainly gone from its host.
@@ -718,14 +954,15 @@ class SpawningService:
             find_reference_container,
             live_service_blocks,
             merge_replica_env,
-            reference_config,
+            reference_details,
+            replica_sablier_labels,
         )
         db_env = {
             ev.key: ev.value
             for ev in service.env_vars.all()
             if not (isinstance(ev.value, str) and ev.value.startswith("gAAAA") and len(ev.value) > 50)
         }
-        live_env, ref_block = reference_config(client, service.name)
+        live_env, ref_block, ref_labels, resolved_svc = reference_details(client, service.name)
         if not live_env and not ref_block:
             logger.warning(
                 "No live reference container for %s — spawning best-effort "
@@ -769,7 +1006,13 @@ class SpawningService:
                 ensure_internal_wake_alias,
                 rewrite_env_for_internal_wake,
             )
-            if bool(getattr(service, "sablier_enabled", False)):
+            from apps.deployments.services.traefik_labels import (
+                service_supports_sablier,
+            )
+            if (
+                getattr(service, "sablier_enabled", False) is True
+                and service_supports_sablier(service)[0]
+            ):
                 ensure_internal_wake_alias(service.name, scoped_net)
         except Exception:
             pass
@@ -783,14 +1026,11 @@ class SpawningService:
         except Exception:
             pass
         router = name.replace('.', '-').replace('_', '-')
+        svc_router = resolved_svc or service.name.replace('.', '-').replace('_', '-')
 
-        # LB POOLING (see remote twin above): carry the CANONICAL service
-        # label so Traefik pools this replica with the primary behind one
-        # service and round-robins with per-server health checks. Router
-        # labels intentionally omitted — the primary's router already
-        # matches the host; a competing replica router never won traffic.
-        # The service block MUST equal the live reference exactly:
-        # Traefik drops the whole service on any disagreement.
+        # LB POOLING: carry the primary's active Traefik service key
+        # (canonical, -bg-<slot>, sanitized, or -service) so Traefik pools
+        # this replica with the live primary behind ONE service.
         labels = {
             "traefik.enable": "true",
             "traefik.docker.network": net,
@@ -799,15 +1039,19 @@ class SpawningService:
             "smsly.blue_green.canonical_name": service.name,
             "smsly.replica": "true",
         }
+        svc_id_str = _safe_str_attr(service, "id")
+        if svc_id_str:
+            labels["smsly.service_id"] = svc_id_str
+        labels.update(replica_sablier_labels(service, ref_labels))
         # No live reference (first replica, primary not yet running): fall
         # back to explicit port so Traefik has a routable service.
         if not ref_block:
-            labels[f"traefik.http.services.{service.name}.loadbalancer.server.port"] = \
+            labels[f"traefik.http.services.{svc_router}.loadbalancer.server.port"] = \
                 str(env_vars.get("PORT") or service.internal_port or 8000)
         assert_block_compatible(
-            live_service_blocks(client, service.name),
+            live_service_blocks(client, service.name, target_service_name=svc_router),
             {k: v for k, v in labels.items()
-             if k.startswith(f"traefik.http.services.{service.name}.")},
+             if k.startswith(f"traefik.http.services.{svc_router}.")},
             service.name,
         )
 
@@ -860,26 +1104,12 @@ class SpawningService:
                 {"Name": "fsize", "Soft": 512000000, "Hard": 512000000},
             ],
         }
-        if runtime == "runsc":
-            try:
-                from apps.deployments.services.container_refresh import (
-                    _resolve_gvisor_extra_hosts,
-                )
-                extra_hosts = _resolve_gvisor_extra_hosts(service, [net], client)
-                if extra_hosts:
-                    run_extra_kwargs["extra_hosts"] = extra_hosts
-            except Exception as exc:
-                logger.debug("Replica gVisor extra_hosts skipped: %s", exc)
-        if needs_host_gateway(env_vars):
-            hosts_list = list(run_extra_kwargs.get("extra_hosts") or [])
-            if not any(str(h).startswith("host.docker.internal:") for h in hosts_list):
-                hosts_list.append("host.docker.internal:host-gateway")
-            run_extra_kwargs["extra_hosts"] = hosts_list
         from apps.deployments.services.container_runtime import (
             ensure_sandbox_resolv_conf,
             is_sandboxed_runtime,
             sandbox_dns_servers,
         )
+        _replica_resolv_mounted = False
         if runtime and is_sandboxed_runtime(runtime):
             try:
                 _dns = sandbox_dns_servers()
@@ -896,8 +1126,29 @@ class SpawningService:
                         for v in mtls_volumes.values()
                     ):
                         mtls_volumes[_resolv_path] = {"bind": "/etc/resolv.conf", "mode": "ro"}
+                    _replica_resolv_mounted = True
             except Exception as exc:
                 logger.debug("Replica sandbox resolv.conf mount skipped: %s", exc)
+        if runtime == "runsc":
+            try:
+                from apps.deployments.services.container_refresh import (
+                    _resolve_gvisor_extra_hosts,
+                )
+                extra_hosts = _resolve_gvisor_extra_hosts(
+                    service,
+                    [net],
+                    client,
+                    include_siblings=not _replica_resolv_mounted,
+                )
+                if extra_hosts:
+                    run_extra_kwargs["extra_hosts"] = extra_hosts
+            except Exception as exc:
+                logger.debug("Replica gVisor extra_hosts skipped: %s", exc)
+        if needs_host_gateway(env_vars):
+            hosts_list = list(run_extra_kwargs.get("extra_hosts") or [])
+            if not any(str(h).startswith("host.docker.internal:") for h in hosts_list):
+                hosts_list.append("host.docker.internal:host-gateway")
+            run_extra_kwargs["extra_hosts"] = hosts_list
 
         container = client.containers.run(
             image=image,
@@ -927,6 +1178,13 @@ class SpawningService:
         # --- mTLS: Inject Envoy sidecar if enabled (fail-closed when enabled) ---
         self._maybe_inject_sidecar(service, container, client)
 
+        try:
+            from apps.deployments.services.mesh_dns import sync_dns_now
+            sync_dns_now(client=client)
+        except Exception:
+            pass
+
+        _sync_routing_after_replica_change(service, node=None)
         return replica
 
     def _check_local_capacity(self, service):
@@ -1010,13 +1268,17 @@ class SpawningService:
         the network namespace with the application container. Fails closed
         when mTLS sidecar is enabled or service is managed by ECOSYSTEM.
         """
+        from django.db import models as django_models
         from apps.mtls.models import MtlsConfig
         from apps.mtls.services.envoy_sidecar import EnvoySidecar
 
         is_eco = str(getattr(service, "managed_by", "") or "").upper() == "ECOSYSTEM"
-        config = MtlsConfig.objects.filter(
-            service=service, enabled=True, sidecar_enabled=True
-        ).first()
+        if isinstance(service, django_models.Model) and getattr(service, "pk", None):
+            config = MtlsConfig.objects.filter(
+                service=service, enabled=True, sidecar_enabled=True
+            ).first()
+        else:
+            config = None
         if config or is_eco:
             try:
                 EnvoySidecar.inject_sidecar(service)
@@ -1025,7 +1287,7 @@ class SpawningService:
                 raise RuntimeError(
                     f"Envoy sidecar injection failed for {service.name}: {exc}"
                 ) from exc
-        else:
+        elif isinstance(service, django_models.Model):
             # Mesh disabled: sweep non-running sidecar corpses left by
             # failed injects. Running sidecars are never touched.
             try:

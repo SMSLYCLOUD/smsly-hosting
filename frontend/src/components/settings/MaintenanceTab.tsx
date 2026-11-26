@@ -171,7 +171,7 @@ export function MaintenanceTab() {
             {tasks.update.taskId && <UpdateTerminalStream updateId={tasks.update.taskId} />}
           </div>
           <div className="flex justify-end mt-4">
-            <Link href="/dashboard"><Button variant="outline">Cancel</Button></Link>
+            <Button variant="outline" asChild><Link href="/dashboard">Cancel</Link></Button>
           </div>
         </CardContent>
       </Card>

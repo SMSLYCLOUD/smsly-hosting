@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
 import { Search, RefreshCcw, Loader2, Terminal, AlertCircle } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import {
@@ -247,38 +248,48 @@ export function LogsView({
             <Card>
                 <CardContent className="p-4 space-y-3">
                     <form onSubmit={handleSubmit} className="flex flex-col md:flex-row gap-2">
-                        <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-background">
-                            <Search className="w-3.5 h-3.5 text-muted-foreground" />
+                        <Label htmlFor="logs-loki-query" className="sr-only">
+                            LogQL query
+                        </Label>
+                        <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-background min-w-0">
+                            <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                             <input
+                                id="logs-loki-query"
                                 value={draftQuery}
                                 onChange={(e) => setDraftQuery(e.target.value)}
                                 placeholder='{compose_service=~".+"} |= "error"'
-                                className="flex-1 bg-transparent outline-none text-sm font-mono"
+                                className="flex-1 min-w-0 bg-transparent outline-none text-sm font-mono"
                             />
                         </div>
                         <button
                             type="submit"
-                            className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90"
+                            className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 shrink-0"
                         >
                             Run
                         </button>
                     </form>
 
                     <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                        <div className="flex items-center gap-1">
-                            <span>Service:</span>
+                        <div className="flex items-center gap-1.5">
+                            <Label htmlFor="logs-service-filter" className="text-xs font-normal text-muted-foreground">
+                                Service:
+                            </Label>
                             <input
+                                id="logs-service-filter"
                                 value={serviceFilter || ''}
                                 onChange={(e) => setServiceFilter(e.target.value || undefined)}
                                 onBlur={(e) => { if (e.target.value) applyServiceFilter(e.target.value); }}
                                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyServiceFilter(e.currentTarget.value); } }}
                                 placeholder="(all)"
-                                className="px-2 py-1 rounded-md border border-border bg-background text-foreground"
+                                className="px-2 py-1 rounded-md border border-border bg-background text-foreground w-36 sm:w-auto"
                             />
                         </div>
-                        <div className="flex items-center gap-1">
-                            <span>Range:</span>
+                        <div className="flex items-center gap-1.5">
+                            <Label htmlFor="logs-time-range" className="text-xs font-normal text-muted-foreground">
+                                Range:
+                            </Label>
                             <select
+                                id="logs-time-range"
                                 value={range}
                                 onChange={(e) => setRange(e.target.value)}
                                 className="px-2 py-1 rounded-md border border-border bg-background text-foreground"
@@ -288,9 +299,12 @@ export function LogsView({
                                 ))}
                             </select>
                         </div>
-                        <div className="flex items-center gap-1">
-                            <span>Limit:</span>
+                        <div className="flex items-center gap-1.5">
+                            <Label htmlFor="logs-limit" className="text-xs font-normal text-muted-foreground">
+                                Limit:
+                            </Label>
                             <select
+                                id="logs-limit"
                                 value={limit}
                                 onChange={(e) => setLimit(Number(e.target.value))}
                                 className="px-2 py-1 rounded-md border border-border bg-background text-foreground"
@@ -301,6 +315,7 @@ export function LogsView({
                             </select>
                         </div>
                         <button
+                            type="button"
                             onClick={fetchLogs}
                             className="ml-auto inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border border-border hover:bg-muted"
                         >
@@ -333,6 +348,7 @@ export function LogsView({
                         <LiveLogViewer
                             ref={viewerRef}
                             heightClass="h-[60vh]"
+                            ariaLabel="Loki log search results"
                             emptyMessage={
                                 loading
                                     ? 'Querying Loki…'

@@ -42,7 +42,7 @@ class TemplateRegistryTest(SimpleTestCase):
     def test_template_required_addons_are_supported_by_provisioner(self):
         """Ensure every template-required addon is recognized by addon provisioner."""
         provisioner_path = (
-            Path(__file__).resolve().parents[3] / 'services' / 'addon_provisioner.py'
+            Path(__file__).resolve().parents[2] / 'addons' / 'services' / 'addon_provisioner.py'
         )
         module = ast.parse(provisioner_path.read_text(encoding='utf-8'))
         addon_images = {}
@@ -119,20 +119,17 @@ def test_all_ai_templates_dry_run(mock_addon_provisioner, mock_subprocess_run, m
         except Exception as e:
             pytest.fail(f"Template deployment failed for {t['id']}: {e}")
 
-        # specifically check ai-router created companions
+        # specifically check ai-router created shared Ollama companion
         if t['id'] == 'ai-router':
             companions = Service.objects.filter(owner=user).exclude(id=service.id)
-            # Should have created 3 companion services
-            assert companions.count() == 3, f"Expected 3 companions for ai-router, got {companions.count()}"
+            assert companions.count() == 1, f"Expected 1 shared Ollama companion for ai-router, got {companions.count()}"
             companion_names = [c.name for c in companions]
-            assert any('llama3-1-7b' in name for name in companion_names)
-            assert any('qwen2-5-0-5b' in name for name in companion_names)
-            assert any('ollama-nomic-embed-text' in name for name in companion_names)
+            assert any('ollama-cpp-shared' in name for name in companion_names)
 
             # Check router env var
             env_var = EnvironmentVariable.objects.filter(service=service, key='AI_ROUTER_SELECTED_SERVICE_IDS').first()
             assert env_var is not None
-            assert len(json.loads(env_var.value)) == 3
+            assert len(json.loads(env_var.value)) == 1
 
         # Clean up
         EnvironmentVariable.objects.filter(service__owner=user).delete()

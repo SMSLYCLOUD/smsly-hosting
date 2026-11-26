@@ -67,7 +67,15 @@ def _resolve_team(service_or_project):
 
 def user_is_team_admin(user, service_or_project) -> bool:
     """Can the user perform destructive operations (delete)?"""
-    return _team_role(user, service_or_project) == 'ADMIN'
+    if _is_owner_or_superuser(user, service_or_project):
+        return True
+    membership = _team_membership(user, service_or_project)
+    if not membership or membership.role != 'ADMIN':
+        return False
+    perms = getattr(membership, 'permissions', None)
+    if isinstance(perms, list) and len(perms) > 0:
+        return any(p in {'service.delete', 'project.delete', 'team.manage'} for p in perms)
+    return True
 
 
 def _is_owner_or_superuser(user, service_or_project) -> bool:
@@ -85,12 +93,44 @@ def _is_owner_or_superuser(user, service_or_project) -> bool:
         return False
 
 
+_WRITE_PERMISSION_CODES = frozenset({
+    'service.create', 'service.update', 'service.delete',
+    'service.deploy', 'service.stop', 'service.restart',
+    'deployment.create', 'deployment.approve', 'deployment.rollback',
+    'domain.manage', 'env_var.manage', 'addon.manage',
+    'project.create', 'project.delete', 'project.manage',
+})
+
+
+def _team_membership(user, service_or_project):
+    from .models import TeamMember
+    if not user or not getattr(user, 'is_authenticated', False):
+        return None
+    team = _resolve_team(service_or_project)
+    if not team:
+        return None
+    membership = TeamMember.objects.filter(
+        team=team, user=user, is_active=True,
+    ).first()
+    if not membership:
+        return None
+    from django.utils import timezone
+    if membership.expires_at and membership.expires_at < timezone.now():
+        return None
+    return membership
+
+
 def user_can_write(user, service_or_project) -> bool:
     """Can the user create/update resources (but not delete)?"""
     if _is_owner_or_superuser(user, service_or_project):
         return True
-    role = _team_role(user, service_or_project)
-    return role in ('ADMIN', 'MEMBER')
+    membership = _team_membership(user, service_or_project)
+    if not membership or membership.role not in ('ADMIN', 'MEMBER'):
+        return False
+    perms = getattr(membership, 'permissions', None)
+    if isinstance(perms, list) and len(perms) > 0:
+        return any(p in _WRITE_PERMISSION_CODES for p in perms)
+    return True
 
 
 def user_can_read(user, service_or_project) -> bool:

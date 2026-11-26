@@ -88,6 +88,34 @@ def _mint_join_token(server_container: str) -> str | None:
     return None
 
 
+def _export_trust_bundle(server_container: str, data_volume: str) -> bool:
+    """Export the SPIRE server root trust bundle PEM into data_volume/bundle.crt."""
+    try:
+        r = subprocess.run(
+            ["docker", "exec", server_container,
+             "/opt/spire/bin/spire-server", "bundle", "show",
+             "-socketPath", "/tmp/spire-server/private/api.sock",
+             "-format", "pem"],
+            capture_output=True, text=True, timeout=15,
+        )
+        bundle_pem = (r.stdout or "").strip()
+        if r.returncode != 0 or not bundle_pem:
+            return False
+        w = subprocess.run(
+            ["docker", "run", "--rm", "-i",
+             "-v", f"{data_volume}:/opt/spire/data",
+             "alpine:3.19", "sh", "-c",
+             "mkdir -p /opt/spire/data && chmod 0700 /opt/spire/data && "
+             "cat > /opt/spire/data/bundle.crt && chmod 0644 /opt/spire/data/bundle.crt"],
+            input=bundle_pem + "\n",
+            capture_output=True, text=True, timeout=30,
+        )
+        return w.returncode == 0
+    except Exception as exc:
+        logger.warning("trust bundle export failed on %s: %s", server_container, exc)
+        return False
+
+
 def _start_agent_with_token(
     agent_container: str,
     server_container: str,
@@ -107,6 +135,11 @@ def _start_agent_with_token(
         return "already_running"
 
     import os as _os
+    if _os.path.isdir(agent_conf_path):
+        return (
+            f"error: host poisoned (directory at {agent_conf_path}): "
+            "remove it on the host, restore the file, and retry."
+        )
     # Host-namespace preflight (AGENTS.md #24): only enforced when the host
     # path is visible from this namespace. Backend containers without an
     # /opt mount cannot tell; blocking there would false-fail healthy hosts.
@@ -115,6 +148,12 @@ def _start_agent_with_token(
             f"error: agent conf missing (not a file): {agent_conf_path} — "
             "refusing docker run (daemon would create a directory and poison retries)"
         )
+
+    if not data_volume or not socket_volume or not svids_volume:
+        return "error: data_volume, socket_volume, and svids_volume are required"
+
+    if not _export_trust_bundle(server_container, data_volume):
+        return "error: could not export trust bundle (is the server healthy?)"
 
     token = _mint_join_token(server_container)
     if not token:
@@ -137,6 +176,8 @@ def _start_agent_with_token(
                 # peer as "/" so no selectors match ("No identity issued").
                 "--cgroupns", "host",
                 "--restart", "unless-stopped",
+                "--security-opt", "no-new-privileges:true",
+                "--cap-drop", "ALL",
                 "-v", f"{data_volume}:/opt/spire/data",
                 "-v", f"{socket_volume}:/opt/spire/run",
                 "-v", f"{svids_volume}:/opt/spire/svids",
@@ -151,7 +192,8 @@ def _start_agent_with_token(
         )
         if r.returncode == 0:
             return "started"
-        _err = (r.stderr or "")[:200]
+        import re as _re
+        _err = _re.sub(r"(-joinToken\s+)\S+", r"\1[REDACTED]", (r.stderr or ""))[:200]
         if "not a directory" in _err:
             return (
                 f"error: host poisoned (directory at {agent_conf_path}): "
@@ -159,7 +201,9 @@ def _start_agent_with_token(
             )
         return f"error: {_err}"
     except Exception as exc:
-        return f"error: {exc}"
+        import re as _re
+        _safe_exc = _re.sub(r"(-joinToken\s+)\S+", r"\1[REDACTED]", str(exc))
+        return f"error: {_safe_exc}"
 
 
 def ensure_ecosystem_spire() -> str:
@@ -190,25 +234,27 @@ def ensure_ecosystem_spire() -> str:
 
 
 def _container_running(container_name: str) -> bool:
-    """Check if a Docker container is running."""
+    """Check if a Docker container is running and not crash-loop restarting."""
     try:
         result = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+            ["docker", "inspect", "-f", "{{.State.Running}} {{.State.Restarting}}", container_name],
             capture_output=True, text=True, timeout=5,
         )
-        return result.returncode == 0 and result.stdout.strip() == "true"
+        return result.returncode == 0 and result.stdout.strip() == "true false"
     except Exception:
         return False
 
 
+def _user_can_read_service(user, service) -> bool:
+    """Check if a user has active, unexpired read access to a service."""
+    from apps.teams.permissions import user_can_read
+    return bool(user and getattr(user, 'is_authenticated', False) and (user.is_superuser or user_can_read(user, service)))
+
+
 def _user_can_access_service(user, service) -> bool:
-    """Check if a user can manage a service."""
-    if user.is_superuser:
-        return True
-    if service.owner == user:
-        return True
-    team = getattr(service.project, 'team', None)
-    return bool(team and team.members.filter(user=user).exists())
+    """Check if a user has active, unexpired write access to manage a service."""
+    from apps.teams.permissions import user_can_write
+    return bool(user and getattr(user, 'is_authenticated', False) and (user.is_superuser or user_can_write(user, service)))
 
 
 @api_view(["GET"])
@@ -221,7 +267,7 @@ def mtls_status(request, service_id):
     """
     from apps.deployments.models import Service
     service = get_object_or_404(Service, id=service_id)
-    if not _user_can_access_service(request.user, service):
+    if not _user_can_read_service(request.user, service):
         return Response({"detail": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
 
     config, _ = MtlsConfig.objects.get_or_create(
@@ -650,10 +696,8 @@ def mtls_overview(request):
 
     configs = MtlsConfig.objects.select_related("service")
     if not request.user.is_superuser:
-        from django.db.models import Q
         configs = configs.filter(
-            Q(service__owner=request.user)
-            | Q(service__project__team__members__user=request.user)
+            models_Q_owner_or_team(request.user, prefix="service__")
         ).distinct()
     return Response({
         "platform": {
@@ -710,12 +754,10 @@ def mtls_list(request):
     ])
 
 
-def models_Q_owner_or_team(user):
-    """Build a Q filter for services owned by or team-accessible to user."""
-    from django.db.models import Q
-    from apps.deployments.models import Service
-
-    return Q(owner=user) | Q(project__team__members__user=user)
+def models_Q_owner_or_team(user, prefix=""):
+    """Build a Q filter for services owned by or active/unexpired team-accessible to user."""
+    from apps.teams.permissions import get_team_q_filter
+    return get_team_q_filter(user, prefix=prefix)
 
 
 # ---------------------------------------------------------------------------
@@ -803,8 +845,9 @@ def policy_list_create(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    from apps.teams.permissions import get_team_q_filter
     accessible_service_ids = Service.objects.filter(
-        Q(owner=request.user) | Q(project__team__members__user=request.user)
+        get_team_q_filter(request.user)
     ).values_list("id", flat=True)
 
     if service_id == "*":
@@ -813,7 +856,7 @@ def policy_list_create(request):
         ).order_by("-priority", "id")
     else:
         service = get_object_or_404(Service, id=service_id)
-        if not _user_can_access_service(request.user, service):
+        if not _user_can_read_service(request.user, service):
             return Response({"detail": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
         policies = MtlsAuthorizationPolicy.objects.filter(
             target_service=service
@@ -947,16 +990,18 @@ def mtls_repair(request, service_id):
         return Response({"detail": "Not authorized."}, status=status.HTTP_403_FORBIDDEN)
 
     # ── Scope: ecosystem services in this service's project ────────────
-    scope_qs = Service.objects.filter(owner=request.user)
+    from apps.teams.permissions import get_team_q_filter
+    scope_qs = Service.objects.filter(get_team_q_filter(request.user)).distinct()
     if service.project_id:
         scope_qs = scope_qs.filter(
             project_id=service.project_id,
             managed_by="ECOSYSTEM",
         )
-    scope = list(scope_qs)
+    scope = [s for s in scope_qs if _user_can_access_service(request.user, s)]
     if service not in scope:
         scope.append(service)
     project = service.project
+    secret_owner = service.owner or request.user
 
     # ── Shared addon URLs + shared secrets (for env resolution) ────────
     shared_urls: dict[str, str] = {}
@@ -969,7 +1014,7 @@ def mtls_repair(request, service_id):
             if addon.connection_url:
                 shared_urls.setdefault(addon.addon_type, addon.connection_url)
     secret_cache: dict[str, str] = dict(
-        EcosystemSharedSecret.objects.filter(user=request.user).values_list(
+        EcosystemSharedSecret.objects.filter(user=secret_owner).values_list(
             "name", "value",
         )
     )
@@ -990,7 +1035,7 @@ def mtls_repair(request, service_id):
                 if name not in secret_cache:
                     secret_cache[name] = _generate_secret()
                     EcosystemSharedSecret.objects.update_or_create(
-                        user=request.user, name=name,
+                        user=secret_owner, name=name,
                         defaults={"value": secret_cache[name]},
                     )
                 return secret_cache[name]
@@ -1018,6 +1063,8 @@ def mtls_repair(request, service_id):
     for svc in scope:
         changed: list[str] = []
         for env in EnvironmentVariable.objects.filter(service=svc):
+            if getattr(env, "is_locked", False):
+                continue
             old = str(env.value or "")
             new = _resolve_value(old, svc)
             if new != old:
@@ -1030,16 +1077,16 @@ def mtls_repair(request, service_id):
             )
 
     # ── 2. mTLS config normalization ────────────────────────────────────
-    # Ecosystem services -> ecosystem.local, everything else ->
-    # platform.local. Never move a service across trust domains the
-    # wrong way.
+    # Only PLATFORM services belong to platform.local; ECOSYSTEM and USER
+    # services (everything else) belong to ecosystem.local. Never escalate
+    # user/ecosystem workloads into platform.local.
     mtls_normalized = []
     for svc in scope:
         try:
-            if svc.managed_by == "ECOSYSTEM":
-                _configure_ecosystem_mtls(svc, enabled=True)
-            else:
+            if str(getattr(svc, "managed_by", "") or "").upper() == "PLATFORM":
                 _configure_platform_mtls(svc, enabled=True)
+            else:
+                _configure_ecosystem_mtls(svc, enabled=True)
             mtls_normalized.append(svc.name)
         except Exception as exc:
             logger.warning("mTLS repair normalize failed for %s: %s", svc.name, exc)
@@ -1159,6 +1206,10 @@ def mtls_repair(request, service_id):
                     continue
                 if svc_label in live_ids:
                     continue
+                if not request.user.is_superuser:
+                    proj_label = str(labels.get("smsly.project_id") or "").strip()
+                    if not (service.project_id and proj_label == str(service.project_id)):
+                        continue
                 name = getattr(container, "name", "") or ""
                 if name.startswith("smsly-hosting-"):
                     continue

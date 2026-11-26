@@ -156,7 +156,11 @@ class Command(BaseCommand):
         new_labels.update(mtls_labels)
 
         # Merge environment
-        new_env = dict(old_container.attrs.get("Config", {}).get("Env") or [])
+        new_env = {}
+        for item in (old_container.attrs.get("Config", {}).get("Env") or []):
+            if isinstance(item, str) and "=" in item:
+                k, _, v = item.partition("=")
+                new_env[k] = v
         # Remove old env vars that we're replacing
         for key in mtls_env:
             new_env.pop(key, None)
@@ -175,14 +179,21 @@ class Command(BaseCommand):
         # Get network config from old container
         network_config = old_container.attrs.get("NetworkSettings", {}).get("Networks") or {}
         primary_network = None
-        for net_name, net_config in network_config.items():
-            if net_name != "bridge":
+        networking_config = {}
+        for net_name, net_cfg in network_config.items():
+            if net_name != "bridge" and primary_network is None:
                 primary_network = net_name
-                break
+            aliases = list((net_cfg or {}).get("Aliases") or [])
+            if net_name:
+                networking_config[net_name] = client.api.create_endpoint_config(
+                    aliases=aliases or None
+                )
+        if not primary_network and network_config:
+            primary_network = next(iter(network_config))
 
         # Create new container
         try:
-            new_container = client.containers.run(
+            create_kwargs = dict(
                 image=f"{repo}:{tag}",
                 name=new_name,
                 detach=True,
@@ -203,6 +214,9 @@ class Command(BaseCommand):
                 pids_limit=old_container.attrs.get("HostConfig", {}).get("PidsLimit"),
                 runtime=old_container.attrs.get("HostConfig", {}).get("Runtime"),
             )
+            if networking_config and (primary_network or "bridge") in networking_config:
+                create_kwargs["networking_config"] = networking_config
+            new_container = client.containers.run(**create_kwargs)
         except Exception as exc:
             # Rollback: restart old container
             self.stdout.write(self.style.ERROR(f"  Failed to create new container: {exc}"))

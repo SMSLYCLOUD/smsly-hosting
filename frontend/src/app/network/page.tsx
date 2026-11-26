@@ -4,9 +4,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import {
     Network, Plus, Trash2, RefreshCw, Loader2, Shield,
-    Wifi, WifiOff, Globe, ChevronDown, Zap, ArrowRight
+    Wifi, WifiOff, Globe, Zap, ArrowRight
 } from 'lucide-react';
 import api, { networkScopesApi } from '@/lib/api';
 
@@ -58,6 +59,7 @@ interface DnsZone {
 
 export default function NetworkPage() {
     const { toast } = useToast();
+    const confirm = useConfirm();
     const [meshes, setMeshes] = useState<MeshNetwork[]>([]);
     const [servers, setServers] = useState<Server[]>([]);
     const [loading, setLoading] = useState(true);
@@ -181,7 +183,7 @@ export default function NetworkPage() {
     };
 
     const removePeer = async (meshId: string, peerId: string) => {
-        if (!confirm('Remove this peer from the mesh? WireGuard will be torn down on the target server.')) return;
+        if (!await confirm({ title: 'Remove peer?', message: 'Remove this peer from the mesh? WireGuard will be torn down on the target server.', variant: 'destructive', confirmText: 'Remove' })) return;
         try {
             await api.post(`/mesh/${meshId}/remove-peer/`, { peer_id: peerId });
             toast({ title: 'Peer Removed', description: 'Peer removed and configs updated.' });
@@ -236,7 +238,7 @@ export default function NetworkPage() {
     };
 
     const deleteMesh = async (meshId: string) => {
-        if (!confirm('Delete this mesh network? WireGuard will be torn down on all peers.')) return;
+        if (!await confirm({ title: 'Delete mesh network?', message: 'Delete this mesh network? WireGuard will be torn down on all peers.', variant: 'destructive', confirmText: 'Delete Mesh' })) return;
         try {
             await api.delete(`/mesh/${meshId}/`);
             toast({ title: 'Mesh Deleted' });
@@ -273,7 +275,7 @@ export default function NetworkPage() {
     };
 
     const deleteScopedNetwork = async (id: string) => {
-        if (!confirm('Delete this scoped network bridge?')) return;
+        if (!await confirm({ title: 'Delete scoped network?', message: 'Delete this scoped network bridge?', variant: 'destructive', confirmText: 'Delete' })) return;
         try {
             await networkScopesApi.delete(id);
             toast({ title: 'Scoped Network Deleted' });
@@ -317,7 +319,7 @@ export default function NetworkPage() {
                                         Create Mesh
                                     </Button>
                                 </>
-                            ) : (
+                            ) : activeTab === 'scoped' ? (
                                 <Button
                                     onClick={() => setShowCreateScopedForm(!showCreateScopedForm)}
                                     className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white shadow-lg shadow-purple-500/25"
@@ -325,7 +327,7 @@ export default function NetworkPage() {
                                     <Plus size={14} className="mr-2" />
                                     Create Scoped Bridge
                                 </Button>
-                            )}
+                            ) : null}
                         </div>
                     </div>
 

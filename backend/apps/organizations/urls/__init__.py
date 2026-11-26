@@ -8,8 +8,8 @@ from rest_framework.routers import DefaultRouter
 from ..views import OrganizationSSOViewSet, OrganizationViewSet
 
 router = DefaultRouter()
-router.register(r'', OrganizationViewSet, basename='organization')
 router.register(r'sso', OrganizationSSOViewSet, basename='org-sso')
+router.register(r'', OrganizationViewSet, basename='organization')
 
 urlpatterns = [
     path('', include(router.urls)),

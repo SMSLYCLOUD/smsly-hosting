@@ -17,7 +17,7 @@ def _mk_container(env=None, exec_results=None, archive_bits=None):
     ctr.attrs = {'Config': {'Env': env or []}}
     results = list(exec_results or [])
 
-    def _exec(cmd, environment=None, timeout=None):
+    def _exec(cmd, environment=None, timeout=None, demux=False):
         if results:
             return results.pop(0)
         m = mock.Mock()
@@ -219,7 +219,7 @@ class SharedServerDumpTests(TestCase):
     def _shared_client(self, dblist, dumps=None):
         ctr = mock.Mock()
 
-        def _exec(cmd, environment=None, timeout=None):
+        def _exec(cmd, environment=None, timeout=None, demux=False):
             m = mock.Mock()
             if '-c' in cmd:
                 m.exit_code = 0

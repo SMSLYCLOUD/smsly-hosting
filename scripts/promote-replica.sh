@@ -29,6 +29,58 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 
+ENV_FILE="${ENV_FILE:-/opt/smsly-hosting/.env}"
+[ -f "$ENV_FILE" ] || ENV_FILE=".env"
+
+_safe_load_env() {
+    local f="$1"
+    [ -f "$f" ] || return 0
+    local line="" key="" val=""
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$line" == export[[:space:]]* ]] && line="${line#export }"
+        [[ "$line" == *=* ]] || continue
+        key="${line%%=*}"
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        val="${line#*=}"
+        if [[ "$val" == \"*\" && "$val" == *\" && ${#val} -ge 2 ]]; then
+            val="${val:1:${#val}-2}"
+        elif [[ "$val" == \'*\' && "$val" == *\' && ${#val} -ge 2 ]]; then
+            val="${val:1:${#val}-2}"
+        fi
+        export "$key=$val"
+    done < "$f"
+}
+
+_safe_set_env() {
+    local f="$1" key="$2" val="$3"
+    python3 - "$f" "$key" "$val" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+key, val = sys.argv[2], sys.argv[3]
+prefix = f"{key}="
+lines = p.read_text().splitlines() if p.exists() else []
+out = []
+found = False
+for line in lines:
+    if line.startswith(prefix):
+        if not found:
+            out.append(f"{key}={val}")
+            found = True
+        continue
+    out.append(line)
+if not found:
+    out.append(f"{key}={val}")
+p.write_text("\n".join(out) + "\n")
+PY
+}
+
+_safe_load_env "$ENV_FILE"
+
 # PATRONI GUARD: never manual-promote when auto-failover owns topology
 if [ "${DB_HA_ENABLED:-local-ha}" != "local-ha" ]; then
     echo "REFUSING: DB_HA_ENABLED=${DB_HA_ENABLED} — Patroni manages failover; manual promote would split-brain."
@@ -41,11 +93,13 @@ REPLICA_CONTAINER="smsly-postgres-replica"
 PGCAT_CONTAINER="smsly-hosting-pgcat-1"
 
 DRY_RUN=false
+AUTO_YES=false
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=true ;;
+        --yes|-y)  AUTO_YES=true ;;
         --help|-h)
-            echo "Usage: sudo bash scripts/promote-replica.sh [--dry-run]"
+            echo "Usage: sudo bash scripts/promote-replica.sh [--dry-run] [--yes]"
             exit 0
             ;;
     esac
@@ -66,10 +120,12 @@ if [ "$PRIMARY_UP" = true ]; then
     echo -e "${YELLOW}⚠ Primary is still running.${NC}"
     echo -e "  Are you sure you want to promote the replica?"
     echo -e "  This will cause a split-brain situation."
-    read -p "  Type 'yes' to proceed: " CONFIRM
-    if [ "$CONFIRM" != "yes" ]; then
-        echo -e "${YELLOW}Aborted.${NC}"
-        exit 0
+    if [ "$AUTO_YES" != "true" ]; then
+        read -p "  Type 'yes' to proceed: " CONFIRM
+        if [ "$CONFIRM" != "yes" ]; then
+            echo -e "${YELLOW}Aborted.${NC}"
+            exit 0
+        fi
     fi
     echo -e "${YELLOW}  → Force-stopping primary...${NC}"
     if [ "$DRY_RUN" = false ]; then
@@ -113,10 +169,12 @@ echo -e "  Replication lag: ${LAG}s"
 
 if [ "$LAG" != "unknown" ] && [ "$LAG" -gt 60 ]; then
     echo -e "${YELLOW}⚠ High replication lag! Data loss may occur.${NC}"
-    read -p "  Type 'yes' to proceed anyway: " CONFIRM
-    if [ "$CONFIRM" != "yes" ]; then
-        echo -e "${YELLOW}Aborted.${NC}"
-        exit 0
+    if [ "$AUTO_YES" != "true" ]; then
+        read -p "  Type 'yes' to proceed anyway: " CONFIRM
+        if [ "$CONFIRM" != "yes" ]; then
+            echo -e "${YELLOW}Aborted.${NC}"
+            exit 0
+        fi
     fi
 fi
 
@@ -147,15 +205,24 @@ echo -e "${BLUE}→ Step 5: Promoting replica to primary...${NC}"
 if [ "$DRY_RUN" = true ]; then
     echo -e "${YELLOW}  [DRY RUN] Would run: SELECT pg_promote();${NC}"
 else
-    timeout 10 docker exec "$REPLICA_CONTAINER" \
-        psql -U smsly_admin -d smsly_hosting -c "SELECT pg_promote();" || echo -e "${YELLOW}    ⚠ pg_promote() failed${NC}"
+    PROMOTE_RES=""
+    if ! PROMOTE_RES=$(timeout 10 docker exec "$REPLICA_CONTAINER" \
+        psql -U "${POSTGRES_USER:-smsly_admin}" -d "${POSTGRES_DB:-smsly_hosting}" -t -A -c "SELECT pg_promote();"); then
+        echo -e "${RED}✗ pg_promote() command failed — aborting.${NC}"
+        exit 1
+    fi
+    if [ "$PROMOTE_RES" != "t" ]; then
+        echo -e "${RED}✗ pg_promote() returned '${PROMOTE_RES}' (expected 't') — aborting.${NC}"
+        exit 1
+    fi
 
     # Wait for promotion to complete
+    IS_PRIMARY=""
     echo -n "  Waiting for promotion"
     for i in $(seq 1 30); do
         sleep 1
         IS_PRIMARY=$(timeout 10 docker exec "$REPLICA_CONTAINER" \
-            psql -U smsly_admin -d smsly_hosting -t -A \
+            psql -U "${POSTGRES_USER:-smsly_admin}" -d "${POSTGRES_DB:-smsly_hosting}" -t -A \
             -c "SELECT pg_is_in_recovery();"  || echo "")
         if [ "$IS_PRIMARY" = "f" ]; then
             echo ""
@@ -185,21 +252,45 @@ NEW_PRIMARY_HOST="postgres-replica"
 NEW_PRIMARY_PORT="5432"
 
 if [ "$DRY_RUN" = true ]; then
-    echo -e "${YELLOW}  [DRY RUN] Would update pgcat to point to ${NEW_PRIMARY_HOST}:${NEW_PRIMARY_PORT}${NC}"
+    echo -e "${YELLOW}  [DRY RUN] Would update .env (POSTGRES_HOST/PGCAT_DB_HOST/DIRECT_DATABASE_URL) and pgcat (/tmp/pgcat.toml) to ${NEW_PRIMARY_HOST}:${NEW_PRIMARY_PORT}${NC}"
 else
-    # Build new DB_REPLICA_HOSTS (empty — no replicas after failover)
-    # The old primary is down, so we remove it from the replica list
-    timeout 30 docker exec "$PGCAT_CONTAINER" \
-        python3 /scripts/render_pgcat_config.py /etc/pgcat/pgcat.toml || echo -e "${YELLOW}    ⚠ pgcat config render (no DB_HOST) failed${NC}"
+    # Persist new primary host into .env so future restarts and migrations target postgres-replica.
+    if [ -f "$ENV_FILE" ]; then
+        _safe_set_env "$ENV_FILE" "POSTGRES_HOST" "$NEW_PRIMARY_HOST"
+        _safe_set_env "$ENV_FILE" "PGCAT_DB_HOST" "$NEW_PRIMARY_HOST"
+        _safe_set_env "$ENV_FILE" "DB_REPLICA_HOSTS" ""
+        _pg_user="${POSTGRES_USER:-smsly_admin}"
+        _pg_db="${POSTGRES_DB:-smsly_hosting}"
+        _pg_pass="${POSTGRES_PASSWORD:-}"
+        if [ -n "${DIRECT_DATABASE_URL:-}" ]; then
+            _new_direct_url="$(python3 -c '
+import sys
+from urllib.parse import urlsplit, urlunsplit
+u = urlsplit(sys.argv[1])
+host = sys.argv[2]
+auth = f"{u.username}:{u.password}@" if u.password is not None else (f"{u.username}@" if u.username else "")
+port = f":{u.port}" if u.port is not None else ""
+print(urlunsplit((u.scheme, f"{auth}{host}{port}", u.path, u.query, u.fragment)))
+' "$DIRECT_DATABASE_URL" "$NEW_PRIMARY_HOST")"
+        else
+            _new_direct_url="postgresql://${_pg_user}:${_pg_pass}@${NEW_PRIMARY_HOST}:${NEW_PRIMARY_PORT}/${_pg_db}"
+        fi
+        _safe_set_env "$ENV_FILE" "DIRECT_DATABASE_URL" "$_new_direct_url"
+        echo -e "${GREEN}  ✓ Updated .env (POSTGRES_HOST, PGCAT_DB_HOST, DIRECT_DATABASE_URL)${NC}"
+    fi
 
-    # The render script reads DB_HOST from env, which is postgres-primary
-    # We need to override it to point to the new primary
-    timeout 30 docker exec -e "DB_HOST=${NEW_PRIMARY_HOST}" "$PGCAT_CONTAINER" \
-        python3 /scripts/render_pgcat_config.py /etc/pgcat/pgcat.toml || echo -e "${YELLOW}    ⚠ pgcat config render with new primary failed${NC}"
+    # Render updated /tmp/pgcat.toml inside the running container and reload/recreate pgcat
+    timeout 30 docker exec -e "DB_HOST=${NEW_PRIMARY_HOST}" -e "DB_REPLICA_HOSTS=" "$PGCAT_CONTAINER" \
+        python3 /scripts/render_pgcat_config.py /tmp/pgcat.toml || echo -e "${YELLOW}    ⚠ pgcat config render with new primary failed${NC}"
 
-    # Reload pgcat
-    docker kill -s SIGHUP "$PGCAT_CONTAINER" || \
-        docker restart "$PGCAT_CONTAINER" || echo -e "${YELLOW}    ⚠ pgcat reload failed${NC}"
+    if [ -f "$COMPOSE_FILE" ]; then
+        timeout 60 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-deps pgcat || \
+            docker kill -s SIGHUP "$PGCAT_CONTAINER" || \
+            timeout 30 docker restart "$PGCAT_CONTAINER" || echo -e "${YELLOW}    ⚠ pgcat reload/recreate failed${NC}"
+    else
+        docker kill -s SIGHUP "$PGCAT_CONTAINER" || \
+            timeout 30 docker restart "$PGCAT_CONTAINER" || echo -e "${YELLOW}    ⚠ pgcat reload failed${NC}"
+    fi
 
     echo -e "${GREEN}  ✓ PgCat config updated and reloaded${NC}"
 fi

@@ -23,14 +23,16 @@ setters:
     value: strong-fernet-key-1234567890
   - name: secrets.githubWebhookSecret
     value: strong-webhook-secret-1234567890
+  - name: secrets.gatewaySecret
+    value: strong-gateway-secret-1234567890
+  - name: secrets.rabbitmqPassword
+    value: strong-rabbitmq-password-1234567890
   - name: backend.env.allowedHosts
     value: smsly.cloud
   - name: backend.env.corsAllowedOrigins
     value: https://smsly.cloud
   - name: redis.auth.enabled
     value: true
-  - name: redis.auth.password
-    value: strong-redis-password-1234567890
 
 tests:
 
@@ -75,6 +77,20 @@ tests:
     asserts:
       - failedTemplate:
           contains: "secrets.githubWebhookSecret must be set"
+
+  - it: rejects empty secrets.gatewaySecret
+    set:
+      secrets.gatewaySecret: ""
+    asserts:
+      - failedTemplate:
+          contains: "secrets.gatewaySecret must be set"
+
+  - it: rejects empty secrets.rabbitmqPassword
+    set:
+      secrets.rabbitmqPassword: ""
+    asserts:
+      - failedTemplate:
+          contains: "secrets.rabbitmqPassword must be set"
 
   - it: rejects secrets.secretKey=change-me
     set:
@@ -146,14 +162,31 @@ tests:
       - failedTemplate:
           contains: 'corsAllowedOrigins="*" is forbidden in production'
 
-  - it: rejects redis with empty password and auth disabled in production
+  - it: allows redis with empty password when redis.auth.enabled is false
     set:
       secrets.redisPassword: ""
       redis.auth.enabled: false
-      redis.auth.password: ""
     asserts:
-      - failedTemplate:
-          contains: "secrets.redisPassword must be set"
+      - hasDocuments:
+          count: 1
+          kind: Secret
+          name: smsly-hosting-env
+
+  - it: skips inline redisPassword when secrets.existingSecret is set
+    set:
+      secrets.existingSecret: "existing-prod-secret"
+      secrets.secretKey: ""
+      secrets.dbPassword: ""
+      secrets.redisPassword: ""
+      secrets.fieldEncryptionKey: ""
+      secrets.githubWebhookSecret: ""
+      secrets.gatewaySecret: ""
+      secrets.rabbitmqPassword: ""
+    asserts:
+      - hasDocuments:
+          count: 1
+          kind: Deployment
+          name: smsly-hosting-backend
 
   - it: rejects accidental re-introduction of backend.env.dbPassword
     set:
@@ -194,15 +227,16 @@ tests:
           kind: Secret
           name: smsly-hosting-env
 
-  - it: still requires secrets.redisPassword unconditionally (even in staging)
+  - it: allows empty redisPassword in staging when redis.auth.enabled is false
     set:
       global.environment: staging
       secrets.redisPassword: ""
       redis.auth.enabled: false
-      redis.auth.password: ""
     asserts:
-      - failedTemplate:
-          contains: "secrets.redisPassword must be set"
+      - hasDocuments:
+          count: 1
+          kind: Secret
+          name: smsly-hosting-env
 
   - it: still requires secrets.fieldEncryptionKey in non-production
     set:

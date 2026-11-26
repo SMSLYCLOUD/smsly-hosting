@@ -281,11 +281,12 @@ def _enable_dnssec(token: str, zone_id: str, report: EdgeShieldReport) -> dict |
 def _format_ds(dnssec: dict) -> str:
     """Cloudflare DS digest format: 'key_tag algorithm digest_type digest'."""
     try:
-        return (
-            f"{dnssec['digest']} {dnssec['key_algorithm']} "
-            f"{dnssec.get('digest_type', 2)} {dnssec.get('digest', '')[:24]}…"
-        )
-    except (KeyError, TypeError):
+        key_tag = dnssec.get("key_tag", "")
+        algorithm = dnssec.get("algorithm", dnssec.get("key_algorithm", ""))
+        digest_type = dnssec.get("digest_type", 2)
+        digest = dnssec.get("digest", "")
+        return f"{key_tag} {algorithm} {digest_type} {digest}".strip()
+    except (AttributeError, KeyError, TypeError):
         return "(digest unavailable)"
 
 

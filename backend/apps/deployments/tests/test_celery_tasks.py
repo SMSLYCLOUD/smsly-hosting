@@ -371,11 +371,10 @@ class AddonHealthCheckAllTests(TestCase):
         )
 
         from apps.addons.tasks import addon_health_check_all
-        with self.assertRaises(RuntimeError):
-            addon_health_check_all()
+        addon_health_check_all()
 
-        # The first addon was checked before the exception
-        self.assertGreaterEqual(call_count[0], 1)
+        # All 3 addons were checked despite failures in addon #2/#3
+        self.assertEqual(call_count[0], 3)
 
 
 @override_settings(CACHES=TEST_CACHES)

@@ -59,7 +59,7 @@ class CaddyfileValidityTests(TestCase):
 
     def test_on_demand_tls_asks_backend(self):
         self.assertIn(
-            "ask http://backend:8000/api/v1/services/check-domain/", self.caddyfile
+            "ask http://host.docker.internal:8971/ask", self.caddyfile
         )
 
     def test_http_to_https_redirect(self):

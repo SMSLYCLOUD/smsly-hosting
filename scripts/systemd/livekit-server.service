@@ -15,7 +15,7 @@ LimitNOFILE=65536
 
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/log/smsly /run/smsly /var/lib/livekit
+ReadWritePaths=-/var/log/smsly -/run/smsly -/var/lib/livekit
 NoNewPrivileges=true
 
 [Install]

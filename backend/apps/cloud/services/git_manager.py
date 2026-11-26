@@ -2,6 +2,7 @@
 import contextlib
 import logging
 import os
+import re
 import shutil
 import stat
 import uuid
@@ -10,6 +11,26 @@ from urllib.parse import urlparse, urlunparse
 import git
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_repo_symlinks(root_dir: str) -> None:
+    """Remove any symlink in *root_dir* whose resolved target escapes *root_dir*."""
+    root_real = os.path.realpath(root_dir)
+    for dirpath, dirnames, filenames in os.walk(root_real, followlinks=False):
+        for name in list(dirnames) + list(filenames):
+            full_path = os.path.join(dirpath, name)
+            if not os.path.islink(full_path):
+                continue
+            target_real = os.path.realpath(full_path)
+            if target_real != root_real and not target_real.startswith(root_real + os.sep):
+                logger.warning(
+                    "Removing escaping symlink from cloned repo: %s -> %s",
+                    full_path,
+                    target_real,
+                )
+                os.unlink(full_path)
+                if name in dirnames:
+                    dirnames.remove(name)
 
 
 class GitManager:
@@ -42,14 +63,39 @@ class GitManager:
                 parsed = urlparse(url)
                 return (
                     parsed.scheme in ("http", "https")
-                    and (parsed.hostname or "").lower().endswith("github.com")
+                    and (parsed.hostname or "").lower() in ("github.com", "www.github.com")
                 )
             except Exception:
                 return False
 
+        # Reject flag injection, local paths, or ext/fd transport helpers
+        repo_url_str = (repo_url or '').strip()
+        if (
+            not repo_url_str
+            or repo_url_str.startswith(('-', '/', '\\', '.'))
+            or repo_url_str.lower().startswith(('ext::', 'fd::', 'file://'))
+        ):
+            raise ValueError("Invalid or unsafe git repository URL.")
+        if not branch or branch.startswith('-') or any(c in branch for c in ('\x00', '\r', '\n')):
+            raise ValueError("Invalid git branch name.")
+        if commit_hash and (commit_hash.startswith('-') or any(c in commit_hash for c in ('\x00', '\r', '\n'))):
+            raise ValueError("Invalid git commit hash.")
+
         # Clean destination
-        cleaned_url = repo_url.rstrip('/')
-        repo_name = cleaned_url.split('/')[-1].replace('.git', '')
+        clean_url = repo_url_str.rstrip('/')
+        from apps.core.validators import validate_ssrf
+        parsed_ssrf = urlparse(clean_url)
+        scp_match = re.match(r'^([a-zA-Z0-9._-]+)@([a-zA-Z0-9.-]+):([^\s]+)$', clean_url)
+        if parsed_ssrf.scheme.lower() in ('http', 'https'):
+            validate_ssrf(clean_url, fail_closed_dns=True)
+        elif parsed_ssrf.scheme.lower() == 'ssh' and parsed_ssrf.hostname:
+            validate_ssrf(f"https://{parsed_ssrf.hostname}", fail_closed_dns=True)
+        elif scp_match:
+            validate_ssrf(f"https://{scp_match.group(2)}", fail_closed_dns=True)
+        else:
+            validate_ssrf(clean_url, fail_closed_dns=True)
+
+        repo_name = clean_url.split('/')[-1].replace('.git', '')
         # Prevent path traversal: reject names containing .. or /
         if not repo_name or '..' in repo_name or '/' in repo_name or '\\' in repo_name:
             repo_name = f"repo-{uuid.uuid4().hex[:8]}"
@@ -63,6 +109,7 @@ class GitManager:
         logger.info("Cloning %s (branch: %s) to %s", _sanitize_url(repo_url), branch, repo_dir)
 
         env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
         askpass_path = None
         clone_url = repo_url
 
@@ -89,12 +136,18 @@ class GitManager:
                 env["SMSLY_GIT_PASSWORD"] = token
                 env["GIT_TERMINAL_PROMPT"] = "0"
 
+            clone_opts = [
+                "-c", "http.followRedirects=false",
+                "-c", "protocol.file.allow=never",
+                "-c", "protocol.allow=https,ssh",
+            ]
             if commit_hash:
-                git.Repo.clone_from(clone_url, repo_dir, branch=branch, env=env)
+                git.Repo.clone_from(clone_url, repo_dir, branch=branch, env=env, multi_options=clone_opts)
                 repo = git.Repo(repo_dir)
                 repo.git.checkout(commit_hash)
             else:
-                git.Repo.clone_from(clone_url, repo_dir, branch=branch, depth=1, env=env)
+                git.Repo.clone_from(clone_url, repo_dir, branch=branch, depth=1, env=env, multi_options=clone_opts)
+            _sanitize_repo_symlinks(repo_dir)
             return repo_dir
 
         except git.GitCommandError as e:
@@ -120,12 +173,18 @@ class GitManager:
                     fallback_env["GIT_TERMINAL_PROMPT"] = "0"
                     fallback_env.pop("GIT_ASKPASS", None)
                     fallback_env.pop("SMSLY_GIT_PASSWORD", None)
+                    clone_opts = [
+                        "-c", "http.followRedirects=false",
+                        "-c", "protocol.file.allow=never",
+                        "-c", "protocol.allow=https,ssh",
+                    ]
                     if commit_hash:
                         git.Repo.clone_from(
                             repo_url,
                             repo_dir,
                             branch=branch,
                             env=fallback_env,
+                            multi_options=clone_opts,
                         )
                         repo = git.Repo(repo_dir)
                         repo.git.checkout(commit_hash)
@@ -136,7 +195,9 @@ class GitManager:
                             branch=branch,
                             depth=1,
                             env=fallback_env,
+                            multi_options=clone_opts,
                         )
+                    _sanitize_repo_symlinks(repo_dir)
                     logger.info(
                         "Anonymous clone fallback succeeded for %s",
                         _sanitize_url(repo_url),

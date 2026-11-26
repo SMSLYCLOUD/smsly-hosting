@@ -357,14 +357,21 @@ def _get_app_token_for_repo(user, repo: str) -> str | None:
     return None
 
 
+def _is_valid_github_repo(repo: str) -> bool:
+    import re as _re
+    return bool(repo and _re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repo) and ".." not in repo)
+
+
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def github_branches(request):
     """Return branches for a specific repository."""
-    repo = request.query_params.get("repo")
+    repo = (request.query_params.get("repo") or "").strip()
     if not repo:
         return Response({"error": "repo parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+    if not _is_valid_github_repo(repo):
+        return Response({"error": "Invalid repository format"}, status=status.HTTP_400_BAD_REQUEST)
 
     token = _get_github_token(request.user)
     auth_headers = None
@@ -390,6 +397,7 @@ def github_branches(request):
             headers=auth_headers,
             params={"per_page": 100},
             timeout=10,
+            allow_redirects=False,
         )
         gh.raise_for_status()
         return Response(gh.json())
@@ -403,11 +411,15 @@ def github_branches(request):
 @permission_classes([IsAuthenticated])
 def github_commits(request):
     """Return recent commits for a specific repository and branch."""
-    repo = request.query_params.get("repo")
-    branch = request.query_params.get("branch")
+    repo = (request.query_params.get("repo") or "").strip()
+    branch = (request.query_params.get("branch") or "").strip()
 
     if not repo or not branch:
         return Response({"error": "repo and branch parameters are required"}, status=status.HTTP_400_BAD_REQUEST)
+    if not _is_valid_github_repo(repo):
+        return Response({"error": "Invalid repository format"}, status=status.HTTP_400_BAD_REQUEST)
+    if branch.startswith("-") or ".." in branch or any(c in branch for c in "?#\r\n "):
+        return Response({"error": "Invalid branch name"}, status=status.HTTP_400_BAD_REQUEST)
 
     token = _get_github_token(request.user)
     auth_headers = None
@@ -433,6 +445,7 @@ def github_commits(request):
             headers=auth_headers,
             params={"sha": branch, "per_page": 30},
             timeout=10,
+            allow_redirects=False,
         )
         gh.raise_for_status()
         return Response(gh.json())
@@ -447,29 +460,30 @@ def github_commits(request):
 def github_default_branch(request):
     """Get the default branch for a repository.
 
-    Uses the GitHub App installation token when available, falling back
-    to the user's OAuth token.  Returns ``{"default_branch": "main"}``.
+    Uses the requesting user's GitHub App installation token when available,
+    falling back to the user's OAuth token. Returns ``{"default_branch": "main"}``.
     """
-    repo = request.query_params.get("repo")
+    repo = (request.query_params.get("repo") or "").strip()
     if not repo:
         return Response({"error": "repo parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+    if not _is_valid_github_repo(repo):
+        return Response({"error": "Invalid repository format"}, status=status.HTTP_400_BAD_REQUEST)
 
-    # Try GitHub App installation first
+    # Try user's own GitHub App installation first
     try:
-        from apps.deployments.services.github_app import get_github_app_service, get_installation_for_repo
-        installation = get_installation_for_repo(repo)
-        if installation:
+        app_token = _get_app_token_for_repo(request.user, repo)
+        if app_token:
+            from apps.deployments.services.github_app import get_github_app_service
             svc = get_github_app_service()
             if svc:
-                token = svc.get_installation_token_for_id(installation.installation_id)
-                if token:
-                    resp = requests.get(
-                        f"https://api.github.com/repos/{repo}",
-                        headers=svc._auth_headers(token),
-                        timeout=10,
-                    )
-                    if resp.status_code == 200:
-                        return Response({"default_branch": resp.json().get("default_branch", "main")})
+                resp = requests.get(
+                    f"https://api.github.com/repos/{repo}",
+                    headers=svc._auth_headers(app_token),
+                    timeout=10,
+                    allow_redirects=False,
+                )
+                if resp.status_code == 200:
+                    return Response({"default_branch": resp.json().get("default_branch", "main")})
     except Exception as exc:
         logger.debug("Failed to get default branch via App: %s", exc)
 
@@ -486,6 +500,7 @@ def github_default_branch(request):
                 "Accept": "application/vnd.github.v3+json",
             },
             timeout=10,
+            allow_redirects=False,
         )
         resp.raise_for_status()
         return Response({"default_branch": resp.json().get("default_branch", "main")})

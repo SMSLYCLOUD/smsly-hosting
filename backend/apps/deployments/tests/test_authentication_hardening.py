@@ -27,7 +27,8 @@ class TestAuthenticationHardening(unittest.TestCase):
         request.headers = {
             "X-SMSLY-Remote-Sync": "1",
             "X-Gateway-Signature-V2": "fake",
-            "X-Request-Timestamp": str(int(time.time()))
+            "X-Request-Timestamp": str(int(time.time())),
+            "X-Request-Nonce": "nonce-1",
         }
 
         with self.assertRaises(AuthenticationFailed) as context:
@@ -43,7 +44,8 @@ class TestAuthenticationHardening(unittest.TestCase):
         request.headers = {
             "X-SMSLY-Remote-Sync": "1",
             "X-Gateway-Signature-V2": "invalid",
-            "X-Request-Timestamp": str(int(time.time()))
+            "X-Request-Timestamp": str(int(time.time())),
+            "X-Request-Nonce": "nonce-2",
         }
 
         with self.assertRaises(AuthenticationFailed) as context:

@@ -28,7 +28,7 @@ import time
 from channels.db import database_sync_to_async
 from django.conf import settings
 
-from apps.deployments.consumers.base import get_websocket_subprotocol
+from apps.deployments.consumers.base import authenticate_ws_credential, get_websocket_subprotocol
 from apps.deployments.consumers.terminal import TerminalConsumer
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,7 @@ class AddonTerminalConsumer(TerminalConsumer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.addon_id = None
+        self.api_token = None
 
     async def connect(self):
         self.addon_id = self.scope['url_route']['kwargs']['addon_id']
@@ -60,26 +61,33 @@ class AddonTerminalConsumer(TerminalConsumer):
             if not token_key and len(subprotocols) == 1 and subprotocols[0] and subprotocols[0] != 'token':
                 token_key = subprotocols[0]
 
-            if not token_key:
-                logger.warning(
-                    "Addon terminal rejected: No token subprotocol for "
-                    "addon %s", self.addon_id)
-                await self.close(code=4001)
-                return
-
-            self.user = await self._authenticate_token(token_key)
-            if not self.user:
+            if token_key:
+                if type(self)._authenticate_token is TerminalConsumer._authenticate_token:
+                    self.user, self.api_token = await authenticate_ws_credential(token_key)
+                else:
+                    self.user = await self._authenticate_token(token_key)
+                    self.api_token = None
+                if not self.user:
+                    logger.warning(
+                        "Addon terminal rejected: Invalid token for "
+                        "addon %s", self.addon_id)
+                    await self.close(code=4002)
+                    return
+            else:
                 scope_user = self.scope.get('user')
-                if (scope_user is not None
-                        and getattr(scope_user, 'is_authenticated', False)
-                        and getattr(scope_user, 'is_active', False)):
+                if (
+                    scope_user is not None
+                    and getattr(scope_user, 'is_authenticated', False)
+                    and getattr(scope_user, 'is_active', False)
+                ):
                     self.user = scope_user
-            if not self.user:
-                logger.warning(
-                    "Addon terminal rejected: Invalid token for "
-                    "addon %s", self.addon_id)
-                await self.close(code=4002)
-                return
+                    self.api_token = self.scope.get('api_token')
+                if not self.user:
+                    logger.warning(
+                        "Addon terminal rejected: Unauthenticated connection for "
+                        "addon %s", self.addon_id)
+                    await self.close(code=4001)
+                    return
 
             if not await self._verify_ownership():
                 logger.warning(
@@ -122,8 +130,9 @@ class AddonTerminalConsumer(TerminalConsumer):
             await self.close(code=4000)
 
     async def _async_setup(self):
+        setup_completed = False
         try:
-            self.container_id = await self._find_container()
+            self.container_id = await asyncio.wait_for(self._find_container(), timeout=30)
             if not self.container_id:
                 logger.error("Addon terminal: No container found for addon %s", self.addon_id)
                 await self._out_queue.put({
@@ -135,7 +144,7 @@ class AddonTerminalConsumer(TerminalConsumer):
             logger.info("Addon terminal: Found container %s for addon %s", self.container_id, self.addon_id)
             await asyncio.sleep(0.5)
 
-            success = await self._start_exec()
+            success = await asyncio.wait_for(self._start_exec(), timeout=30)
             if not success:
                 logger.error("Addon terminal: Failed to start exec in %s", self.container_id)
                 await self._out_queue.put({
@@ -162,8 +171,10 @@ class AddonTerminalConsumer(TerminalConsumer):
             await loop.run_in_executor(None, self._send_to_shell, "\n")
 
             self._read_task = asyncio.create_task(self._read_output())
+            setup_completed = True
         except asyncio.CancelledError:
             logger.info("Addon terminal setup task cancelled")
+            raise
         except Exception as e:
             if settings.DEBUG:
                 logger.error("Error during addon terminal setup: %s", e, exc_info=True)
@@ -171,6 +182,9 @@ class AddonTerminalConsumer(TerminalConsumer):
             enc = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
             await self._out_queue.put({'message': enc})
             await self.close()
+        finally:
+            if not setup_completed and (self.exec_id or self.exec_socket or self._raw_sock):
+                await self._close_exec_socket()
 
     async def disconnect(self, code):
         self.is_disconnected = True
@@ -193,17 +207,20 @@ class AddonTerminalConsumer(TerminalConsumer):
         except Exception as exc:
             logger.debug("Addon console audit write failed: %s", exc)
 
-        for attr in ('_setup_task', '_read_task', '_send_task'):
-            task = getattr(self, attr, None)
-            if task and not task.done():
-                task.cancel()
-                try:
-                    await asyncio.wait_for(task, timeout=0.2)
-                except (TimeoutError, asyncio.CancelledError):
-                    pass
-                except Exception as e:
-                    if settings.DEBUG:
-                        logger.debug("task teardown issue: %s", e)
+        try:
+            for attr in ('_setup_task', '_read_task', '_send_task'):
+                task = getattr(self, attr, None)
+                if task and not task.done():
+                    task.cancel()
+                    try:
+                        await asyncio.wait_for(task, timeout=0.2)
+                    except (TimeoutError, asyncio.CancelledError):
+                        pass
+                    except Exception as e:
+                        if settings.DEBUG:
+                            logger.debug("task teardown issue: %s", e)
+        finally:
+            await self._close_exec_socket()
 
     async def _find_container(self):
         # Must stay awaitable — the base _async_setup / _read_output
@@ -216,12 +233,13 @@ class AddonTerminalConsumer(TerminalConsumer):
         try:
             from asgiref.sync import sync_to_async
             from apps.deployments.utils import log_event
+            sanitized = self._truncate_command(self._redact_command(command))
             await sync_to_async(log_event)(
                 action="ADDON_CONSOLE_COMMAND_EXECUTED",
                 target=f"Addon: {self.addon_id}",
                 actor=self.user,
                 metadata={
-                    "command": command,
+                    "command": sanitized,
                     "container_id": self.container_id,
                 },
             )
@@ -229,21 +247,46 @@ class AddonTerminalConsumer(TerminalConsumer):
             logger.debug("Addon console audit write failed: %s", exc)
 
     async def _verify_ownership(self):
-        from apps.deployments.models.addons import Addon
         try:
             addon = await _get_addon(self.addon_id)
-            if addon is None:
+            if addon is None or addon.service is None:
                 return False
-            if self.user.is_superuser:
+            api_token = getattr(self, 'api_token', None)
+            if api_token is not None:
+                if not api_token.has_scope('write'):
+                    return False
+                if not api_token.has_project(addon.service.project_id):
+                    return False
+            if getattr(self.user, 'is_superuser', False):
                 return True
-            if addon.service.owner_id == self.user.id:
-                return True
-            project = getattr(addon.service, 'project', None)
-            if project is not None and project.team_id is not None:
-                return await _is_team_member(project.team_id, self.user.id)
-            return False
+            from apps.teams.permissions import user_can_write
+            return await database_sync_to_async(user_can_write)(self.user, addon.service)
         except Exception:
             return False
+
+
+_PLATFORM_ADDON_BLOCKLIST = (
+    'smsly-shared-postgres',
+    'pgbouncer-tenants',
+    'smsly-hosting',
+    'smsly-spire',
+    'smsly-edge',
+    'smsly-caddy',
+    'smsly-traefik',
+    'smsly-loki',
+    'smsly-falco',
+    'smsly-crowdsec',
+    'smsly-appsec',
+    'smsly-cloudflare',
+    'socket-proxy',
+)
+
+
+def _is_platform_container_name(name: str) -> bool:
+    norm = str(name or '').strip().lower().lstrip('/')
+    if not norm:
+        return True
+    return norm in _PLATFORM_ADDON_BLOCKLIST or norm.startswith(_PLATFORM_ADDON_BLOCKLIST)
 
 
 @database_sync_to_async
@@ -253,6 +296,9 @@ def _find_addon_container(addon_id):
     from apps.deployments.models.addons import Addon
     try:
         addon = Addon.objects.select_related('service').get(id=addon_id)
+        if str(getattr(addon, 'provision_mode', '') or '') == 'shared' or bool(getattr(addon, 'pooler_routed', False)):
+            logger.warning("Addon terminal refused: shared addon %s has no dedicated container", addon_id)
+            return None
         if str(getattr(addon, 'status', '')) in ('DELETED', 'DELETION_PENDING', 'DELETION_FAILED'):
             logger.warning("Addon terminal refused: addon %s is %s",
                            addon_id, addon.status)
@@ -263,15 +309,38 @@ def _find_addon_container(addon_id):
         except Exception:
             name = (f"smsly-addon-{str(getattr(addon, 'addon_type', '')).lower()}-"
                     f"{getattr(addon, 'id', '')}")
+        if _is_platform_container_name(name):
+            logger.warning("Addon terminal refused: platform container %s for addon %s", name, addon_id)
+            return None
         client = get_docker_exec_client()
         try:
             container = client.containers.get(name)
             container.reload()
-            if getattr(container, 'status', '') == 'running':
-                return container.id
-            logger.warning("Addon terminal refused: container %s is %s",
-                           name, getattr(container, 'status', 'unknown'))
-            return None
+            if getattr(container, 'status', '') != 'running':
+                logger.warning("Addon terminal refused: container %s is %s",
+                               name, getattr(container, 'status', 'unknown'))
+                return None
+            actual_name = getattr(container, 'name', '')
+            if isinstance(actual_name, str) and actual_name and _is_platform_container_name(actual_name):
+                logger.warning("Addon terminal refused: resolved container %s is platform-owned", actual_name)
+                return None
+            labels = getattr(container, 'labels', None)
+            if not isinstance(labels, dict):
+                attrs_cfg = (getattr(container, 'attrs', None) or {}).get('Config')
+                labels = attrs_cfg.get('Labels') if isinstance(attrs_cfg, dict) else None
+            if isinstance(labels, dict):
+                if str(labels.get('com.docker.compose.project') or '').lower().startswith('smsly'):
+                    logger.warning("Addon terminal refused: platform compose project on %s", name)
+                    return None
+                from apps.addons.services import cli_addons as _cli
+                if _cli.is_cli_addon(getattr(addon, 'addon_type', '')):
+                    if labels.get('smsly.service_id') and str(labels.get('smsly.service_id')) != str(addon.service_id):
+                        logger.warning("Addon terminal refused: service label mismatch on %s", name)
+                        return None
+                elif str(labels.get('smsly.addon_id') or '') != str(addon.id):
+                    logger.warning("Addon terminal refused: smsly.addon_id mismatch on %s", name)
+                    return None
+            return container.id
         except Exception:
             logger.warning("Addon terminal: container %s not found", name)
             return None
@@ -286,7 +355,9 @@ def _find_addon_container(addon_id):
 def _get_addon(addon_id):
     from apps.deployments.models.addons import Addon
     try:
-        return Addon.objects.select_related('service', 'service__owner').get(id=addon_id)
+        return Addon.objects.select_related(
+            'service', 'service__owner', 'service__project__team'
+        ).get(id=addon_id)
     except Addon.DoesNotExist:
         return None
 

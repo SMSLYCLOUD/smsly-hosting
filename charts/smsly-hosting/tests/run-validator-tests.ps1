@@ -21,10 +21,11 @@ $BaseSecure = @(
     "--set","secrets.redisPassword=strong-redis-password-1234567890",
     "--set","secrets.fieldEncryptionKey=strong-fernet-key-1234567890",
     "--set","secrets.githubWebhookSecret=strong-webhook-secret-1234567890",
+    "--set","secrets.gatewaySecret=strong-gateway-secret-1234567890",
+    "--set","secrets.rabbitmqPassword=strong-rabbitmq-password-1234567890",
     "--set","backend.env.allowedHosts=smsly.cloud",
     "--set","backend.env.corsAllowedOrigins=https://smsly.cloud",
-    "--set","redis.auth.enabled=true",
-    "--set","redis.auth.password=strong-redis-password-1234567890"
+    "--set","redis.auth.enabled=true"
 )
 
 function Invoke-Helm {
@@ -66,6 +67,8 @@ Test-HelmExpectFail "empty secrets.dbPassword"         "secrets.dbPassword must 
 Test-HelmExpectFail "empty secrets.redisPassword"      "secrets.redisPassword must be set"      @("--set","secrets.redisPassword=")
 Test-HelmExpectFail "empty secrets.fieldEncryptionKey" "secrets.fieldEncryptionKey must be set" @("--set","secrets.fieldEncryptionKey=")
 Test-HelmExpectFail "empty secrets.githubWebhookSecret" "secrets.githubWebhookSecret must be set" @("--set","secrets.githubWebhookSecret=")
+Test-HelmExpectFail "empty secrets.gatewaySecret"       "secrets.gatewaySecret must be set"       @("--set","secrets.gatewaySecret=")
+Test-HelmExpectFail "empty secrets.rabbitmqPassword"    "secrets.rabbitmqPassword must be set"    @("--set","secrets.rabbitmqPassword=")
 
 Write-Host "=== Negative: placeholder values must be rejected ==="
 Test-HelmExpectFail "change-me secretKey"   "secrets.secretKey must be set"   @("--set","secrets.secretKey=change-me")
@@ -78,12 +81,17 @@ Test-HelmExpectFail "latest frontend tag"  "frontend.image.tag must be pinned"  
 Test-HelmExpectFail "latest celery tag"    "celery.image.tag must be pinned"    @("--set","celery.image.tag=latest")
 Test-HelmExpectFail "latest postgres tag"  "postgresql.image.tag must be pinned" @("--set","postgresql.image.tag=latest")
 Test-HelmExpectFail "redis:latest image"   "redis.image must be pinned"          @("--set","redis.image=redis:latest")
+Test-HelmExpectFail "rabbitmq:latest image" "rabbitmq.image must be pinned"      @("--set","rabbitmq.image=rabbitmq:latest")
 
 Write-Host "=== Negative: production-only host / origin settings ==="
 Test-HelmExpectFail 'allowedHosts=wildcard'      'allowedHosts="*" is forbidden in production'   @("--set","backend.env.allowedHosts=*")
 Test-HelmExpectFail "empty allowedHosts"        "backend.env.allowedHosts is empty in production" @("--set","backend.env.allowedHosts=")
 Test-HelmExpectFail 'corsAllowedOrigins=wildcard' 'corsAllowedOrigins="*" is forbidden in production' @("--set","backend.env.corsAllowedOrigins=*")
-Test-HelmExpectFail "redis no-pwd + auth-disabled" "secrets.redisPassword must be set" @("--set","secrets.redisPassword=","--set","redis.auth.enabled=false","--set","redis.auth.password=")
+
+Write-Host "=== Positive: disabled subcharts, redis.auth.enabled=false and existingSecret validate cleanly ==="
+Test-HelmExpectPass "redis auth-disabled with empty redisPassword" @("--set","secrets.redisPassword=","--set","redis.auth.enabled=false")
+Test-HelmExpectPass "disabled postgres/redis/rabbitmq skip image checks" @("--set","postgresql.enabled=false","--set","postgresql.image.tag=latest","--set","redis.enabled=false","--set","redis.image=redis:latest","--set","rabbitmq.enabled=false","--set","rabbitmq.image=rabbitmq:latest")
+Test-HelmExpectPass "existingSecret skips inline secret requirements" @("--set","secrets.existingSecret=my-prod-secret","--set","secrets.secretKey=","--set","secrets.dbPassword=","--set","secrets.redisPassword=","--set","secrets.fieldEncryptionKey=","--set","secrets.githubWebhookSecret=","--set","secrets.gatewaySecret=","--set","secrets.rabbitmqPassword=")
 
 Write-Host "=== Negative: accidental re-introduction of secrets under backend.env ==="
 Test-HelmExpectFail "backend.env.secretKey"             "backend.env.secretKey must not be empty"             @("--set","backend.env.secretKey=")
@@ -93,9 +101,9 @@ Test-HelmExpectFail "backend.env.githubWebhookSecret"   "backend.env.githubWebho
 
 Write-Host "=== Positive: non-production relaxes wildcard-host check ==="
 Test-HelmExpectPass "staging with wildcard allowedHosts" @("--set","global.environment=staging","--set","backend.env.allowedHosts=*","--set","backend.env.corsAllowedOrigins=")
+Test-HelmExpectPass "staging with empty redisPassword and auth disabled" @("--set","global.environment=staging","--set","secrets.redisPassword=","--set","redis.auth.enabled=false")
 
 Write-Host "=== Negative: unconditional secrets checks still fire in staging ==="
-Test-HelmExpectFail "staging: empty redisPassword (unconditional check fires)" "secrets.redisPassword must be set" @("--set","global.environment=staging","--set","secrets.redisPassword=","--set","redis.auth.enabled=false","--set","redis.auth.password=")
 Test-HelmExpectFail "staging: empty fieldEncryptionKey" "secrets.fieldEncryptionKey must be set" @("--set","global.environment=staging","--set","secrets.fieldEncryptionKey=")
 Test-HelmExpectFail "staging: latest backend tag"        "backend.image.tag must be pinned"       @("--set","global.environment=staging","--set","backend.image.tag=latest")
 

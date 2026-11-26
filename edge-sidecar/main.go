@@ -33,6 +33,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -53,6 +54,7 @@ type allowList struct {
 	mu      sync.RWMutex
 	domains map[string]bool
 	mtime   time.Time
+	size    int64
 	path    string
 }
 
@@ -62,25 +64,29 @@ func (a *allowList) reloadIfChanged() {
 		return
 	}
 	mt := fi.ModTime()
+	sz := fi.Size()
 	a.mu.RLock()
 	cur := a.mtime
+	curSize := a.size
 	a.mu.RUnlock()
-	if !mt.After(cur) {
+	if mt.Equal(cur) && sz == curSize {
 		return
 	}
 	raw, err := os.ReadFile(a.path)
 	if err != nil {
+		log.Printf("allow-list read error (%s): %v", a.path, err)
 		return
 	}
 	var payload struct {
 		Domains []string `json:"domains"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
+		log.Printf("allow-list JSON parse error (%s): %v", a.path, err)
 		return
 	}
 	next := make(map[string]bool, len(payload.Domains))
 	for _, d := range payload.Domains {
-		d = strings.ToLower(strings.TrimSpace(strings.TrimSuffix(d, ".")))
+		d = normalizeHost(d)
 		if d != "" {
 			next[d] = true
 		}
@@ -88,11 +94,30 @@ func (a *allowList) reloadIfChanged() {
 	a.mu.Lock()
 	a.domains = next
 	a.mtime = mt
+	a.size = sz
 	a.mu.Unlock()
 }
 
+func normalizeHost(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	if idx := strings.IndexByte(s, ','); idx >= 0 {
+		s = strings.TrimSpace(s[:idx])
+	}
+	if strings.Contains(s, ":") {
+		if host, _, err := net.SplitHostPort(s); err == nil {
+			s = host
+		} else {
+			s = strings.TrimPrefix(strings.TrimSuffix(s, "]"), "[")
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(strings.TrimSuffix(s, ".")))
+}
+
 func (a *allowList) allowed(host string) bool {
-	host = strings.ToLower(strings.TrimSpace(strings.TrimSuffix(host, ".")))
+	host = normalizeHost(host)
 	if host == "" {
 		return false
 	}
@@ -101,12 +126,10 @@ func (a *allowList) allowed(host string) bool {
 	if a.domains[host] {
 		return true
 	}
-	// Wildcard entries are stored as "*.example.com".
+	// Wildcard entries are stored as "*.example.com" (single-label wildcard per TLS RFC).
 	labels := strings.Split(host, ".")
-	for i := 1; i < len(labels); i++ {
-		if a.domains["*."+strings.Join(labels[i:], ".")] {
-			return true
-		}
+	if len(labels) >= 2 && a.domains["*."+strings.Join(labels[1:], ".")] {
+		return true
 	}
 	return false
 }
@@ -115,6 +138,7 @@ type secretHolder struct {
 	mu     sync.RWMutex
 	secret []byte
 	mtime  time.Time
+	size   int64
 	path   string
 }
 
@@ -127,10 +151,12 @@ func (s *secretHolder) reloadIfChanged() {
 		return
 	}
 	mt := fi.ModTime()
+	sz := fi.Size()
 	s.mu.RLock()
 	cur := s.mtime
+	curSize := s.size
 	s.mu.RUnlock()
-	if !mt.After(cur) {
+	if mt.Equal(cur) && sz == curSize {
 		return
 	}
 	raw, err := os.ReadFile(s.path)
@@ -144,6 +170,7 @@ func (s *secretHolder) reloadIfChanged() {
 	s.mu.Lock()
 	s.secret = []byte(trimmed)
 	s.mtime = mt
+	s.size = sz
 	s.mu.Unlock()
 }
 
@@ -173,14 +200,16 @@ func askHandler(al *allowList, askSecret string) http.HandlerFunc {
 		if got == "" {
 			got = r.Header.Get("X-Caddy-Secret")
 		}
-		if subtle.ConstantTimeCompare([]byte(got), []byte(askSecret)) != 1 {
+		gotSum := sha256.Sum256([]byte(got))
+		expSum := sha256.Sum256([]byte(askSecret))
+		if subtle.ConstantTimeCompare(gotSum[:], expSum[:]) != 1 {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		domain := r.URL.Query().Get("domain")
+		domain := normalizeHost(r.URL.Query().Get("domain"))
 		if domain == "" {
-			// Caddy may send the domain as the path for older configs.
-			domain = strings.TrimPrefix(r.URL.Path, "/")
+			http.Error(w, "missing domain", http.StatusBadRequest)
+			return
 		}
 		if al.allowed(domain) {
 			w.WriteHeader(http.StatusOK)
@@ -223,7 +252,7 @@ func authVerifyHandler(sec *secretHolder) http.HandlerFunc {
 			return
 		}
 		auth := strings.TrimSpace(r.Header.Get("Authorization"))
-		if auth == "" {
+		if auth == "" || len(auth) > 8192 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -254,6 +283,7 @@ func authVerifyHandler(sec *secretHolder) http.HandlerFunc {
 		var claims struct {
 			Sub   string `json:"sub"`
 			Scope string `json:"scope"`
+			Aud   string `json:"aud"`
 			Exp   int64  `json:"exp"`
 			Jti   string `json:"jti"`
 		}
@@ -265,9 +295,21 @@ func authVerifyHandler(sec *secretHolder) http.HandlerFunc {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if claims.Exp != 0 && time.Now().Unix() > claims.Exp {
+		if claims.Exp <= 0 || time.Now().Unix() > claims.Exp {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
+		}
+		if claims.Aud == "" && claims.Scope != "admin" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if claims.Aud != "" {
+			audHost := normalizeHost(claims.Aud)
+			reqHost := normalizeHost(r.Header.Get("X-Forwarded-Host"))
+			if reqHost == "" || audHost == "" || reqHost != audHost {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
 		}
 		scope := claims.Scope
 		if scope == "" {
@@ -298,7 +340,11 @@ func main() {
 	flag.StringVar(&cfg.allowFile, "allow-file", getenv("EDGE_SIDECAR_ALLOW_FILE", "/opt/smsly-hosting/caddy-config/.tls-allow-list.json"), "allow-list JSON path")
 	flag.StringVar(&cfg.secretFile, "secret-file", getenv("EDGE_JWT_SECRET_FILE", ""), "file holding EDGE_JWT_SECRET")
 	flag.IntVar(&cfg.pollSecs, "poll-secs", 5, "allow-list/secret poll interval seconds")
+	flag.DurationVar(&cfg.readTimeout, "read-timeout", 5*time.Second, "HTTP server read timeout")
 	flag.Parse()
+	if cfg.readTimeout <= 0 {
+		cfg.readTimeout = 5 * time.Second
+	}
 	cfg.askSecret = strings.TrimSpace(os.Getenv("CADDY_ASK_SECRET"))
 	if cfg.askSecret == "" {
 		log.Println("WARNING: CADDY_ASK_SECRET is not configured — /ask refuses all " +
@@ -344,7 +390,7 @@ func main() {
 	srv := &http.Server{
 		Addr:              cfg.listen,
 		Handler:           mux,
-		ReadTimeout:       5 * time.Second,
+		ReadTimeout:       cfg.readTimeout,
 		ReadHeaderTimeout: 3 * time.Second,
 		WriteTimeout:      5 * time.Second,
 		IdleTimeout:       60 * time.Second,

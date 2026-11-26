@@ -56,7 +56,7 @@ class VolumeEncryptionError(RuntimeError):
     """Raised when per-tenant volume encryption fails or is required but unavailable."""
 
 
-_VOLUME_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_VOLUME_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,126}$")
 
 
 def validate_volume_name(volume_name: str) -> str:
@@ -70,7 +70,10 @@ def _utc_now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
-def get_encryption_policy() -> str:
+def get_encryption_policy(addon: Any = None) -> str:
+    svc = getattr(addon, "service", None) if addon is not None else None
+    if svc is not None and bool(getattr(svc, "encryption_at_rest_enabled", False)):
+        return "required"
     raw = (os.getenv("SMSLY_VOLUME_ENCRYPTION_POLICY") or "preferred").strip().lower()
     if raw not in _VALID_POLICIES:
         logger.warning("Unknown SMSLY_VOLUME_ENCRYPTION_POLICY=%r; defaulting to 'preferred'", raw)
@@ -197,22 +200,19 @@ def _daemon_url(addon: Any = None, *, allow_existing_cryptd: bool = False) -> st
                 return cryptd_client._base_url()
         except Exception:
             pass
-    if (os.getenv("SMSLY_PROBE_NAPD_VOLUMES") or "").strip().lower() in ("1", "true", "yes"):
-        return (os.getenv("NAPD_BASE_URL") or "http://host.docker.internal:8972").strip().rstrip("/")
     return ""
 
 
 def _daemon_headers() -> dict[str, str]:
-    secret = (
-        os.getenv("CRYPTD_SHARED_SECRET")
-        or os.getenv("SMSLY_VOLUME_DAEMON_SECRET")
-        or os.getenv("NAPD_SHARED_SECRET")
-        or ""
-    ).strip()
+    secret = (os.getenv("CRYPTD_SHARED_SECRET") or "").strip()
+    if not secret:
+        try:
+            secret = Path("/etc/smsly/cryptd.secret").read_text(encoding="utf-8").strip()
+        except OSError:
+            secret = ""
     headers = {"Content-Type": "application/json"}
     if secret:
         headers["X-Cryptd-Secret"] = secret
-        headers["X-Napd-Secret"] = secret
     return headers
 
 
@@ -432,7 +432,7 @@ def prepare_volume(
       records ``status="fallback_unencrypted"`` and returns cleanly so Docker
       provisions a standard named volume.
     """
-    policy = get_encryption_policy()
+    policy = get_encryption_policy(addon)
     existing_meta = dict(getattr(addon, "provider_metadata", None) or {})
     existing_ve = dict(existing_meta.get("volume_encryption") or {})
 
@@ -514,6 +514,7 @@ def prepare_volume(
     raw_dek = b""
     wrapped_dek = ""
     key_id = ""
+    week = None
     if not use_cryptd_zero_dek:
         raw_dek, wrapped_dek, key_id = generate_wrapped_dek()
     cipher = "aes-256-xts-luks2" if backend == "luks" else "fscrypt-v2-aes-256-xts"
@@ -546,6 +547,8 @@ def prepare_volume(
                 wrapped_dek = str(body["wrapped_dek"])
             if body.get("key_id"):
                 key_id = str(body["key_id"])
+            if body.get("week") is not None:
+                week = body["week"]
         else:
             res = _run_crypt_script(
                 "provision",
@@ -588,8 +591,23 @@ def prepare_volume(
         "reason": "",
         "updated_at": _utc_now_iso(),
     }
+    if week is not None:
+        ve_meta["week"] = week
     _save_addon_volume_metadata(addon, ve_meta)
     return ve_meta
+
+
+def _apply_daemon_unlock_updates(ve: dict[str, Any], body: dict[str, Any]) -> None:
+    if body.get("wrapped_dek"):
+        ve["wrapped_dek"] = str(body["wrapped_dek"])
+    if body.get("key_id"):
+        ve["key_id"] = str(body["key_id"])
+    if body.get("week") is not None:
+        ve["week"] = body["week"]
+    if body.get("host_path"):
+        ve["host_path"] = str(body["host_path"])
+    if body.get("cipher"):
+        ve["cipher"] = str(body["cipher"])
 
 
 def verify_or_unlock(addon: Any, volume_name: str) -> dict[str, Any]:
@@ -622,6 +640,10 @@ def verify_or_unlock(addon: Any, volume_name: str) -> dict[str, Any]:
             raise VolumeEncryptionError(
                 f"Failed to verify/unlock volume {volume_name} via grid-cryptd ({code}): {body.get('error', '')}"
             )
+        _apply_daemon_unlock_updates(ve, body)
+        ve["status"] = "encrypted_active"
+        ve["updated_at"] = _utc_now_iso()
+        _save_addon_volume_metadata(addon, ve)
         return ve
 
     raw_dek = unwrap_dek(wrapped_dek)
@@ -643,6 +665,7 @@ def verify_or_unlock(addon: Any, volume_name: str) -> dict[str, Any]:
             raise VolumeEncryptionError(
                 f"Failed to verify/unlock volume {volume_name} via daemon ({code}): {body.get('error', '')}"
             )
+        _apply_daemon_unlock_updates(ve, body)
     else:
         _run_crypt_script(
             "unlock",
@@ -710,7 +733,7 @@ def get_sanitized_status(addon: Any) -> dict[str, Any]:
     return {
         "encrypted": bool(ve.get("encrypted", False)),
         "backend": ve.get("backend"),
-        "policy": str(ve.get("policy") or get_encryption_policy()),
+        "policy": str(ve.get("policy") or get_encryption_policy(addon)),
         "status": str(ve.get("status") or "untracked"),
         "key_id": str(ve.get("key_id") or ""),
         "cipher": str(ve.get("cipher") or ""),

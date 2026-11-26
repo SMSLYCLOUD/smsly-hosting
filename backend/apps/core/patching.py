@@ -200,3 +200,51 @@ def is_valid_host(host_str: str) -> bool:
         logger.warning("Domain validation failed for Addon check (%s): %s", domain, exc)
 
     return False
+
+
+def is_control_plane_host(host_str: str) -> bool:
+    """Return True iff *host_str* is an exact control-plane host or node IP.
+
+    Deliberately excludes tenant ``Service.public_domain``, ``Addon.public_domain``,
+    custom ``Domain`` rows, and wildcard ``.<DOMAIN>`` patterns so tenant
+    subdomains can never pass WebSocket control-plane Origin checks.
+    """
+    if not host_str:
+        return False
+
+    host = host_str.strip().strip("[]").lower().rstrip(".")
+    if not host:
+        return False
+
+    if host in ("localhost", "127.0.0.1", "::1"):
+        return True
+
+    env_domain = (getattr(settings, "DOMAIN", "") or "").strip().lower().rstrip(".")
+    if env_domain and host == env_domain:
+        return True
+
+    try:
+        from apps.deployments.models import PlatformConfig
+        cfg = PlatformConfig.load()
+        cfg_domain = (getattr(cfg, "domain", "") or "").strip().lower().rstrip(".")
+        if cfg_domain and host == cfg_domain:
+            return True
+        cfg_ip = (getattr(cfg, "server_ip", "") or "").strip().lower()
+        if cfg_ip and host == cfg_ip:
+            return True
+    except Exception as exc:
+        logger.warning("Control-plane host check failed for PlatformConfig (%s): %s", host, exc)
+
+    try:
+        from django.db.models import Q
+        from apps.deployments.models.core import ManagedServer
+
+        q = Q(host__iexact=host)
+        if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host):
+            q |= Q(private_ip=host)
+        if ManagedServer.objects.filter(q).exists():
+            return True
+    except Exception as exc:
+        logger.warning("Control-plane host check failed for ManagedServer (%s): %s", host, exc)
+
+    return False

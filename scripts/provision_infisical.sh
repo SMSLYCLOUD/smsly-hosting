@@ -33,19 +33,20 @@ command -v docker >/dev/null || fail "docker not found"
 [ -f "$DOTENV" ] || fail ".env missing: $DOTENV"
 
 # ── 1. already running AND healthy? ─────────────────────────────────
-_existing="$(docker ps --filter "name=infisical" --format '{{.Names}}' | head -1)"
+_existing="$(timeout 30 docker ps --filter "name=infisical" --format '{{.Names}}' | head -1)"
 if [ -n "$_existing" ] && curl -sf -m 10 "$BASE/api/status" > /dev/null 2>&1; then
     ok "Infisical already running and healthy ($_existing)"
 else
-    [ -n "$_existing" ] && docker rm -f "$_existing" > /dev/null 2>&1 || true
+    [ -n "$_existing" ] && timeout 30 docker rm -f "$_existing" > /dev/null 2>&1 || true
     log "Provisioning Infisical..."
-    docker volume create infisical_data > /dev/null || true
+    timeout 30 docker volume create infisical_data > /dev/null || true
 
     # ── 2. database ──────────────────────────────────────────────────
     _db_container=""
-    if docker ps --format '{{.Names}}' | grep -q '^smsly-postgres-primary$'; then
+    _ps_names="$(timeout 30 docker ps --format '{{.Names}}' || true)"
+    if printf '%s\n' "$_ps_names" | grep -q '^smsly-postgres-primary$'; then
         _db_container="smsly-postgres-primary"; _db_user="${POSTGRES_USER:-smsly_admin}"
-    elif docker ps --format '{{.Names}}' | grep -q '^smsly-hosting-db-1$'; then
+    elif printf '%s\n' "$_ps_names" | grep -q '^smsly-hosting-db-1$'; then
         _db_container="smsly-hosting-db-1"; _db_user="${POSTGRES_USER:-postgres}"
     fi
     if [ -n "$_db_container" ]; then
@@ -66,11 +67,11 @@ else
     # ── 3. generate + extract env ────────────────────────────────────
     _gen_script="$INSTALL_DIR/infrastructure/docker/infisical-gen-env.sh"
     if [ -f "$_gen_script" ]; then
-        docker run --rm -v infisical_data:/data -v "$_gen_script":/tmp/infisical-gen-env.sh:ro \
+        timeout 90 docker run --rm -v infisical_data:/data -v "$_gen_script":/tmp/infisical-gen-env.sh:ro \
             alpine:3.19 sh /tmp/infisical-gen-env.sh /data/infisical.env > /dev/null \
             || warn "Env generation had issues (may already exist)"
     fi
-    docker run --rm -v infisical_data:/data alpine:3.19 cat /data/infisical.env > "$ENV_FILE" 2>/dev/null \
+    timeout 30 docker run --rm -v infisical_data:/data alpine:3.19 cat /data/infisical.env > "$ENV_FILE" 2>/dev/null \
         || fail "Could not read generated env from infisical_data volume"
     chmod 600 "$ENV_FILE"
     grep -q "^ENCRYPTION_KEY=.\+" "$ENV_FILE" || fail "ENCRYPTION_KEY missing in $ENV_FILE"
@@ -88,9 +89,9 @@ else
     _redis_pass="$(grep '^REDIS_PASSWORD=' "$DOTENV" 2>/dev/null | cut -d= -f2-)"
     [ -n "$_redis_pass" ] || fail "No Redis credentials (need REDIS_PASSWORD in .env)"
     export REDIS_PASSWORD="$_redis_pass"
-    docker rm -f docker-infisical-1 > /dev/null 2>&1 || true
+    timeout 30 docker rm -f docker-infisical-1 > /dev/null 2>&1 || true
     # shellcheck disable=SC2154
-    if docker compose -p smsly-infisical --env-file "$DOTENV" -f "$COMPOSE" up -d; then
+    if timeout 180 docker compose -p smsly-infisical --env-file "$DOTENV" -f "$COMPOSE" up -d; then
         ok "Infisical starting"
     else
         fail "docker compose up failed"
@@ -144,10 +145,11 @@ if [ -n "$_SUPPLIED_TOKEN" ]; then
     else
         echo "INFISICAL_SERVICE_TOKEN=$_SUPPLIED_TOKEN" >> "$DOTENV"
     fi
-    chmod 600 "$DOTENV"
-    _backend="$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)"
+    chown root:1000 "$DOTENV" 2>/dev/null || true
+    chmod 640 "$DOTENV"
+    _backend="$(timeout 30 docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)"
     if [ -n "$_backend" ]; then
-        docker restart "$_backend" > /dev/null && ok "Backend restarted" || warn "Backend restart failed"
+        timeout 60 docker restart "$_backend" > /dev/null && ok "Backend restarted" || warn "Backend restart failed"
         sleep 15
         timeout 90 docker exec "$_backend" python manage.py sync_infisical_secrets --push \
             && ok "Platform secrets pushed to Infisical" \

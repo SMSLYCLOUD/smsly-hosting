@@ -5,19 +5,29 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { config } from '@/lib/config';
 import type { MtlsHealth, MtlsConfig, MtlsAuthorizationPolicy } from '../types';
 
-const API_BASE = config.api.baseUrl;
+const API_BASE = config.api.baseUrl.replace(/\/+$/, '');
+
+function normalizeUrl(path: string): string {
+  return `${API_BASE}/${path.replace(/^\/+/, '')}`;
+}
 
 async function fetchJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { credentials: 'include' });
+  const res = await fetch(normalizeUrl(path), {
+    credentials: 'include',
+    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+  });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
 async function postJson<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(normalizeUrl(path), {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
@@ -25,10 +35,13 @@ async function postJson<T>(path: string, body?: unknown): Promise<T> {
 }
 
 async function putJson<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(normalizeUrl(path), {
     method: 'PUT',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+    },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
@@ -36,9 +49,10 @@ async function putJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function deleteJson(path: string): Promise<void> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(normalizeUrl(path), {
     method: 'DELETE',
     credentials: 'include',
+    headers: { 'X-Requested-With': 'XMLHttpRequest' },
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
@@ -48,26 +62,26 @@ export function useMtls() {
 
   const health = useQuery<MtlsHealth>({
     queryKey: ['mtls', 'health'],
-    queryFn: () => fetchJson('mtls/health'),
+    queryFn: () => fetchJson('/mtls/health/'),
     refetchInterval: 30_000,
   });
 
   const configs = useQuery<MtlsConfig[]>({
     queryKey: ['mtls', 'configs'],
-    queryFn: () => fetchJson('mtls/configs'),
+    queryFn: () => fetchJson('/mtls/configs/'),
     refetchInterval: 30_000,
   });
 
   const enableMtls = useMutation({
     mutationFn: (serviceId: string) =>
-      postJson<{ auto_injected: boolean }>(`services/${serviceId}/mtls/enable`),
+      postJson<{ auto_injected: boolean }>(`/services/${serviceId}/mtls/enable/`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mtls'] });
     },
   });
 
   const disableMtls = useMutation({
-    mutationFn: (serviceId: string) => postJson(`services/${serviceId}/mtls/disable`),
+    mutationFn: (serviceId: string) => postJson(`/services/${serviceId}/mtls/disable/`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mtls'] });
     },
@@ -79,14 +93,8 @@ export function useMtls() {
     queryKey: ['mtls', 'policies'],
     queryFn: () => {
       // Fetch all policies (no service filter = all policies)
-      return fetchJson('mtls/policies/?service_id=*');
+      return fetchJson('/mtls/policies/?service_id=*');
     },
-  });
-
-  const fetchPoliciesForService = useQuery<MtlsAuthorizationPolicy[]>({
-    queryKey: ['mtls', 'policies', 'service'],
-    queryFn: () => fetchJson('mtls/policies/'),
-    enabled: false,
   });
 
   const createPolicy = useMutation({
@@ -98,7 +106,7 @@ export function useMtls() {
       methods?: string[];
       action?: 'allow' | 'deny';
       priority?: number;
-    }) => postJson<MtlsAuthorizationPolicy>('mtls/policies/', data),
+    }) => postJson<MtlsAuthorizationPolicy>('/mtls/policies/', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mtls', 'policies'] });
     },
@@ -106,14 +114,14 @@ export function useMtls() {
 
   const updatePolicy = useMutation({
     mutationFn: ({ id, ...data }: { id: number } & Partial<MtlsAuthorizationPolicy>) =>
-      putJson<MtlsAuthorizationPolicy>(`mtls/policies/${id}/`, data),
+      putJson<MtlsAuthorizationPolicy>(`/mtls/policies/${id}/`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mtls', 'policies'] });
     },
   });
 
   const deletePolicy = useMutation({
-    mutationFn: (id: number) => deleteJson(`mtls/policies/${id}/`),
+    mutationFn: (id: number) => deleteJson(`/mtls/policies/${id}/`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mtls', 'policies'] });
     },

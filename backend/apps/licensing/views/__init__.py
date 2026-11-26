@@ -1,11 +1,12 @@
 from django.conf import settings
+from django.utils import timezone
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from ..models import PlatformLicense
 from ..serializers import LicenseActivationSerializer, LicenseStatusSerializer
-from ..validator import validate_license
+from ..validator import parse_offline_license_data, validate_license
 
 
 class LicenseViewSet(viewsets.ViewSet):
@@ -18,13 +19,21 @@ class LicenseViewSet(viewsets.ViewSet):
     def status(self, request):
         """Get current license status and enabled features."""
         license_obj = PlatformLicense.load()
-        # Ensure validation is fresh-ish? Maybe rely on cron task or validate on read if old?
-        # For now just return stored state.
+        tier_gates_disabled = bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False))
+        if (
+            not tier_gates_disabled
+            and license_obj.is_valid
+            and license_obj.expires_at
+            and license_obj.expires_at <= timezone.now()
+        ):
+            validate_license(license_obj, force_fresh=True)
+            license_obj.refresh_from_db()
+
         serializer = LicenseStatusSerializer(license_obj)
         data = dict(serializer.data)
 
         # Owner edition: explicit runtime bypass for all tier gates/UI locks.
-        if bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False)):
+        if tier_gates_disabled:
             data.update(
                 {
                     "tier": "enterprise",
@@ -62,25 +71,31 @@ class LicenseViewSet(viewsets.ViewSet):
         serializer = LicenseActivationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         key = serializer.validated_data['license_key'].strip()
+        raw_license_data = request.data.get('license_data') if hasattr(request, 'data') else None
+        parsed_license_data = parse_offline_license_data(key, raw_license_data)
 
         license_obj = PlatformLicense.load()
         license_obj.license_key = key
+        license_obj.license_data = parsed_license_data
+        license_obj.is_valid = False
+        license_obj.validation_error = ''
         license_obj.save()
 
-        # Trigger validation immediately
+        # Trigger fresh validation immediately (bypassing any prior grace period)
         try:
-            validate_license(license_obj)
+            validate_license(license_obj, force_fresh=True)
         except Exception:
             # Already handled inside validator logging
             pass
 
         license_obj.refresh_from_db()
 
-        if not license_obj.is_valid:
+        is_expired = bool(license_obj.expires_at and license_obj.expires_at <= timezone.now())
+        if not license_obj.is_valid or is_expired:
             return Response({
                 'status': 'error',
                 'message': 'License validation failed',
-                'detail': license_obj.validation_error,
+                'detail': license_obj.validation_error or ('License has expired' if is_expired else 'Invalid license'),
                 'license': LicenseStatusSerializer(license_obj).data
             }, status=status.HTTP_400_BAD_REQUEST)
 

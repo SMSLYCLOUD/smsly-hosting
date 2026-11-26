@@ -19,10 +19,13 @@ class ResourceAlertViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        from django.db.models import Q
+        from apps.deployments.models import Service
+        from apps.permissions.utils import get_accessible_q
+
         user = self.request.user
+        accessible_services = Service.objects.filter(get_accessible_q(user))
         qs = ResourceAlert.objects.filter(
-            Q(service__owner=user) | Q(service__project__team__members__user=user),
+            service__in=accessible_services,
             acknowledged=False,
         ).select_related('service').distinct().order_by('-created_at')
         service_id = self.request.query_params.get('service')
@@ -32,9 +35,12 @@ class ResourceAlertViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=['post'])
     def dismiss(self, request, pk=None):
+        from apps.teams.permissions import assert_can_write
+
         alert = self.get_object()
+        assert_can_write(request.user, alert.service, action='dismiss resource alert')
         alert.acknowledged = True
-        alert.save()
+        alert.save(update_fields=['acknowledged'])
         return Response({'status': 'dismissed'})
 
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
@@ -64,7 +70,12 @@ class NotificationPreferenceViewSet(viewsets.ModelViewSet):
         return NotificationPreference.objects.filter(user=self.request.user).order_by('id')
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        obj, _created = NotificationPreference.objects.update_or_create(
+            user=self.request.user,
+            event_type=serializer.validated_data['event_type'],
+            defaults={'channels': serializer.validated_data.get('channels', [])},
+        )
+        serializer.instance = obj
 
 
 class NotificationChannelViewSet(viewsets.ModelViewSet):

@@ -20,6 +20,7 @@ Endpoints mirror the standard addon API:
 """
 import logging
 import os
+import re
 
 from django.conf import settings
 from rest_framework import permissions, serializers, status, viewsets
@@ -54,6 +55,9 @@ class BundleComponentSerializer(serializers.ModelSerializer):
         ]
 
 
+_BUNDLE_NAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$')
+
+
 class BundleSerializer(serializers.ModelSerializer):
     components = BundleComponentSerializer(many=True, read_only=True)
     service_name = serializers.CharField(source='service.name', read_only=True)
@@ -65,6 +69,20 @@ class BundleSerializer(serializers.ModelSerializer):
             'grid_addons_hash', 'components', 'created_at',
         ]
         read_only_fields = ['service', 'status', 'network', 'grid_addons_hash']
+
+    def validate_name(self, value):
+        cleaned = str(value or '')
+        if not _BUNDLE_NAME_RE.match(cleaned):
+            raise serializers.ValidationError(
+                'Bundle name must be 1-63 characters, start with an alphanumeric character, '
+                'and contain only letters, numbers, hyphens, and underscores.'
+            )
+        return cleaned
+
+    def update(self, instance, validated_data):
+        # Bundle name is immutable after creation (directory/container naming depends on it).
+        validated_data.pop('name', None)
+        return super().update(instance, validated_data)
 
 
 class BundleBackupSerializer(serializers.ModelSerializer):
@@ -108,6 +126,10 @@ class BundleViewSet(viewsets.ModelViewSet):
         service = serializer.validated_data.get('service')
         if service:
             assert_can_write(self.request.user, service, action='create bundle')
+        serializer.save()
+
+    def perform_update(self, serializer):
+        assert_can_write(self.request.user, serializer.instance.service, action='update bundle')
         serializer.save()
 
     def perform_destroy(self, instance):
@@ -187,13 +209,17 @@ class BundleViewSet(viewsets.ModelViewSet):
         """
         bundle = self.get_object()
         component_name = request.query_params.get('component')
-        tail = int(request.query_params.get('tail', 200))
+        try:
+            tail = int(request.query_params.get('tail', 200))
+        except (TypeError, ValueError):
+            tail = 200
+        tail = max(1, min(tail, 2000))
 
         from apps.addons.services.bundle_provisioner import bundle_provisioner
         try:
             log_text = bundle_provisioner.get_logs(
                 bundle.name, str(bundle.service.id),
-                component_name=component_name, tail=min(tail, 2000),
+                component_name=component_name, tail=tail,
             )
             return Response({
                 'bundle': bundle.name,
@@ -230,6 +256,7 @@ class BundleViewSet(viewsets.ModelViewSet):
     def network_check(self, request, pk=None):
         """Verify and repair the bundle's Docker network."""
         bundle = self.get_object()
+        assert_can_write(request.user, bundle.service, action='check bundle network')
         from apps.addons.services.bundle_provisioner import bundle_provisioner
 
         try:
@@ -260,6 +287,7 @@ class BundleViewSet(viewsets.ModelViewSet):
         Body: ``{"component": "kamailio"}``
         """
         bundle = self.get_object()
+        assert_can_write(request.user, bundle.service, action='backup bundle')
         component_name = request.data.get('component')
         if not component_name:
             return Response(
@@ -291,6 +319,7 @@ class BundleViewSet(viewsets.ModelViewSet):
         Body: ``{"backup_id": "uuid"}``
         """
         bundle = self.get_object()
+        assert_can_write(request.user, bundle.service, action='restore bundle')
         backup_id = request.data.get('backup_id')
         if not backup_id:
             return Response(
@@ -329,6 +358,7 @@ class BundleViewSet(viewsets.ModelViewSet):
     def download_backup(self, request, pk=None):
         """Download a backup file."""
         bundle = self.get_object()
+        assert_can_write(request.user, bundle.service, action='download bundle backup')
         backup_id = request.query_params.get('backup_id')
         if not backup_id:
             return Response(
@@ -346,18 +376,26 @@ class BundleViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if not os.path.exists(backup.file_path):
+        if not backup.file_path:
             return Response(
-                {'error': 'File not found on disk'},
-                status=status.HTTP_404_NOT_FOUND,
+                {'error': 'Invalid backup path'},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Security: ensure path is within backups directory
-        backups_root = os.path.realpath(
-            os.path.join(settings.BASE_DIR, 'backups'),
-        )
+        # Security: ensure path is within allowed bundle backups directories
+        allowed_roots = [
+            os.path.realpath('/app/backups/bundles'),
+            os.path.realpath(os.path.join(settings.BASE_DIR, 'backups', 'bundles')),
+        ]
         real_path = os.path.realpath(backup.file_path)
-        if not real_path.startswith(backups_root):
+
+        def _within_root(path: str, root: str) -> bool:
+            try:
+                return os.path.commonpath([path, root]) == root and path != root
+            except ValueError:
+                return False
+
+        if not any(_within_root(real_path, root) for root in allowed_roots):
             logger.warning(
                 "Blocked backup download path traversal: %s", backup.file_path,
             )
@@ -366,12 +404,16 @@ class BundleViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        import re
+        if not os.path.isfile(real_path):
+            return Response(
+                {'error': 'File not found on disk'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         from .addons import _ClosingFileResponse
-        backup_file = open(backup.file_path, 'rb')
+        backup_file = open(real_path, 'rb')
         response = _ClosingFileResponse(backup_file, as_attachment=True)
-        safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', os.path.basename(backup.file_path))
+        safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', os.path.basename(real_path))
         response['Content-Disposition'] = f'attachment; filename="{safe_name}"'
         return response
 
@@ -383,6 +425,7 @@ class BundleViewSet(viewsets.ModelViewSet):
     def credentials(self, request, pk=None):
         """Return parsed connection credentials for all components."""
         bundle = self.get_object()
+        assert_can_write(request.user, bundle.service, action='view bundle credentials')
         components = BundleComponent.objects.filter(
             bundle=bundle, status='ACTIVE',
         )

@@ -117,32 +117,25 @@ def decrypt_arg(encrypted_value: str, *, service_id: str | None = None) -> str:
     if payload.startswith("grid:"):
         svc_id = str(service_id or "").strip()
         if not svc_id:
-            if _is_strict_mode():
-                raise TaskEncryptionError("service_id is required to decrypt grid-cryptd task argument")
-            return encrypted_value
+            raise TaskEncryptionError("service_id is required to decrypt grid-cryptd task argument")
         try:
             from apps.core.crypto_daemon import cryptd_client
             return cryptd_client.decrypt_text(payload, service_id=svc_id, context="celery-task-arg")
         except Exception as exc:
             logger.error("grid-cryptd task_decryption failed: %s", exc)
-            if _is_strict_mode():
-                raise TaskEncryptionError("grid-cryptd task argument decryption failed") from exc
-            return encrypted_value
+            raise TaskEncryptionError("grid-cryptd task argument decryption failed") from exc
 
     key = _get_task_encryption_key()
     if not key or Fernet is None:
-        if _is_strict_mode():
-            raise TaskEncryptionError("Task decryption key missing in strict mode")
-        return encrypted_value
+        raise TaskEncryptionError("Task decryption key missing")
 
     try:
         f = Fernet(key)
         raw = urlsafe_b64decode(payload)
         return f.decrypt(raw).decode()
     except (InvalidToken, Exception) as exc:
-        if _is_strict_mode():
-            raise TaskEncryptionError("Task argument decryption failed") from exc
-        return encrypted_value
+        logger.error("Fernet task_decryption failed: %s", exc)
+        raise TaskEncryptionError("Task argument decryption failed") from exc
 
 
 def obfuscate_arg(value: str, visible_chars: int = 4) -> str:

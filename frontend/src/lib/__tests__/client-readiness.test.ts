@@ -34,13 +34,22 @@ describe('proxy authentication boundaries', () => {
     expect(document.cookie).toContain('auth_token=local-session');
   });
 
-  it('logs out when the controller rejects the proxy request itself', async () => {
+  it('does not call destructive logout on arbitrary non-auth-user 401s, and clears cookies on /auth/user/ 401', async () => {
     const logout = vi.fn().mockResolvedValue({});
     vi.stubGlobal('fetch', logout);
+    document.cookie = 'auth_token=local-session; path=/';
+
     await expect(api.get('/servers/remote-1/proxy/', {
       adapter: async config => { throw new AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config, undefined, { config, data: {}, status: 401, statusText: 'Unauthorized', headers: {} }); },
     })).rejects.toMatchObject({ response: { status: 401 } });
-    expect(logout).toHaveBeenCalledOnce();
+    expect(logout).not.toHaveBeenCalled();
+    expect(document.cookie).toContain('auth_token=local-session');
+
+    await expect(api.get('/auth/user/', {
+      adapter: async config => { throw new AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config, undefined, { config, data: {}, status: 401, statusText: 'Unauthorized', headers: {} }); },
+    })).rejects.toMatchObject({ response: { status: 401 } });
+    expect(logout).not.toHaveBeenCalled();
+    expect(document.cookie).not.toContain('auth_token=local-session');
   });
 });
 

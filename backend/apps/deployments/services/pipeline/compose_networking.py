@@ -86,6 +86,16 @@ class ComposeNetworkingMixin:
             if host and host not in domains:
                 domains.append(host)
 
+        try:
+            from apps.deployments.services.caddy_manager.config_generation import (
+                node_service_domains_for_service,
+            )
+            for nh in node_service_domains_for_service(self.service):
+                if nh not in domains:
+                    domains.append(nh)
+        except Exception:
+            pass
+
         return domains
 
 
@@ -129,6 +139,9 @@ class ComposeNetworkingMixin:
             "traefik.enable": "true" if is_public else "false",
             "traefik.docker.network": self._resolve_service_network_name(),
         }
+        svc_id_str = str(getattr(self.service, "id", "") or "").strip()
+        if svc_id_str:
+            labels["smsly.service_id"] = svc_id_str
 
         # --- mTLS: Add SPIRE workload attestation labels (all services) ---
         try:
@@ -138,7 +151,65 @@ class ComposeNetworkingMixin:
         except Exception as e:
             logger.debug("mTLS label injection skipped: %s", e)
 
+        def _attach_sablier_edge_labels(chain_list: list[str] | None) -> bool:
+            """Attach Sablier + edge JWT labels cleanly for HTTP and TLS routers."""
+            try:
+                svc_flags = getattr(self, "service", None)
+                if svc_flags is None:
+                    return False
+                enrolled = False
+                if bool(getattr(svc_flags, "sablier_enabled", False)):
+                    from apps.deployments.services.internal_wake import (
+                        internal_wake_host,
+                    )
+                    from apps.deployments.services.traefik_labels import (
+                        internal_wake_labels,
+                        normalize_sablier_session,
+                        sablier_retry_labels,
+                        sablier_retry_ref,
+                        sablier_service_labels,
+                        service_supports_sablier,
+                    )
+                    sablier_ok, sablier_reason = service_supports_sablier(svc_flags)
+                    if not sablier_ok:
+                        logger.warning(
+                            "sablier deferred for %s: %s",
+                            getattr(svc_flags, "name", router),
+                            sablier_reason,
+                        )
+                    else:
+                        session = normalize_sablier_session(
+                            getattr(svc_flags, "sablier_session", "") or "10m",
+                            default="10m",
+                        )
+                        group = str(getattr(svc_flags, "name", "") or router)
+                        labels.update(sablier_service_labels(
+                            router_name=router, group=group, session=session,
+                        ))
+                        labels.update(sablier_retry_labels(router_name=router))
+                        labels.update(internal_wake_labels(
+                            router_name=router,
+                            service_ref=router,
+                            internal_host=internal_wake_host(group),
+                            group=group,
+                            session=session,
+                        ))
+                        if chain_list is not None:
+                            chain_list.append(sablier_retry_ref(router))
+                            chain_list.append(f"{router}-sablier")
+                        enrolled = True
+                if chain_list is not None and bool(getattr(svc_flags, "edge_jwt_required", False)):
+                    chain_list.append("edge-forward-auth@file")
+                return enrolled
+            except Exception:
+                return False
+
         if not is_public:
+            if _attach_sablier_edge_labels(None):
+                labels["traefik.enable"] = "true"
+                labels[
+                    f"traefik.http.services.{router}.loadbalancer.server.port"
+                ] = str(self.service.internal_port)
             return labels
 
         labels[
@@ -161,26 +232,40 @@ class ComposeNetworkingMixin:
             in {"1", "true", "yes", "on"}
         )
 
+        # Ensure edge-shared.yml exists — labels below reference
+        # secure-headers-strict@file / edge-forward-auth@file.
+        try:
+            from apps.deployments.services.traefik_manager.edge_shared_file import (
+                ensure_edge_shared_file,
+            )
+            ensure_edge_shared_file()
+        except Exception:
+            logger.warning("Edge shared file ensure failed for %s", router)
+
         if use_ssl and enable_traefik_tls:
-            middlewares = f"{router}-redirect"
+            http_middlewares = f"{router}-redirect"
             if enable_crowdsec_waf:
-                middlewares += ",crowdsec-bouncer@docker"
+                http_middlewares += ",crowdsec-bouncer@docker"
+
+            tls_chain = ["secure-headers-strict@file"]
+            if enable_crowdsec_waf:
+                tls_chain.insert(0, "crowdsec-bouncer@docker")
+            _attach_sablier_edge_labels(tls_chain)
 
             labels.update(
                 {
                     f"traefik.http.routers.{router}-http.rule": host_rule,
                     f"traefik.http.routers.{router}-http.entrypoints": "web",
-                    f"traefik.http.routers.{router}-http.middlewares": middlewares,
+                    f"traefik.http.routers.{router}-http.middlewares": http_middlewares,
                     f"traefik.http.middlewares.{router}-redirect.redirectscheme.scheme": "https",
                     f"traefik.http.middlewares.{router}-redirect.redirectscheme.permanent": "true",
                     f"traefik.http.routers.{router}.rule": host_rule,
                     f"traefik.http.routers.{router}.entrypoints": "websecure",
                     f"traefik.http.routers.{router}.tls": "true",
                     f"traefik.http.routers.{router}.tls.certresolver": "letsencrypt",
+                    f"traefik.http.routers.{router}.middlewares": ",".join(tls_chain),
                 }
             )
-            if enable_crowdsec_waf:
-                labels[f"traefik.http.routers.{router}.middlewares"] = "crowdsec-bouncer@docker"
             return labels
 
         labels.update(
@@ -189,59 +274,10 @@ class ComposeNetworkingMixin:
                 f"traefik.http.routers.{router}.entrypoints": "web",
             }
         )
-        # The chain below references secure-headers-strict@file /
-        # edge-forward-auth@file (file provider). Ensure edge-shared.yml
-        # exists first — a missing file drops the whole router.
-        try:
-            from apps.deployments.services.traefik_manager.edge_shared_file import (
-                ensure_edge_shared_file,
-            )
-            ensure_edge_shared_file()
-        except Exception:
-            logger.warning("Edge shared file ensure failed for %s", router)
         chain = ["secure-headers-strict@file"]
         if enable_crowdsec_waf:
             chain.insert(0, "crowdsec-bouncer@docker")
-        try:
-            svc_flags = getattr(self, "service", None)
-            if svc_flags is not None:
-                if bool(getattr(svc_flags, "sablier_enabled", False)):
-                    from apps.deployments.services.internal_wake import (
-                        internal_wake_host,
-                        service_has_mesh_sidecar,
-                    )
-                    from apps.deployments.services.traefik_labels import (
-                        internal_wake_labels,
-                        sablier_retry_labels,
-                        sablier_retry_ref,
-                        sablier_service_labels,
-                    )
-                    if service_has_mesh_sidecar(svc_flags):
-                        # Mesh-served: no in-band wake path (see internal_wake).
-                        logger.warning(
-                            "sablier deferred for %s: mesh sidecar attached",
-                            getattr(svc_flags, "name", router),
-                        )
-                    else:
-                        session = str(getattr(svc_flags, "sablier_session", "") or "10m").strip() or "10m"
-                        group = str(getattr(svc_flags, "name", "") or router)
-                        labels.update(sablier_service_labels(
-                            router_name=router, group=group, session=session,
-                        ))
-                        labels.update(sablier_retry_labels(router_name=router))
-                        labels.update(internal_wake_labels(
-                            router_name=router,
-                            service_ref=router,
-                            internal_host=internal_wake_host(group),
-                            group=group,
-                            session=session,
-                        ))
-                        chain.append(sablier_retry_ref(router))
-                        chain.append(f"{router}-sablier")
-                if bool(getattr(svc_flags, "edge_jwt_required", False)):
-                    chain.append("edge-forward-auth@file")
-        except Exception:
-            pass
+        _attach_sablier_edge_labels(chain)
         labels[f"traefik.http.routers.{router}.middlewares"] = ",".join(chain)
 
         if use_ssl:
@@ -335,9 +371,14 @@ class ComposeNetworkingMixin:
                     f"'{raw_path}' in {context_label} which is not allowed for security reasons."
                 )
 
+    _NAMED_VOLUME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    _FORBIDDEN_TENANT_LABEL_PREFIXES = ("traefik.", "com.paas.", "smsly.")
+
     @classmethod
-    def _validate_compose_top_level_volumes(cls, compose_doc: dict) -> None:
-        """Reject top-level named volumes that use driver_opts bind mounts to sensitive host paths."""
+    def _validate_compose_top_level_volumes(
+        cls, compose_doc: dict, *, allow_host_binds: bool = True
+    ) -> None:
+        """Reject top-level named volumes that use driver_opts bind mounts."""
         if not isinstance(compose_doc, dict):
             return
         volumes = compose_doc.get("volumes")
@@ -359,8 +400,14 @@ class ComposeNetworkingMixin:
             driver_opts = vol_cfg.get("driver_opts")
             if isinstance(driver_opts, dict):
                 device = str(driver_opts.get("device") or "").strip()
+                opts = str(driver_opts.get("o") or "").strip().lower()
                 if device:
                     cls._check_host_path_forbidden(f"volumes.{vol_name}", device, "driver_opts.device")
+                if not allow_host_binds and (device or "bind" in opts.split(",")):
+                    raise BuildError(
+                        f"Compose volume '{vol_name}' declares driver_opts host bind "
+                        "which is not allowed for tenant Compose deployments."
+                    )
 
     @classmethod
     def _validate_compose_networks_security(
@@ -425,10 +472,22 @@ class ComposeNetworkingMixin:
                         )
 
     @classmethod
-    def _validate_compose_service_security(cls, svc_name: str, svc_config: dict) -> None:
+    def _validate_compose_service_security(
+        cls,
+        svc_name: str,
+        svc_config: dict,
+        *,
+        allow_host_binds: bool = True,
+        allow_ports: bool = True,
+    ) -> None:
         """Reject dangerous Docker Compose directives before compose build/up."""
         if not isinstance(svc_config, dict):
             return
+        if not allow_ports and svc_config.get("ports"):
+            raise BuildError(
+                f"Compose service '{svc_name}' declares host 'ports:' mappings "
+                "which are not allowed for tenant Compose deployments."
+            )
         if svc_config.get("privileged") is True or str(svc_config.get("privileged") or "").strip().lower() == "true":
             raise BuildError(
                 f"Compose service '{svc_name}' has privileged: true "
@@ -509,15 +568,68 @@ class ComposeNetworkingMixin:
 
         for vol in (svc_config.get("volumes") or []):
             src = ""
+            vtype = "volume"
             if isinstance(vol, str):
                 parts = vol.split(":")
                 if len(parts) >= 2:
                     src = parts[0].strip()
             elif isinstance(vol, dict):
+                vtype = str(vol.get("type") or "volume").strip().lower()
                 src = str(vol.get("source") or "").strip()
-            if not src:
+            if src:
+                cls._check_host_path_forbidden(svc_name, src, "volume")
+            if not allow_host_binds:
+                if isinstance(vol, dict) and vtype != "volume":
+                    raise BuildError(
+                        f"Compose service '{svc_name}' uses mount type '{vtype}' "
+                        "which is not allowed for tenant Compose deployments; use named Docker volumes only."
+                    )
+                if src:
+                    src_norm = src.replace("\\", "/")
+                    if (
+                        src_norm.startswith(("/", "./", "../", "~", "$"))
+                        or "/" in src_norm
+                        or not cls._NAMED_VOLUME_RE.match(src_norm)
+                    ):
+                        raise BuildError(
+                            f"Compose service '{svc_name}' uses host bind mount '{src}' "
+                            "which is not allowed for tenant Compose deployments; use named Docker volumes only."
+                        )
+
+    @classmethod
+    def _sanitize_user_compose_doc(cls, user_compose: dict) -> bool:
+        """Strip ports and reserved platform labels from tenant compose services.
+
+        Returns True if the compose document was modified.
+        """
+        services = user_compose.get("services")
+        if not isinstance(services, dict):
+            return False
+        changed = False
+        for svc_cfg in services.values():
+            if not isinstance(svc_cfg, dict):
                 continue
-            cls._check_host_path_forbidden(svc_name, src, "volume")
+            if "ports" in svc_cfg:
+                svc_cfg.pop("ports", None)
+                changed = True
+            labels = svc_cfg.get("labels")
+            if isinstance(labels, dict):
+                for lk in list(labels.keys()):
+                    lk_lower = str(lk).strip().lower()
+                    if lk_lower == "managed_by" or lk_lower.startswith(cls._FORBIDDEN_TENANT_LABEL_PREFIXES):
+                        labels.pop(lk, None)
+                        changed = True
+            elif isinstance(labels, list):
+                kept = []
+                for entry in labels:
+                    key_part = str(entry).split("=", 1)[0].strip().lower()
+                    if key_part == "managed_by" or key_part.startswith(cls._FORBIDDEN_TENANT_LABEL_PREFIXES):
+                        changed = True
+                        continue
+                    kept.append(entry)
+                if len(kept) != len(labels):
+                    svc_cfg["labels"] = kept
+        return changed
 
     @staticmethod
     def _apply_compose_service_hardening(
@@ -636,6 +748,7 @@ class ComposeNetworkingMixin:
                     getattr(self, "service", None),
                     [network_name],
                     get_docker_client(),
+                    include_siblings=not bool(resolv_path and os.path.isfile(resolv_path)),
                 )
             except Exception as exc:
                 logger.debug("Compose gVisor extra_hosts resolution skipped: %s", exc)
@@ -658,6 +771,10 @@ class ComposeNetworkingMixin:
             cpus_val = 1.0
         cpus_val = max(0.1, cpus_val)
 
+        is_user_managed = (
+            str(getattr(svc_obj, "managed_by", "USER") or "USER").strip().upper() == "USER"
+        )
+
         # Apply security_opt + shared network to ALL services in the compose file
         try:
             compose_path = resolve_compose_path(routing_dir, self.service.compose_file)
@@ -669,11 +786,21 @@ class ComposeNetworkingMixin:
                     raw_compose_text = f.read()
                 user_compose = yaml.safe_load(raw_compose_text) or {}
                 if "services" in user_compose and isinstance(user_compose["services"], dict):
-                    self._validate_compose_top_level_volumes(user_compose)
+                    self._validate_compose_top_level_volumes(
+                        user_compose, allow_host_binds=not is_user_managed
+                    )
                     self._validate_compose_networks_security(user_compose, allowed_network=network_name)
                     # SECURITY: reject privileged modes, host namespaces, dangerous caps, and sensitive host mounts
                     for svc_name, svc_config in user_compose["services"].items():
-                        self._validate_compose_service_security(svc_name, svc_config)
+                        self._validate_compose_service_security(
+                            svc_name,
+                            svc_config,
+                            allow_host_binds=not is_user_managed,
+                            allow_ports=True,
+                        )
+                    if is_user_managed and self._sanitize_user_compose_doc(user_compose):
+                        with open(compose_path, "w", encoding="utf-8") as f:
+                            yaml.safe_dump(user_compose, f, sort_keys=False)
 
                     # Collect networks already declared in the user's compose file
                     # so we don't create duplicate entries.
@@ -696,6 +823,25 @@ class ComposeNetworkingMixin:
                     if main_service not in all_service_names:
                         all_service_names.append(main_service)
 
+                    sablier_co_labels: dict[str, str] = {}
+                    if svc_obj is not None and bool(getattr(svc_obj, "sablier_enabled", False)):
+                        try:
+                            from apps.deployments.services.traefik_labels import (
+                                service_supports_sablier,
+                            )
+                            if service_supports_sablier(svc_obj)[0]:
+                                group_name = str(
+                                    getattr(svc_obj, "name", "")
+                                    or project_name.replace("-", "_").replace(".", "_").lower()
+                                )
+                                sablier_co_labels["sablier.enable"] = "true"
+                                sablier_co_labels["sablier.group"] = group_name
+                                sid_val = str(getattr(svc_obj, "id", "") or "").strip()
+                                if sid_val:
+                                    sablier_co_labels["smsly.service_id"] = sid_val
+                        except Exception:
+                            pass
+
                     for svc_name in all_service_names:
                         if svc_name not in override_payload["services"]:
                             override_payload["services"][svc_name] = {}
@@ -708,6 +854,18 @@ class ComposeNetworkingMixin:
                             mem_limit=mem_limit_str,
                             cpus=cpus_val,
                         )
+                        if sablier_co_labels:
+                            cur_labels = override_payload["services"][svc_name].get("labels")
+                            if isinstance(cur_labels, dict):
+                                for lk, lv in sablier_co_labels.items():
+                                    cur_labels.setdefault(lk, lv)
+                            elif isinstance(cur_labels, list):
+                                existing_keys = {str(x).split("=", 1)[0] for x in cur_labels}
+                                for lk, lv in sablier_co_labels.items():
+                                    if lk not in existing_keys:
+                                        cur_labels.append(f"{lk}={lv}")
+                            else:
+                                override_payload["services"][svc_name]["labels"] = dict(sablier_co_labels)
 
                         # Attach every service to the shared network so DNS
                         # resolution for addon hostnames works.  If the user's
@@ -932,7 +1090,14 @@ class ComposeNetworkingMixin:
         if user_doc.get("include"):
             raise BuildError("Compose top-level 'include' is not allowed for tenant deployments.")
 
-        self._validate_compose_top_level_volumes(user_doc)
+        is_user_managed = (
+            str(
+                getattr(getattr(self, "service", None), "managed_by", "USER") or "USER"
+            ).strip().upper() == "USER"
+        )
+        self._validate_compose_top_level_volumes(
+            user_doc, allow_host_binds=not is_user_managed
+        )
         self._validate_compose_networks_security(user_doc, allowed_network=allowed_network)
         for svc_name, svc_cfg in user_doc["services"].items():
             if isinstance(svc_cfg, dict) and svc_cfg.get("extends"):
@@ -941,7 +1106,12 @@ class ComposeNetworkingMixin:
                     raise BuildError(
                         f"Compose service '{svc_name}' uses external file in 'extends' which is not allowed."
                     )
-            self._validate_compose_service_security(svc_name, svc_cfg)
+            self._validate_compose_service_security(
+                svc_name,
+                svc_cfg,
+                allow_host_binds=not is_user_managed,
+                allow_ports=not is_user_managed,
+            )
 
         override_doc: dict = {}
         if override_path and os.path.isfile(override_path):
@@ -1016,7 +1186,13 @@ class ComposeNetworkingMixin:
                 # Compose env overlay is the caller's (user compose file);
                 # labels still enroll the router so manual .internal URLs
                 # wake. Gated on sablier enrollment; best-effort.
-                if bool(getattr(self.service, "sablier_enabled", False)):
+                from apps.deployments.services.traefik_labels import (
+                    service_supports_sablier,
+                )
+                if (
+                    bool(getattr(self.service, "sablier_enabled", False))
+                    and service_supports_sablier(self.service)[0]
+                ):
                     from apps.deployments.services.internal_wake import (
                         ensure_internal_wake_alias,
                     )

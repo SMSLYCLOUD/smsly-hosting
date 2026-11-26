@@ -9,6 +9,7 @@ import { Card } from '@/components/ui/card';
 import { Globe, Plus, Trash2, CheckCircle, XCircle, ExternalLink, RefreshCw, Copy, Loader2, ArrowRight } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePermissions } from '@/hooks/usePermissions';
 
 // CNAME target is derived per service from its public domain
 
@@ -226,17 +227,21 @@ function TrafficSplitCard({ serviceId, hasStaged }: { serviceId: string; hasStag
 
 export function DomainsTab({ service: initialService }: { service: Service }) {
     const confirm = useConfirm();
+    const { isStaff, isSuperuser } = usePermissions();
+    const canReadDomainConfig = isStaff || isSuperuser;
     const [service, setService] = useState(initialService);
     const [domains, setDomains] = useState<DomainStatus[]>([]);
     const [newDomain, setNewDomain] = useState('');
     const [loading, setLoading] = useState(true);
     const [adding, setAdding] = useState(false);
     const [serverIp, setServerIp] = useState<string>('');
-    const [stagingDomain, setStagingDomain] = useState(service.staging_domain || '');
+    const [stagingDomain, setStagingDomain] = useState(initialService.staging_domain || '');
+    const seededServiceIdRef = useRef<string | null>(initialService.id ?? null);
+    const stagingDirtyRef = useRef(false);
     const [savingStaging, setSavingStaging] = useState(false);
     const [stagingVerified, setStagingVerified] = useState<boolean | null>(() => {
-        if (service.staging_domain_verified === true) return true;
-        if (service.staging_domain_verified === false) return false;
+        if (initialService.staging_domain_verified === true) return true;
+        if (initialService.staging_domain_verified === false) return false;
         return null;
     });
     const [stagingChecking, setStagingChecking] = useState(false);
@@ -250,19 +255,25 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
     const defaultDomain = service.public_domain || `${service.name}.cloud.Trulay.co`;
 
     // Compute auto-generated staging domain: staging-{slug}.{platformDomain}
-    const autoStagingDomain = platformDomain
-        ? `staging-${(service.slug || service.name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30)}.${platformDomain}`
+    const effectivePlatformDomain = platformDomain || (
+        service.public_domain && service.public_domain.includes('.')
+            ? service.public_domain.split('.').slice(1).join('.')
+            : ''
+    );
+    const autoStagingDomain = effectivePlatformDomain
+        ? `staging-${(service.slug || service.name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30)}.${effectivePlatformDomain}`
         : '';
 
-    // Fetch server IP and platform domain from system config
+    // Fetch server IP and platform domain from system config (admin only)
     useEffect(() => {
+        if (!canReadDomainConfig) return;
         systemApi.getDomainConfig()
             .then((cfg: any) => {
                 setServerIp(cfg.server_ip || '');
                 setPlatformDomain(cfg.domain || '');
             })
             .catch(() => {});
-    }, []);
+    }, [canReadDomainConfig]);
 
     // Fetch active staged deployment
     useEffect(() => {
@@ -274,11 +285,39 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
             .catch(() => {});
     }, [service.id]);
 
+    useEffect(() => {
+        if (seededServiceIdRef.current !== initialService?.id) {
+            seededServiceIdRef.current = initialService?.id ?? null;
+            stagingDirtyRef.current = false;
+            setService(initialService);
+            setStagingDomain(initialService.staging_domain || '');
+            setStagingVerified(
+                initialService.staging_domain_verified === true
+                    ? true
+                    : initialService.staging_domain_verified === false
+                        ? false
+                        : null,
+            );
+            setNewDomain('');
+            setNewAliasHost('');
+            setNewAliasRoot('/login');
+            setNewPath('');
+            setNewTarget('');
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- AGENTS.md #21
+    }, [initialService?.id]);
+
     const loadDomains = useCallback(async () => {
         try {
             setLoading(true);
             const latest = await servicesApi.get(service.id);
             setService(latest);
+            if (!stagingDirtyRef.current) {
+                setStagingDomain(latest.staging_domain || '');
+                if (latest.staging_domain_verified === true) setStagingVerified(true);
+                else if (latest.staging_domain_verified === false) setStagingVerified(false);
+                else setStagingVerified(null);
+            }
             const domainList = Array.isArray(latest.custom_domains)
                 ? latest.custom_domains.map(d => String(d || '').trim().toLowerCase()).filter(Boolean)
                 : [];
@@ -502,6 +541,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
             // old domain while the toast promises auto-generation.
             const updated = await servicesApi.update(service.id, { staging_domain: newDomain });
             setService(prev => ({ ...prev, ...updated }));
+            stagingDirtyRef.current = false;
             if (oldDomain !== newDomain) {
                 setStagingVerified(null);
             }
@@ -944,7 +984,10 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                         <Input
                             placeholder={`staging-${service.name}.example.com`}
                             value={stagingDomain}
-                            onChange={(e) => setStagingDomain(e.target.value)}
+                            onChange={(e) => {
+                                stagingDirtyRef.current = true;
+                                setStagingDomain(e.target.value);
+                            }}
                             onKeyDown={(e) => e.key === 'Enter' && handleSaveStagingDomain()}
                             disabled={savingStaging}
                         />

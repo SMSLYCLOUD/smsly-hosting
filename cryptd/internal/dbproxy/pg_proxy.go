@@ -26,11 +26,13 @@ const (
 
 // PGProxyConfig configures a PostgreSQL wire v3 cryptographic point-of-contact proxy.
 type PGProxyConfig struct {
-	ListenAddr      string
-	DefaultUpstream string
-	DialTimeout     time.Duration
-	ClientTLS       *tls.Config
-	UpstreamTLS     *tls.Config
+	ListenAddr          string
+	DefaultUpstream     string
+	DialTimeout         time.Duration
+	ClientTLS           *tls.Config
+	UpstreamTLS         *tls.Config
+	UpstreamTLSOptional bool
+	ExplicitCA          bool
 }
 
 // PGProxy sits at the Postgres point of contact (in front of pgcat / pgbouncer / postgres),
@@ -97,15 +99,27 @@ func (p *PGProxy) handleConn(ctx context.Context, rawClient net.Conn) {
 		defer client.Close()
 	}
 	if isCancel {
-		// Best-effort forward query cancel packet to default upstream unless vault is locked.
-		if p.epochs.Status().State != epoch.StateLocked {
-			upstreamAddr := p.cfg.DefaultUpstream
-			if upstreamAddr != "" {
-				if up, derr := (&net.Dialer{Timeout: p.cfg.DialTimeout}).DialContext(ctx, "tcp", upstreamAddr); derr == nil {
-					_, _ = up.Write(startupFrame)
-					_ = up.Close()
-				}
-			}
+		// Only forward valid 16-byte Postgres CancelRequest packets when DefaultUpstream
+		// is configured, the vault is active/grace, and the default route is authorized.
+		upstreamAddr := strings.TrimSpace(p.cfg.DefaultUpstream)
+		if len(startupFrame) != 16 || upstreamAddr == "" {
+			return
+		}
+		st := p.epochs.Status()
+		if st.State != epoch.StateActive && st.State != epoch.StateGrace {
+			return
+		}
+		target := p.router.ResolvePostgres("", "")
+		if target.ServiceID == "" {
+			return
+		}
+		if _, _, authErr := p.epochs.AuthorizeDBAccess(target.ServiceID); authErr != nil {
+			return
+		}
+		if up, derr := (&net.Dialer{Timeout: p.cfg.DialTimeout}).DialContext(ctx, "tcp", upstreamAddr); derr == nil {
+			_ = up.SetDeadline(time.Now().Add(p.cfg.DialTimeout))
+			_, _ = up.Write(startupFrame)
+			_ = up.Close()
 		}
 		return
 	}
@@ -146,13 +160,16 @@ func (p *PGProxy) handleConn(ctx context.Context, rawClient net.Conn) {
 	defer upstream.Close()
 
 	if p.cfg.UpstreamTLS != nil {
-		tlsUpstream, uerr := negotiateUpstreamTLS(upstream, p.cfg.UpstreamTLS)
+		upstreamOptional := p.cfg.UpstreamTLSOptional && isLoopbackOrPrivateEndpoint(upstreamAddr)
+		tlsUpstream, uerr := negotiateUpstreamTLS(upstream, p.cfg.UpstreamTLS, upstreamOptional, p.cfg.ExplicitCA, upstreamAddr)
 		if uerr != nil {
 			_ = writePGErrorResponse(client, "08006", fmt.Sprintf("trulay-grid: upstream TLS failed: %v", uerr))
 			return
 		}
-		upstream = tlsUpstream
-		defer upstream.Close()
+		if tlsUpstream != upstream {
+			upstream = tlsUpstream
+			defer upstream.Close()
+		}
 	}
 
 	// Track connection pair under serviceID so ForceLockdown / LockService severs active sessions immediately.
@@ -166,9 +183,11 @@ func (p *PGProxy) handleConn(ctx context.Context, rawClient net.Conn) {
 		return
 	}
 
+	_ = upstream.SetWriteDeadline(time.Now().Add(15 * time.Second))
 	if _, err := upstream.Write(startupFrame); err != nil {
 		return
 	}
+	_ = upstream.SetWriteDeadline(time.Time{})
 
 	done := make(chan struct{}, 2)
 	go func() {
@@ -179,7 +198,10 @@ func (p *PGProxy) handleConn(ctx context.Context, rawClient net.Conn) {
 		_, _ = io.Copy(client, upstream)
 		done <- struct{}{}
 	}()
-	<-done
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }
 
 func (p *PGProxy) readStartup(conn net.Conn) (clientConn net.Conn, rawFrame []byte, params map[string]string, isCancel bool, err error) {
@@ -218,16 +240,24 @@ func (p *PGProxy) readStartup(conn net.Conn) (clientConn net.Conn, rawFrame []by
 		case pgSSLRequestCode:
 			if p.cfg.ClientTLS != nil {
 				if _, werr := cur.Write([]byte{'S'}); werr != nil {
+					if cur != conn {
+						_ = cur.Close()
+					}
 					return nil, nil, nil, false, werr
 				}
+				_ = cur.SetDeadline(time.Now().Add(15 * time.Second))
 				tlsConn := tls.Server(cur, p.cfg.ClientTLS)
 				if herr := tlsConn.Handshake(); herr != nil {
 					_ = tlsConn.Close()
 					return nil, nil, nil, false, herr
 				}
+				_ = tlsConn.SetDeadline(time.Time{})
 				cur = tlsConn
 			} else {
 				if _, werr := cur.Write([]byte{'N'}); werr != nil {
+					if cur != conn {
+						_ = cur.Close()
+					}
 					return nil, nil, nil, false, werr
 				}
 			}
@@ -235,7 +265,12 @@ func (p *PGProxy) readStartup(conn net.Conn) (clientConn net.Conn, rawFrame []by
 		case pgGSSENCRequestCode:
 			// Decline GSSAPI encryption so modern libpq/psycopg/asyncpg clients
 			// proceed cleanly to SSLRequest or plain StartupMessage.
-			_, _ = cur.Write([]byte{'N'})
+			if _, werr := cur.Write([]byte{'N'}); werr != nil {
+				if cur != conn {
+					_ = cur.Close()
+				}
+				return nil, nil, nil, false, werr
+			}
 			continue
 		case pgCancelRequestCode:
 			return cur, frame, nil, true, nil
@@ -270,7 +305,31 @@ func parsePGStartupParams(b []byte) map[string]string {
 	return out
 }
 
-func negotiateUpstreamTLS(conn net.Conn, cfg *tls.Config) (net.Conn, error) {
+func isLoopbackOrPrivateEndpoint(addr string) bool {
+	host := strings.TrimSpace(addr)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate()
+	}
+	if ips, err := net.LookupIP(host); err == nil && len(ips) > 0 {
+		for _, ip := range ips {
+			if !ip.IsLoopback() && !ip.IsPrivate() {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func negotiateUpstreamTLS(conn net.Conn, cfg *tls.Config, optional, explicitCA bool, upstreamAddr string) (net.Conn, error) {
+	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
 	var sslReq [8]byte
 	binary.BigEndian.PutUint32(sslReq[:4], 8)
 	binary.BigEndian.PutUint32(sslReq[4:], pgSSLRequestCode)
@@ -282,13 +341,30 @@ func negotiateUpstreamTLS(conn net.Conn, cfg *tls.Config) (net.Conn, error) {
 		return nil, err
 	}
 	if resp[0] != 'S' {
+		if optional && resp[0] == 'N' {
+			_ = conn.SetDeadline(time.Time{})
+			return conn, nil
+		}
 		return nil, errors.New("upstream Postgres refused TLS negotiation")
 	}
-	tlsConn := tls.Client(conn, cfg)
+	tlsCfg := cfg.Clone()
+	if optional && !explicitCA && isLoopbackOrPrivateEndpoint(upstreamAddr) {
+		tlsCfg.InsecureSkipVerify = true // #nosec G402 -- internal docker/loopback Postgres TLS without public IP SAN
+	}
+	if tlsCfg.ServerName == "" {
+		if host, _, err := net.SplitHostPort(upstreamAddr); err == nil {
+			host = strings.Trim(host, "[]")
+			if host != "" && net.ParseIP(host) == nil {
+				tlsCfg.ServerName = host
+			}
+		}
+	}
+	tlsConn := tls.Client(conn, tlsCfg)
 	if err := tlsConn.Handshake(); err != nil {
 		_ = tlsConn.Close()
 		return nil, err
 	}
+	_ = tlsConn.SetDeadline(time.Time{})
 	return tlsConn, nil
 }
 

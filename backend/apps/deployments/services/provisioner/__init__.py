@@ -1,8 +1,12 @@
+import os  # noqa: F401
+import requests  # noqa: F401
+
 from .core import cleanup_stale_server_provisioning, provision_server
 from .helpers import (
     PROVISION_TIMEOUT_SECONDS,
     _append_log,
     _get_master_mesh_ip,
+    _get_ssh_client,
     _load_install_script,
     _shell_env_assignments,
     build_agent_lite_install_env,
@@ -14,6 +18,7 @@ __all__ = [
     "PROVISION_TIMEOUT_SECONDS",
     "_append_log",
     "_get_master_mesh_ip",
+    "_get_ssh_client",
     "_load_install_script",
     "_shell_env_assignments",
     "build_agent_lite_install_env",

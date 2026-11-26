@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -74,14 +75,13 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		supplied := r.Header.Get("X-Cryptd-Secret")
 		if supplied == "" {
-			supplied = r.Header.Get("X-Napd-Secret")
-		}
-		if supplied == "" {
 			if authHdr := r.Header.Get("Authorization"); strings.HasPrefix(authHdr, "Bearer ") {
 				supplied = strings.TrimPrefix(authHdr, "Bearer ")
 			}
 		}
-		if subtle.ConstantTimeCompare([]byte(supplied), []byte(s.sharedSecret)) != 1 {
+		supSum := sha256.Sum256([]byte(supplied))
+		secSum := sha256.Sum256([]byte(s.sharedSecret))
+		if supplied == "" || subtle.ConstantTimeCompare(supSum[:], secSum[:]) != 1 {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unauthorized"})
 			return
 		}
@@ -95,18 +95,22 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func decodeJSONBody(r *http.Request, dst any) error {
+const maxJSONBodyBytes = 2 << 20 // 2 MiB
+
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) error {
 	defer r.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return err
 	}
 	return json.Unmarshal(body, dst)
 }
 
-func decodeOptionalJSONBody(r *http.Request, dst any) error {
+func decodeOptionalJSONBody(w http.ResponseWriter, r *http.Request, dst any) error {
 	defer r.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return err
 	}
@@ -118,14 +122,13 @@ func decodeOptionalJSONBody(r *http.Request, dst any) error {
 
 func (s *Server) handlePublicHealth(w http.ResponseWriter, r *http.Request) {
 	st := s.epochs.Status()
+	ok := st.State != epoch.StateLocked
 	code := http.StatusOK
-	if st.State == epoch.StateLocked {
+	if !ok {
 		code = http.StatusServiceUnavailable
 	}
 	writeJSON(w, code, map[string]any{
-		"ok":    st.State != epoch.StateLocked,
-		"state": st.State,
-		"week":  st.CurrentWeek,
+		"ok": ok,
 	})
 }
 
@@ -164,7 +167,7 @@ func (s *Server) handleVaultLockdown(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Reason string `json:"reason"`
 	}
-	if err := decodeOptionalJSONBody(r, &req); err != nil {
+	if err := decodeOptionalJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -201,7 +204,7 @@ func (s *Server) handleVolumesProvision(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req volumes.ProvisionRequest
-	if err := decodeJSONBody(r, &req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -223,14 +226,14 @@ func (s *Server) handleVolumesUnlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req volumes.UnlockRequest
-	if err := decodeJSONBody(r, &req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 	res, err := s.volumes.Unlock(r.Context(), req)
 	if err != nil {
 		code := http.StatusBadRequest
-		if errors.Is(err, epoch.ErrVaultLocked) || errors.Is(err, epoch.ErrServiceLocked) {
+		if errors.Is(err, epoch.ErrVaultLocked) || errors.Is(err, epoch.ErrServiceLocked) || errors.Is(err, epoch.ErrServiceNotOptedIn) {
 			code = http.StatusLocked
 		}
 		writeJSON(w, code, map[string]any{"ok": false, "error": err.Error()})
@@ -248,7 +251,7 @@ func (s *Server) handleVolumesLock(w http.ResponseWriter, r *http.Request) {
 		VolumeName string `json:"volume_name"`
 		ServiceID  string `json:"service_id"`
 	}
-	if err := decodeJSONBody(r, &req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -268,7 +271,7 @@ func (s *Server) handleVolumesCleanup(w http.ResponseWriter, r *http.Request) {
 		VolumeName string `json:"volume_name"`
 		ServiceID  string `json:"service_id"`
 	}
-	if err := decodeJSONBody(r, &req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -279,27 +282,30 @@ func (s *Server) handleVolumesCleanup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+type serviceRegisterReq struct {
+	ServiceID        string    `json:"service_id"`
+	ProjectID        string    `json:"project_id"`
+	OptedIn          bool      `json:"opted_in"`
+	DBRoles          *[]string `json:"db_roles"`
+	DBNames          *[]string `json:"db_names"`
+	RedisUsers       *[]string `json:"redis_users"`
+	RedisPrefixes    *[]string `json:"redis_prefixes"`
+	UpstreamPG       *string   `json:"upstream_pg"`
+	UpstreamRedis    *string   `json:"upstream_redis"`
+	UpstreamTLS      *bool     `json:"upstream_tls"`
+	EncryptRedisVals *bool     `json:"encrypt_redis_vals,omitempty"`
+	UnlockNow        bool      `json:"unlock_now"`
+	TTLSeconds       int       `json:"ttl_seconds"`
+	Persistent       bool      `json:"persistent"`
+}
+
 func (s *Server) handleServiceRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "POST required"})
 		return
 	}
-	var req struct {
-		ServiceID        string   `json:"service_id"`
-		ProjectID        string   `json:"project_id"`
-		OptedIn          bool     `json:"opted_in"`
-		DBRoles          []string `json:"db_roles"`
-		DBNames          []string `json:"db_names"`
-		RedisUsers       []string `json:"redis_users"`
-		RedisPrefixes    []string `json:"redis_prefixes"`
-		UpstreamPG       string   `json:"upstream_pg"`
-		UpstreamRedis    string   `json:"upstream_redis"`
-		EncryptRedisVals *bool    `json:"encrypt_redis_vals,omitempty"`
-		UnlockNow        bool     `json:"unlock_now"`
-		TTLSeconds       int      `json:"ttl_seconds"`
-		Persistent       bool     `json:"persistent"`
-	}
-	if err := decodeJSONBody(r, &req); err != nil {
+	var req serviceRegisterReq
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -311,31 +317,46 @@ func (s *Server) handleServiceRegister(w http.ResponseWriter, r *http.Request) {
 		ServiceID:        req.ServiceID,
 		ProjectID:        req.ProjectID,
 		OptedIn:          req.OptedIn,
+		EncryptRedisVals: encRedis,
+	}
+	patch := &epoch.ServiceRoutePatch{
 		DBRoles:          req.DBRoles,
 		DBNames:          req.DBNames,
 		RedisUsers:       req.RedisUsers,
 		RedisPrefixes:    req.RedisPrefixes,
 		UpstreamPG:       req.UpstreamPG,
 		UpstreamRedis:    req.UpstreamRedis,
-		EncryptRedisVals: encRedis,
+		UpstreamRedisTLS: req.UpstreamTLS,
+		EncryptRedisVals: req.EncryptRedisVals,
 	}
-	if err := s.epochs.RegisterService(rec, req.OptedIn); err != nil {
+	if err := s.epochs.RegisterServiceWithPatch(rec, req.OptedIn, patch); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 	if s.router != nil {
-		s.router.Register(dbproxy.ServiceTarget{
-			ServiceID:        rec.ServiceID,
-			ProjectID:        rec.ProjectID,
-			DBRoles:          req.DBRoles,
-			DBNames:          req.DBNames,
-			RedisUsers:       req.RedisUsers,
-			RedisPrefixes:    req.RedisPrefixes,
-			UpstreamPG:       req.UpstreamPG,
-			UpstreamRedis:    req.UpstreamRedis,
-			OptedIn:          req.OptedIn,
-			EncryptRedisVals: encRedis,
-		})
+		hasRoutes := len(rec.DBRoles) > 0 ||
+			len(rec.DBNames) > 0 ||
+			len(rec.RedisUsers) > 0 ||
+			len(rec.RedisPrefixes) > 0 ||
+			strings.TrimSpace(rec.UpstreamPG) != "" ||
+			strings.TrimSpace(rec.UpstreamRedis) != ""
+		if hasRoutes {
+			s.router.Register(dbproxy.ServiceTarget{
+				ServiceID:        rec.ServiceID,
+				ProjectID:        rec.ProjectID,
+				DBRoles:          rec.DBRoles,
+				DBNames:          rec.DBNames,
+				RedisUsers:       rec.RedisUsers,
+				RedisPrefixes:    rec.RedisPrefixes,
+				UpstreamPG:       rec.UpstreamPG,
+				UpstreamRedis:    rec.UpstreamRedis,
+				UpstreamTLS:      rec.UpstreamRedisTLS,
+				OptedIn:          rec.OptedIn,
+				EncryptRedisVals: rec.EncryptRedisVals,
+			})
+		} else {
+			s.router.Unregister(rec.ServiceID)
+		}
 	}
 	if req.OptedIn && req.UnlockNow {
 		ttl := time.Duration(req.TTLSeconds) * time.Second
@@ -390,7 +411,7 @@ func (s *Server) handleServiceSubroute(w http.ResponseWriter, r *http.Request) {
 			TTLSeconds int    `json:"ttl_seconds"`
 			Persistent bool   `json:"persistent"`
 		}
-		if err := decodeOptionalJSONBody(r, &req); err != nil {
+		if err := decodeOptionalJSONBody(w, r, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
@@ -408,7 +429,7 @@ func (s *Server) handleServiceSubroute(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Reason string `json:"reason"`
 		}
-		if err := decodeOptionalJSONBody(r, &req); err != nil {
+		if err := decodeOptionalJSONBody(w, r, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
@@ -435,7 +456,7 @@ func (s *Server) handleTransitEncrypt(w http.ResponseWriter, r *http.Request) {
 		PlaintextB64 string `json:"plaintext_b64"`
 		AllowOptOut  bool   `json:"allow_opt_out"`
 	}
-	if err := decodeJSONBody(r, &req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -453,16 +474,28 @@ func (s *Server) handleTransitEncrypt(w http.ResponseWriter, r *http.Request) {
 		req.Mode = "persistent"
 	}
 	optedIn, allowed, err := s.epochs.GetServicePolicy(req.ServiceID)
-	if !optedIn && err == nil && req.AllowOptOut {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":            true,
-			"skipped":       true,
-			"plaintext_b64": req.PlaintextB64,
-		})
+	if !optedIn {
+		if err == nil && req.AllowOptOut {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok":            true,
+				"skipped":       true,
+				"plaintext_b64": req.PlaintextB64,
+			})
+			return
+		}
+		errMsg := epoch.ErrServiceNotOptedIn.Error()
+		if err != nil {
+			errMsg = err.Error()
+		}
+		writeJSON(w, http.StatusLocked, map[string]any{"ok": false, "error": errMsg})
 		return
 	}
 	if !allowed {
-		writeJSON(w, http.StatusLocked, map[string]any{"ok": false, "error": err.Error()})
+		errMsg := epoch.ErrServiceLocked.Error()
+		if err != nil {
+			errMsg = err.Error()
+		}
+		writeJSON(w, http.StatusLocked, map[string]any{"ok": false, "error": errMsg})
 		return
 	}
 	pt, err := base64.StdEncoding.DecodeString(req.PlaintextB64)
@@ -475,7 +508,7 @@ func (s *Server) handleTransitEncrypt(w http.ResponseWriter, r *http.Request) {
 	token, err := s.epochs.EncryptTransit(req.ServiceID, req.ProjectID, req.Context, req.Mode, pt)
 	if err != nil {
 		code := http.StatusBadRequest
-		if errors.Is(err, epoch.ErrVaultLocked) || errors.Is(err, epoch.ErrServiceLocked) {
+		if errors.Is(err, epoch.ErrVaultLocked) || errors.Is(err, epoch.ErrServiceLocked) || errors.Is(err, epoch.ErrServiceNotOptedIn) {
 			code = http.StatusLocked
 		}
 		writeJSON(w, code, map[string]any{"ok": false, "error": err.Error()})
@@ -495,7 +528,7 @@ func (s *Server) handleTransitDecrypt(w http.ResponseWriter, r *http.Request) {
 		Context   string `json:"context"`
 		Token     string `json:"token"`
 	}
-	if err := decodeJSONBody(r, &req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -512,7 +545,7 @@ func (s *Server) handleTransitDecrypt(w http.ResponseWriter, r *http.Request) {
 	pt, err := s.epochs.DecryptTransit(req.ServiceID, req.ProjectID, req.Context, req.Token)
 	if err != nil {
 		code := http.StatusBadRequest
-		if errors.Is(err, epoch.ErrVaultLocked) || errors.Is(err, epoch.ErrServiceLocked) {
+		if errors.Is(err, epoch.ErrVaultLocked) || errors.Is(err, epoch.ErrServiceLocked) || errors.Is(err, epoch.ErrServiceNotOptedIn) {
 			code = http.StatusLocked
 		}
 		writeJSON(w, code, map[string]any{"ok": false, "error": err.Error()})
@@ -535,7 +568,7 @@ func (s *Server) handleBackupWrapKey(w http.ResponseWriter, r *http.Request) {
 		ProjectID string `json:"project_id"`
 		DEKB64    string `json:"dek_b64"`
 	}
-	if err := decodeJSONBody(r, &req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -574,7 +607,7 @@ func (s *Server) handleBackupUnwrapKey(w http.ResponseWriter, r *http.Request) {
 		ProjectID    string `json:"project_id"`
 		WrappedToken string `json:"wrapped_token"`
 	}
-	if err := decodeJSONBody(r, &req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}

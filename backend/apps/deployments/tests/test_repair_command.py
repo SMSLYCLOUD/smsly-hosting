@@ -22,7 +22,7 @@ class TestRepairCommand(unittest.TestCase):
     @patch('apps.deployments.management.commands.repair_ecosystem_deploy.Service')
     @patch('apps.deployments.management.commands.repair_ecosystem_deploy.Deployment')
     @patch('apps.deployments.management.commands.repair_ecosystem_deploy.select_eligible_node')
-    @patch('apps.deployments.management.commands.repair_ecosystem_deploy.bulk_persist_and_verify_ecosystem_env')
+    @patch('apps.deployments.services.ecosystem.sync_ecosystem_envs')
     def test_dry_run(self, mock_env, mock_node, mock_deployment, mock_service):
         cmd = Command()
         cmd.stdout = MagicMock()

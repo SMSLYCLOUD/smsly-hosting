@@ -62,7 +62,12 @@ class CloudIntelligenceAliasTests(TestCase):
         self.assertEqual(response.data.get("provider"), "Mock AI (degraded)")
 
     @patch("apps.intelligence.providers.get_available_providers", side_effect=RuntimeError("provider status failed"))
-    def test_providers_endpoint_fails_open(self, _mock_providers):
+    def test_providers_endpoint_requires_admin_and_fails_open(self, _mock_providers):
+        denied = self.client.get("/api/v1/cloud/intelligence/providers/")
+        self.assertEqual(denied.status_code, 403)
+
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_staff"])
         response = self.client.get("/api/v1/cloud/intelligence/providers/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, [])

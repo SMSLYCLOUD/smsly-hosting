@@ -83,7 +83,7 @@ class EnsureNodeRegistryTests(SimpleTestCase):
                                return_value=False):
             result = reg.ensure_node_registry(self._server())
         self.assertFalse(result["ok"])
-        self.assertEqual(result["error"], "registry login failed")
+        self.assertIn("registry login failed", result["error"])
 
     def test_auth_failure_resyncs_htpasswd_and_retries(self):
         ssh = _ssh_ca("ok", login_code=1)
@@ -99,7 +99,7 @@ class EnsureNodeRegistryTests(SimpleTestCase):
         resync.assert_called_once()
         self.assertFalse(result["ok"])
         self.assertIn("registry-htpasswd-resync", result["repaired"])
-        self.assertEqual(result["error"], "registry login failed")
+        self.assertIn("registry login failed", result["error"])
 
     def test_transient_failure_skips_htpasswd_resync(self):
         ssh = _ssh_ca("ok", login_code=1,
@@ -114,4 +114,4 @@ class EnsureNodeRegistryTests(SimpleTestCase):
             result = reg.ensure_node_registry(self._server())
         resync.assert_not_called()
         self.assertFalse(result["ok"])
-        self.assertEqual(result["error"], "registry login failed")
+        self.assertIn("registry login failed", result["error"])

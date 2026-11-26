@@ -1,8 +1,10 @@
 # =============================================================================
 # SPIRE mTLS Infrastructure for smsly-hosting PaaS
 # =============================================================================
-# Run: docker compose -f docker-compose.spire.yml up -d
+# Run: docker compose -p smsly-spire -f docker-compose.spire.yml up -d
 # =============================================================================
+
+name: smsly-spire
 
 services:
   spire-server:
@@ -149,7 +151,7 @@ services:
           memory: ${SPIRE_AGENT_MEMORY_LIMIT:-128M}
 
   spire-init:
-    image: alpine:3.20
+    image: docker:27-cli
     container_name: ${SPIRE_INIT_CONTAINER:-smsly-spire-init}
     volumes:
       - spire-server-data:/opt/spire/data
@@ -163,7 +165,10 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        apk add --no-cache docker-cli > /dev/null 2>&1 || true
+        if ! command -v docker >/dev/null 2>&1; then
+          echo "ERROR: docker CLI not available in spire-init image" >&2
+          exit 1
+        fi
         TD="$${SPIFFE_TRUST_DOMAIN}"
         ETD="$${ECOSYSTEM_TRUST_DOMAIN}"
 
@@ -171,12 +176,14 @@ services:
         until docker exec smsly-spire-server /opt/spire/bin/spire-server healthcheck -socketPath /tmp/spire-server/private/api.sock 2>/dev/null; do
           sleep 2
         done
+        echo "=== Generating Platform Join Token ==="
+        PLATFORM_TOKEN=$$(docker exec smsly-spire-server /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>&1 | grep 'Token:' | awk '{print $$2}')
         echo "Platform server ready. Loading registration entries..."
         for SVC in gateway identity backend platform audit policy rate-limit chain email; do
           docker exec smsly-spire-server /opt/spire/bin/spire-server entry create \
             -socketPath /tmp/spire-server/private/api.sock \
             -spiffeID "spiffe://$${TD}/service/$${SVC}" \
-            -parentID "spiffe://$${TD}/spire-server" \
+            -parentID "spiffe://$${TD}/spire/agent/join_token/$${PLATFORM_TOKEN}" \
             -selector "docker:label:com.paas.service:$${SVC}" \
             -ttl 3600 \
             -dns "$${SVC}" \
@@ -190,11 +197,18 @@ services:
         done
         echo "Ecosystem server ready. No static entries (populated by Celery sync task)."
 
-        echo "=== Generating Join Tokens ==="
-        PLATFORM_TOKEN=$$(docker exec smsly-spire-server /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>&1 | grep 'Token:' | awk '{print $$2}')
+        echo "=== Exporting Platform Trust Bundle ==="
+        docker exec smsly-spire-server /opt/spire/bin/spire-server bundle show -socketPath /tmp/spire-server/private/api.sock -format pem > /tmp/platform-bundle.crt
+        docker run --rm -i -v smsly-hosting_spire-agent-data:/opt/spire/data alpine:3.19 sh -c 'mkdir -p /opt/spire/data && chmod 0700 /opt/spire/data && cat > /opt/spire/data/bundle.crt && chmod 0644 /opt/spire/data/bundle.crt' < /tmp/platform-bundle.crt
+        rm -f /tmp/platform-bundle.crt
+
+        echo "=== Generating Ecosystem Join Token ==="
         ECOSYSTEM_TOKEN=$$(docker exec smsly-spire-server-ecosystem /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>&1 | grep 'Token:' | awk '{print $$2}')
-        echo "Platform token: $${PLATFORM_TOKEN}"
-        echo "Ecosystem token: $${ECOSYSTEM_TOKEN}"
+        echo "=== Exporting Ecosystem Trust Bundle ==="
+        docker exec smsly-spire-server-ecosystem /opt/spire/bin/spire-server bundle show -socketPath /tmp/spire-server/private/api.sock -format pem > /tmp/ecosystem-bundle.crt
+        docker run --rm -i -v smsly-hosting_spire-ecosystem-agent-data:/opt/spire/data alpine:3.19 sh -c 'mkdir -p /opt/spire/data && chmod 0700 /opt/spire/data && cat > /opt/spire/data/bundle.crt && chmod 0644 /opt/spire/data/bundle.crt' < /tmp/ecosystem-bundle.crt
+        rm -f /tmp/ecosystem-bundle.crt
+        echo "Platform and ecosystem join tokens generated (not logged for security)."
 
         echo "=== Starting Platform Agent ==="
         docker rm -f smsly-spire-agent 2>/dev/null || true
@@ -257,8 +271,6 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    cap_add:
-      - SYS_PTRACE
     deploy:
       resources:
         limits:
@@ -268,16 +280,24 @@ services:
 
 volumes:
   spire-server-data:
+    name: smsly-hosting_spire-server-data
   spire-agent-data:
-  spire-agent-socket:
-  spire-agent-svids:
-  spire-ecosystem-server-data:
-  spire-ecosystem-agent-data:
+    name: smsly-hosting_spire-agent-data
   # Pinned to the live smsly-hosting_* volumes (created by install.sh's
   # docker run, which is how the agent actually runs). Bare names would
   # resolve to per-project decoys (smsly-spire_* under -p smsly-spire),
   # silently detaching the agent socket/svids from every workload
   # (2026-09: identity mounted an empty socket decoy, no SVIDs issued).
+  spire-agent-socket:
+    external: true
+    name: smsly-hosting_spire-agent-socket
+  spire-agent-svids:
+    external: true
+    name: smsly-hosting_spire-agent-svids
+  spire-ecosystem-server-data:
+    name: smsly-hosting_spire-ecosystem-server-data
+  spire-ecosystem-agent-data:
+    name: smsly-hosting_spire-ecosystem-agent-data
   spire-ecosystem-agent-socket:
     external: true
     name: smsly-hosting_spire-ecosystem-agent-socket

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Github, Chrome, Mail, ArrowLeft, Loader2, GitBranch, Code2 } from "lucide-react";
-import { resetRedirectGuard } from "@/lib/paths";
+import { getSafeRedirectUrl, resetRedirectGuard } from "@/lib/paths";
 import { GridCard } from "@/components/ui/GridCard";
 
 export default function LoginPage() {
@@ -20,6 +20,7 @@ export default function LoginPage() {
   // OAuth logins redirect here with ?2fa=1 (the pending handshake already
   // lives in the session).
   const [needs2fa, setNeeds2fa] = useState(false);
+  const [registeredNotice, setRegisteredNotice] = useState(false);
   const [totpCode, setTotpCode] = useState("");
   const [verifying2fa, setVerifying2fa] = useState(false);
   // Enrollment (SMSLY_ENFORCE_ADMIN_2FA): when the server withholds the
@@ -60,11 +61,23 @@ export default function LoginPage() {
       setShowEmailForm(true);
       setNeeds2fa(true);
     }
+    if (params.get("registered") === "1") {
+      setRegisteredNotice(true);
+    }
   }, []);
 
   const finishLogin = () => {
     resetRedirectGuard();
-    window.location.assign("/dashboard");
+    const rawNext =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("next")
+        : null;
+    const safeNext = getSafeRedirectUrl(rawNext);
+    const target =
+      safeNext && safeNext.startsWith("/") && !safeNext.startsWith("//")
+        ? safeNext
+        : "/dashboard";
+    window.location.assign(target);
   };
 
   const handleEmailLogin = async (e: React.FormEvent) => {
@@ -224,6 +237,11 @@ export default function LoginPage() {
         </div>
 
         <div className="px-6 pb-6">
+          {registeredNotice && (
+            <div role="status" className="mb-4 text-sm text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/25 p-3 rounded">
+              Account created. Check your inbox to verify your email address, then sign in.
+            </div>
+          )}
           {!showEmailForm ? (
             <div className="rounded overflow-hidden border border-border">
               {showProvider("github") && (

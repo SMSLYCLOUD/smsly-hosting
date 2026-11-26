@@ -32,11 +32,15 @@ static_resources:
           "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
           stat_prefix: inbound
           codec_type: AUTO
+          forward_client_cert_details: SANITIZE_SET
+          set_current_client_cert_details:
+            uri: true
           route_config:
             name: inbound_route
             virtual_hosts:
             - name: inbound_service
               domains: ["*"]
+              request_headers_to_remove: ["x-spiffe-id", "x-forwarded-spiffe-id", "x-target-service"]
               routes:
               - match:
                   prefix: "/"
@@ -51,6 +55,7 @@ static_resources:
           - name: envoy.filters.http.cors
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.http.cors.v3.Cors
+          # BEGIN_RBAC_FILTER
           # RBAC authorization filter
           - name: envoy.filters.http.rbac
             typed_config:
@@ -72,20 +77,7 @@ static_resources:
                           safe_regex:
                             google_re2: {}
                             regex: ".*"
-          # JWT authentication (validates SPIFFE SVIDs)
-          - name: envoy.filters.http.jwt_authn
-            typed_config:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
-              providers:
-                spiffe:
-                  remote:
-                    cluster_name: spire_agent
-                    http_uri:
-                      uri: "unix//{{SPIRE_AGENT_SOCKET}}"
-                      cluster_name: spire_agent
-                      timeout: 5s
-                  forward: true
-                  payload_in_metadata: spiffe_identity
+          # END_RBAC_FILTER
           # Router
           - name: envoy.filters.http.router
             typed_config:
@@ -100,16 +92,20 @@ static_resources:
            tls_certificate_sds_secret_configs:
            - name: default
              sds_config:
+               resource_api_version: V3
                api_config_source:
                  api_type: GRPC
+                 transport_api_version: V3
                  grpc_services:
                  - envoy_grpc:
                      cluster_name: spire_agent
            validation_context_sds_secret_config:
              name: ROOTCA
              sds_config:
+               resource_api_version: V3
                api_config_source:
                  api_type: GRPC
+                 transport_api_version: V3
                  grpc_services:
                  - envoy_grpc:
                      cluster_name: spire_agent
@@ -136,29 +132,21 @@ static_resources:
               - match:
                   prefix: "/"
                 route:
-                  cluster: upstream_services
+                  cluster: dynamic_outbound_cluster
                   timeout: 30s
                   retry_policy:
                     retry_on: "5xx"
                     num_retries: 2
           http_filters:
+          - name: envoy.filters.http.dynamic_forward_proxy
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
+              dns_cache_config:
+                name: dynamic_forward_proxy_cache_config
+                dns_lookup_family: V4_ONLY
           - name: envoy.filters.http.router
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
-
-    transport_socket:
-      name: envoy.transport_sockets.tls
-      typed_config:
-        "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-        common_tls_context:
-           tls_certificate_sds_secret_configs:
-           - name: default
-             sds_config:
-               api_config_source:
-                 api_type: GRPC
-                 grpc_services:
-                 - envoy_grpc:
-                     cluster_name: spire_agent
 
   clusters:
   # ── Local application cluster ──
@@ -189,21 +177,19 @@ static_resources:
                pipe:
                  path: "{{SPIRE_AGENT_SOCKET}}"
 
-  # ── Upstream services cluster (for outbound mTLS) ──
-  # Uses DNS resolution via Docker network for service discovery
-  - name: upstream_services
+  # ── Dynamic outbound cluster (for outbound mTLS) ──
+  # Resolves destination Host header dynamically via Docker DNS instead of
+  # routing back to {{SERVICE_NAME}}:80.
+  - name: dynamic_outbound_cluster
     connect_timeout: 2s
-    type: STRICT_DNS
-    lb_policy: ROUND_ROBIN
-    load_assignment:
-      cluster_name: upstream_services
-      endpoints:
-      - lb_endpoints:
-        - endpoint:
-            address:
-              socket_address:
-                address: "{{SERVICE_NAME}}"
-                port_value: 80
+    lb_policy: CLUSTER_PROVIDED
+    cluster_type:
+      name: envoy.clusters.dynamic_forward_proxy
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+        dns_cache_config:
+          name: dynamic_forward_proxy_cache_config
+          dns_lookup_family: V4_ONLY
     transport_socket:
       name: envoy.transport_sockets.tls
       typed_config:
@@ -212,22 +198,29 @@ static_resources:
            tls_certificate_sds_secret_configs:
            - name: default
              sds_config:
+               resource_api_version: V3
                api_config_source:
                  api_type: GRPC
+                 transport_api_version: V3
                  grpc_services:
                  - envoy_grpc:
                      cluster_name: spire_agent
-           validation_context_sds_secret_config:
-             name: ROOTCA
-             sds_config:
-               api_config_source:
-                 api_type: GRPC
-                 grpc_services:
-                 - envoy_grpc:
-                     cluster_name: spire_agent
-
-  listeners:
-  # ... (listeners defined above)
+           combined_validation_context:
+             default_validation_context:
+               match_typed_subject_alt_names:
+               - san_type: URI
+                 matcher:
+                   prefix: "spiffe://{{TRUST_DOMAIN}}/service/"
+             validation_context_sds_secret_config:
+               name: ROOTCA
+               sds_config:
+                 resource_api_version: V3
+                 api_config_source:
+                   api_type: GRPC
+                   transport_api_version: V3
+                   grpc_services:
+                   - envoy_grpc:
+                       cluster_name: spire_agent
 
 admin:
   address:

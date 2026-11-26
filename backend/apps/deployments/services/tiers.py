@@ -35,6 +35,56 @@ def napd_available() -> bool:
     return bool(_napd_secret())
 
 
+def _read_host_tier_env(env_path: str = "/opt/smsly-hosting/.env") -> tuple[str, set[str]]:
+    """Return (STACK_TIER, set_of_COMPOSE_PROFILES) from env or .env file."""
+    stack_tier = str(os.environ.get("STACK_TIER", "") or "").strip().lower()
+    raw_profiles = str(os.environ.get("COMPOSE_PROFILES", "") or "").strip()
+    if (not stack_tier or not raw_profiles) and env_path and os.path.isfile(env_path):
+        try:
+            with open(env_path, encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("#") or "=" not in stripped:
+                        continue
+                    key, _, val = stripped.partition("=")
+                    key = key.strip()
+                    val = val.strip().strip('"').strip("'")
+                    if key == "STACK_TIER" and not stack_tier:
+                        stack_tier = val.lower()
+                    elif key == "COMPOSE_PROFILES" and not raw_profiles:
+                        raw_profiles = val
+        except OSError:
+            pass
+    profiles = {
+        p.strip().lower()
+        for p in re.split(r"[,\s]+", raw_profiles)
+        if p.strip()
+    }
+    return stack_tier, profiles
+
+
+def tier_allowed_on_host(tier: str, env_path: str = "/opt/smsly-hosting/.env") -> bool:
+    """True when host STACK_TIER / COMPOSE_PROFILES permit waking *tier*.
+
+    Prevents cooperative wake (e.g. buildcache before Nixpacks builds) from
+    starting ~1 GB of optional cache daemons on lite/medium RAM-tiered hosts
+    that deliberately excluded build-cache/full profiles.
+    """
+    name = str(tier or "").strip().lower()
+    if not _TIER_RE.match(name):
+        return False
+    stack_tier, profiles = _read_host_tier_env(env_path)
+    if name == "buildcache":
+        if stack_tier in ("lite", "medium") and "build-cache" not in profiles and "full" not in profiles:
+            return False
+        return True
+    if name in ("ui", "metrics"):
+        if stack_tier == "lite" and "medium" not in profiles and "full" not in profiles:
+            return False
+        return True
+    return True
+
+
 def _napd_get(path: str, params: dict | None = None, timeout: int = 15):
     """GET napd with auth. Returns parsed JSON, or None. Never raises."""
     secret = _napd_secret()

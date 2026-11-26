@@ -69,14 +69,20 @@ cd "$INSTALL_DIR"
 # ──────────────────────────────────────────────────────────────────────
 log "Recovering secrets from .env..."
 
-FIELD_ENCRYPTION_KEY=$(grep -m1 '^FIELD_ENCRYPTION_KEY=' .env  | cut -d= -f2- || echo "")
-GATEWAY_SECRET=$(grep -m1 '^GATEWAY_SECRET=' .env  | cut -d= -f2- || echo "")
-SECRET_KEY=$(grep -m1 '^SECRET_KEY=' .env  | cut -d= -f2- || echo "")
-DOMAIN=$(grep -m1 '^DOMAIN=' .env  | cut -d= -f2- || echo "")
+FIELD_ENCRYPTION_KEY=$(grep -m1 '^FIELD_ENCRYPTION_KEY=' .env | cut -d= -f2- | tr -d '\r"' || echo "")
+GATEWAY_SECRET=$(grep -m1 '^GATEWAY_SECRET=' .env | cut -d= -f2- | tr -d '\r"' || echo "")
+SECRET_KEY=$(grep -m1 '^SECRET_KEY=' .env | cut -d= -f2- | tr -d '\r"' || echo "")
+DOMAIN=$(grep -m1 '^DOMAIN=' .env | cut -d= -f2- | tr -d '\r"' || echo "")
+BACKUP_ENCRYPTION_KEY=$(grep -m1 '^BACKUP_ENCRYPTION_KEY=' .env | cut -d= -f2- | tr -d '\r"' || echo "")
+COMPOSE_PROFILES=$(grep -m1 '^COMPOSE_PROFILES=' .env | cut -d= -f2- | tr -d '\r"' || echo "")
+[ -n "$COMPOSE_PROFILES" ] || COMPOSE_PROFILES="local-ha,medium,full"
+export COMPOSE_PROFILES
+export PGCONNECT_TIMEOUT=5
 
 # Fallback: master passes these as MASTER_* vars to agents
-[ -z "$FIELD_ENCRYPTION_KEY" ] && FIELD_ENCRYPTION_KEY=$(grep -m1 '^MASTER_FIELD_ENCRYPTION_KEY=' .env  | cut -d= -f2- || echo "")
-[ -z "$GATEWAY_SECRET" ] && GATEWAY_SECRET=$(grep -m1 '^MASTER_GATEWAY_SECRET=' .env  | cut -d= -f2- || echo "")
+[ -z "$FIELD_ENCRYPTION_KEY" ] && FIELD_ENCRYPTION_KEY=$(grep -m1 '^MASTER_FIELD_ENCRYPTION_KEY=' .env | cut -d= -f2- | tr -d '\r"' || echo "")
+[ -z "$GATEWAY_SECRET" ] && GATEWAY_SECRET=$(grep -m1 '^MASTER_GATEWAY_SECRET=' .env | cut -d= -f2- | tr -d '\r"' || echo "")
+[ -z "$BACKUP_ENCRYPTION_KEY" ] && BACKUP_ENCRYPTION_KEY=$(grep -m1 '^MASTER_BACKUP_ENCRYPTION_KEY=' .env | cut -d= -f2- | tr -d '\r"' || echo "")
 
 [ -z "$FIELD_ENCRYPTION_KEY" ] && fail "FIELD_ENCRYPTION_KEY not found in .env"
 [ -z "$SECRET_KEY" ] && fail "SECRET_KEY not found in .env"
@@ -86,16 +92,19 @@ if [ -z "$GATEWAY_SECRET" ]; then
     GATEWAY_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 fi
 
-DB_USER=$(grep -m1 '^MASTER_DB_USER=' .env  | cut -d= -f2- || echo "smsly_admin")
-DB_PASSWORD=$(grep -m1 '^MASTER_DB_PASSWORD=' .env  | cut -d= -f2- || echo "")
-DB_NAME=$(grep -m1 '^POSTGRES_DB=' .env  || grep -m1 '^POSTGRES_DB=' "$INSTALL_DIR/.env"  || echo "smsly_hosting")
+DB_USER=$(grep -m1 '^MASTER_DB_USER=' .env | cut -d= -f2- | tr -d '\r"' || echo "")
+[ -n "$DB_USER" ] || DB_USER="smsly_admin"
+DB_PASSWORD=$(grep -m1 '^MASTER_DB_PASSWORD=' .env | cut -d= -f2- | tr -d '\r"' || echo "")
+[ -n "$DB_PASSWORD" ] || DB_PASSWORD=$(grep -m1 '^POSTGRES_PASSWORD=' .env | cut -d= -f2- | tr -d '\r"' || echo "")
+DB_NAME=$(grep -m1 '^POSTGRES_DB=' .env | cut -d= -f2- | tr -d '\r"' || echo "")
+[ -n "$DB_NAME" ] || DB_NAME="smsly_hosting"
 ok "Secrets recovered"
 
 # ──────────────────────────────────────────────────────────────────────
 # STEP 2: Stop the lite agent stack
 # ──────────────────────────────────────────────────────────────────────
 log "Stopping lite agent stack..."
-docker compose -f "$AGENT_COMPOSE" down --remove-orphans || echo -e "${YELLOW}    ⚠ Agent stack stop failed${NC}"
+timeout 60 docker compose -f "$AGENT_COMPOSE" down --remove-orphans || echo -e "${YELLOW}    ⚠ Agent stack stop failed${NC}"
 ok "Agent stack stopped"
 
 # ──────────────────────────────────────────────────────────────────────
@@ -106,11 +115,11 @@ RESOLVED_DB_URL=""
 resolve_db() {
     local url="$1"
     log "Testing DB connection: $url"
-    local tmpfile
+    local tmpfile=""
     tmpfile=$(mktemp)
     # Write a small test query to a temp file and run via psql
     echo "SELECT 1 AS ok;" > "$tmpfile"
-    if psql "$url" -f "$tmpfile" -t -A  | grep -q "1"; then
+    if timeout 15 psql "$url" -f "$tmpfile" -t -A | grep -q "1"; then
         rm -f "$tmpfile"
         return 0
     fi
@@ -133,18 +142,18 @@ fi
 promote_replica() {
     local url="$1"
     log "Checking if replica is in recovery mode..."
-    local in_recovery
-    in_recovery=$(psql "$url" -t -A -c "SELECT pg_is_in_recovery();"  || echo "unknown")
+    local in_recovery=""
+    in_recovery=$(timeout 15 psql "$url" -t -A -c "SELECT pg_is_in_recovery();" || echo "unknown")
     if [ "$in_recovery" = "t" ]; then
         log "Replica is in recovery — promoting to primary..."
-        local promoted
-        promoted=$(psql "$url" -t -A -c "SELECT pg_promote();"  || echo "f")
+        local promoted=""
+        promoted=$(timeout 15 psql "$url" -t -A -c "SELECT pg_promote();" || echo "f")
         if [ "$promoted" = "t" ]; then
             log "Promotion initiated — waiting for replica to become writable..."
             for i in $(seq 1 30); do
                 sleep 2
-                local check
-                check=$(psql "$url" -t -A -c "SELECT pg_is_in_recovery();"  || echo "t")
+                local check=""
+                check=$(timeout 15 psql "$url" -t -A -c "SELECT pg_is_in_recovery();" || echo "t")
                 if [ "$check" = "f" ]; then
                     ok "Replica promoted to primary successfully"
                     return 0
@@ -172,8 +181,7 @@ if [ -z "$RESOLVED_DB_URL" ] && [ -n "$REPLICA_URL" ]; then
             RESOLVED_DB_URL="$REPLICA_URL"
             ok "Connected to promoted replica as new primary"
         else
-            warn "Replica reachable but promotion failed — using as read-only fallback"
-            RESOLVED_DB_URL="$REPLICA_URL"
+            fail "Replica promotion failed — refusing read-only fallback as new master"
         fi
     else
         warn "Replica not reachable at $REPLICA_URL"
@@ -182,7 +190,7 @@ fi
 
 # Priority 3: DATABASE_URL from agent's .env (original master DB if still reachable)
 if [ -z "$RESOLVED_DB_URL" ]; then
-    AGENT_DB_URL=$(grep -m1 '^DATABASE_URL=' .env  | cut -d= -f2- || echo "")
+    AGENT_DB_URL=$(grep -m1 '^DATABASE_URL=' .env | cut -d= -f2- | tr -d '\r"' || echo "")
     if [ -n "$AGENT_DB_URL" ]; then
         log "Trying master's DATABASE_URL from .env..."
         if resolve_db "$AGENT_DB_URL"; then
@@ -194,17 +202,17 @@ if [ -z "$RESOLVED_DB_URL" ]; then
     fi
 fi
 
-# Priority 3: Local Postgres + restore from agent-stored backup
+# Priority 4: Local Postgres + restore from agent-stored backup
 if [ -z "$RESOLVED_DB_URL" ]; then
-    BACKUP_PATH=$(ls -t "$BACKUP_DIR"/master_db_*.sql.gz  | head -1)
+    BACKUP_PATH=$(ls -t "$BACKUP_DIR"/master_db_*.sql.gz.enc "$BACKUP_DIR"/master_db_*.sql.gz 2>/dev/null | head -1 || true)
     if [ -z "$BACKUP_PATH" ]; then
         fail "No database reachable and no backup found in $BACKUP_DIR"
     fi
 
     log "Starting local PostgreSQL for backup restore..."
-    docker rm -f smsly-db || echo -e "${YELLOW}    ⚠ Failed to remove old smsly-db${NC}"
-    docker volume rm -f postgres_data || echo -e "${YELLOW}    ⚠ Failed to remove postgres_data volume${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d db
+    timeout 30 docker rm -f smsly-postgres-primary || echo -e "${YELLOW}    ⚠ Failed to remove old smsly-postgres-primary${NC}"
+    timeout 30 docker volume rm -f smsly-hosting_postgres-primary-data || echo -e "${YELLOW}    ⚠ Failed to remove smsly-hosting_postgres-primary-data volume${NC}"
+    timeout 120 docker compose -f "$COMPOSE_FILE" up -d db
 
     log "Waiting for PostgreSQL..."
     for i in $(seq 1 30); do
@@ -218,8 +226,15 @@ if [ -z "$RESOLVED_DB_URL" ]; then
 
     BACKUP_SIZE=$(du -h "$BACKUP_PATH" | cut -f1)
     log "Restoring backup: $(basename "$BACKUP_PATH") ($BACKUP_SIZE)..."
-    timeout 600 gunzip -c "$BACKUP_PATH" | docker compose -f "$COMPOSE_FILE" exec -T db psql -U "$DB_USER" -d "$DB_NAME" 2>&1 | tail -3
-    RESOLVED_DB_URL="postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}"
+    if [[ "$BACKUP_PATH" == *.enc ]]; then
+        BACKUP_PASS="${BACKUP_PASS:-$BACKUP_ENCRYPTION_KEY}"
+        [ -n "$BACKUP_PASS" ] || fail "Encrypted backup requires BACKUP_ENCRYPTION_KEY or BACKUP_PASS"
+        export BACKUP_PASS
+        timeout 600 bash -o pipefail -c 'openssl enc -d -aes-256-cbc -pbkdf2 -md sha256 -pass env:BACKUP_PASS -in "$1" | gunzip -c | docker compose -f "$2" exec -T db psql -v ON_ERROR_STOP=1 -U "$3" -d "$4"' _ "$BACKUP_PATH" "$COMPOSE_FILE" "$DB_USER" "$DB_NAME" 2>&1 | tail -5
+    else
+        timeout 600 bash -o pipefail -c 'gunzip -c "$1" | docker compose -f "$2" exec -T db psql -v ON_ERROR_STOP=1 -U "$3" -d "$4"' _ "$BACKUP_PATH" "$COMPOSE_FILE" "$DB_USER" "$DB_NAME" 2>&1 | tail -5
+    fi
+    RESOLVED_DB_URL="postgresql://${DB_USER}:${DB_PASSWORD}@postgres-primary:5432/${DB_NAME}"
     ok "Database restored from agent backup"
 fi
 
@@ -231,9 +246,8 @@ log "Preparing master .env..."
 NEW_MASTER_IP=$(curl -sS --max-time 5 http://ifconfig.me  || hostname -I | awk '{print $1}')
 
 # Extract host from resolved DB URL for the docker compose service name
-# If the DB URL points to 'db' (local container), keep it as-is
-DB_HOST=$(echo "$RESOLVED_DB_URL" | sed -E 's|.*@([^:/]+).*|\1|')
-if [ "$DB_HOST" = "db" ]; then
+DB_HOST=$(python3 -c 'import sys; from urllib.parse import urlsplit; print(urlsplit(sys.argv[1]).hostname or "")' "$RESOLVED_DB_URL" 2>/dev/null || echo "")
+if [ "$DB_HOST" = "db" ] || [ "$DB_HOST" = "postgres-primary" ]; then
     DB_LINK="db"  # local container — compose handles it
 else
     DB_LINK=""     # external DB — don't start compose 'db' service
@@ -241,11 +255,26 @@ fi
 
 env_set() {
     local key="$1" val="$2"
-    if grep -q "^${key}=" .env ; then
-        sed -i "s|^${key}=.*|${key}=${val}|" .env
-    else
-        echo "${key}=${val}" >> .env
-    fi
+    python3 - "$INSTALL_DIR/.env" "$key" "$val" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+key, val = sys.argv[2], sys.argv[3]
+prefix = f"{key}="
+lines = p.read_text().splitlines() if p.exists() else []
+out = []
+found = False
+for line in lines:
+    if line.startswith(prefix):
+        if not found:
+            out.append(f"{key}={val}")
+            found = True
+        continue
+    out.append(line)
+if not found:
+    out.append(f"{key}={val}")
+p.write_text("\n".join(out) + "\n")
+PY
 }
 
 env_set "DOMAIN" "$DOMAIN"
@@ -260,6 +289,9 @@ env_set "SMSLY_DISABLE_TIER_GATES" "true"
 env_set "POSTGRES_USER" "$DB_USER"
 env_set "POSTGRES_PASSWORD" "$DB_PASSWORD"
 env_set "POSTGRES_DB" "$DB_NAME"
+env_set "REDIS_HOST" "redis-primary"
+chown root:1000 "$INSTALL_DIR/.env" 2>/dev/null || true
+chmod 640 "$INSTALL_DIR/.env" 2>/dev/null || true
 ok "Master .env configured"
 
 # ──────────────────────────────────────────────────────────────────────
@@ -267,15 +299,15 @@ ok "Master .env configured"
 # ──────────────────────────────────────────────────────────────────────
 log "Starting master services..."
 
-docker compose -f "$COMPOSE_FILE" up -d registry
+timeout 120 docker compose -f "$COMPOSE_FILE" up -d registry
 ok "Registry started"
 
 if [ -n "$DB_LINK" ]; then
-    docker compose -f "$COMPOSE_FILE" up -d socket-proxy redis rabbitmq traefik caddy backend celery celery-beat celery-fast celery-deploy frontend
+    timeout 300 docker compose -f "$COMPOSE_FILE" up -d db pgcat socket-proxy redis-primary redis-replica rabbitmq traefik caddy backend celery celery-beat celery-fast celery-deploy frontend
 else
     # External DB — start without compose 'db' service
-    docker compose -f "$COMPOSE_FILE" up -d --no-deps socket-proxy redis rabbitmq traefik caddy
-    docker compose -f "$COMPOSE_FILE" up -d --no-deps backend celery celery-beat celery-fast celery-deploy frontend
+    timeout 300 docker compose -f "$COMPOSE_FILE" up -d --no-deps socket-proxy redis-primary redis-replica rabbitmq traefik caddy
+    timeout 300 docker compose -f "$COMPOSE_FILE" up -d --no-deps backend celery celery-beat celery-fast celery-deploy frontend
 fi
 ok "Master stack started"
 
@@ -292,7 +324,7 @@ ok "Migrations complete"
 # ──────────────────────────────────────────────────────────────────────
 log "Verifying new master..."
 sleep 5
-HEALTH=$(curl -sS --max-time 10 http://localhost:8000/health/live  || echo "unreachable")
+HEALTH=$(timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 10 http://127.0.0.1:8000/health/live 2>/dev/null || echo "unreachable")
 if [ "$HEALTH" = "unreachable" ]; then
     warn "Health check failed — check: docker compose logs backend"
 else
@@ -315,18 +347,25 @@ echo "Re-point other agents:"
 echo ""
 echo "  python manage.py repoint_agents \\"
 echo "    --master-ip=$NEW_MASTER_IP \\"
-echo "    --gateway-secret=$GATEWAY_SECRET"
+echo "    --gateway-secret=<GATEWAY_SECRET>"
 echo ""
 
-cat > "$INSTALL_DIR/.promoted-master.json" << EOF
-{
-    "master_ip": "$NEW_MASTER_IP",
-    "gateway_secret": "$GATEWAY_SECRET",
-    "db_url": "$RESOLVED_DB_URL",
-    "db_user": "$DB_USER",
-    "db_name": "$DB_NAME",
-    "promoted_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+python3 - "$INSTALL_DIR/.promoted-master.json" "$NEW_MASTER_IP" "$GATEWAY_SECRET" "$RESOLVED_DB_URL" "$DB_USER" "$DB_NAME" <<'PY'
+from datetime import datetime, timezone
+import json, sys
+
+out_path, master_ip, gw_secret, db_url, db_user, db_name = sys.argv[1:7]
+payload = {
+    "master_ip": master_ip,
+    "gateway_secret": gw_secret,
+    "db_url": db_url,
+    "db_user": db_user,
+    "db_name": db_name,
+    "promoted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
 }
-EOF
+with open(out_path, "w", encoding="utf-8") as fh:
+    json.dump(payload, fh, indent=4)
+    fh.write("\n")
+PY
 chmod 600 "$INSTALL_DIR/.promoted-master.json"
 ok "Metadata saved to .promoted-master.json (permissions: 600)"

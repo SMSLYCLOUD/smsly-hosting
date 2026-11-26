@@ -119,6 +119,10 @@ class CryptdOptInAndAPITests(TestCase):
         super().tearDownClass()
 
     def setUp(self):
+        from django.core.cache import cache
+        from apps.deployments.models.platform import PlatformConfig
+        PlatformConfig.clear_cache()
+        cache.clear()
         _MockCryptdHandler.calls.clear()
         self.user = User.objects.create_user(
             username="cryptuser", email="crypt@test.com", password="pass1234"
@@ -432,6 +436,10 @@ class CryptdRuntimeOverlayAndComposeTests(TestCase):
         super().tearDownClass()
 
     def setUp(self):
+        from django.core.cache import cache
+        from apps.deployments.models.platform import PlatformConfig
+        PlatformConfig.clear_cache()
+        cache.clear()
         _MockCryptdHandler.calls.clear()
         self.user = User.objects.create_user(
             username="cryptrtuser", email="cryptrt@test.com", password="pass1234"
@@ -454,11 +462,17 @@ class CryptdRuntimeOverlayAndComposeTests(TestCase):
         }
         runtime_env = {
             "DATABASE_URL": "postgresql://tenant:pw@smsly-pg:5432/appdb",
+            "POSTGRESQL_URL": "postgresql://tenant:pw@smsly-pg:5432/appdb",
+            "SMSLY_RATE_LIMIT_SERVICE_POSTGRES_URL": "postgresql://tenant:pw@smsly-pg:5432/appdb",
+            "SMSLY_RATE_LIMIT_SERVICE_POSTGRES_HOST": "smsly-pg",
+            "SMSLY_RATE_LIMIT_SERVICE_POSTGRES_PORT": "5432",
             "DB_HOST": "smsly-pg",
             "DB_PORT": "5432",
             "POSTGRES_HOST": "smsly-pg",
             "POSTGRES_PORT": "5432",
             "REDIS_URL": "redis://:rp@smsly-redis:6379/0",
+            "REDIS_URI": "redis://:rp@smsly-redis:6379/0",
+            "RATE_LIMIT_REDIS_URL": "redis://:rp@smsly-redis:6379/0",
             "CELERY_BROKER_URL": "redis://:rp@smsly-redis:6379/0",
             "CELERY_RESULT_BACKEND": "redis://:rp@smsly-redis:6379/1",
             "CACHE_URL": "redis://:rp@smsly-redis:6379/2",
@@ -475,11 +489,17 @@ class CryptdRuntimeOverlayAndComposeTests(TestCase):
             self.assertTrue(apply_cryptd_runtime_env(self.service, runtime_env))
             self.assertEqual(runtime_env["GRID_CRYPTD_SERVICE_ID"], str(self.service.id))
             self.assertEqual(runtime_env["DATABASE_URL"], "postgresql://tenant:pw@host.docker.internal:15432/appdb")
+            self.assertEqual(runtime_env["POSTGRESQL_URL"], "postgresql://tenant:pw@host.docker.internal:15432/appdb")
+            self.assertEqual(runtime_env["SMSLY_RATE_LIMIT_SERVICE_POSTGRES_URL"], "postgresql://tenant:pw@host.docker.internal:15432/appdb")
+            self.assertEqual(runtime_env["SMSLY_RATE_LIMIT_SERVICE_POSTGRES_HOST"], "host.docker.internal")
+            self.assertEqual(runtime_env["SMSLY_RATE_LIMIT_SERVICE_POSTGRES_PORT"], "15432")
             self.assertEqual(runtime_env["DB_HOST"], "host.docker.internal")
             self.assertEqual(runtime_env["DB_PORT"], "15432")
             self.assertEqual(runtime_env["POSTGRES_HOST"], "host.docker.internal")
             self.assertEqual(runtime_env["POSTGRES_PORT"], "15432")
             self.assertEqual(runtime_env["REDIS_URL"], "redis://:rp@host.docker.internal:16379/0")
+            self.assertEqual(runtime_env["REDIS_URI"], "redis://:rp@host.docker.internal:16379/0")
+            self.assertEqual(runtime_env["RATE_LIMIT_REDIS_URL"], "redis://:rp@host.docker.internal:16379/0")
             self.assertEqual(runtime_env["CELERY_BROKER_URL"], "redis://:rp@host.docker.internal:16379/0")
             self.assertEqual(runtime_env["CELERY_RESULT_BACKEND"], "redis://:rp@host.docker.internal:16379/1")
             self.assertEqual(runtime_env["CACHE_URL"], "redis://:rp@host.docker.internal:16379/2")
@@ -941,3 +961,108 @@ class CryptdRuntimeOverlayAndComposeTests(TestCase):
             with patch.dict(os.environ, env, clear=False):
                 resp = api.get(f"/api/v1/backups/{bak.id}/download/?{signed_q}")
             self.assertEqual(resp.status_code, 423)
+
+    def test_register_and_unlock_resolves_project_shared_redis_upstream(self):
+        from apps.core.crypto_daemon import register_and_unlock_service
+        from apps.deployments.models import Addon
+
+        sibling = Service.objects.create(
+            name="shared-redis-owner", owner=self.user, project=self.project
+        )
+        Addon.objects.create(
+            name="redis-shared",
+            addon_type="REDIS",
+            service=sibling,
+            status="ACTIVE",
+            connection_url="redis://:pw@redis-shared:6379/0",
+        )
+        self.service.encryption_at_rest_enabled = True
+        self.service.save(update_fields=["encryption_at_rest_enabled"])
+        Addon.objects.create(
+            name="rate-pg",
+            addon_type="POSTGRES",
+            service=self.service,
+            status="ACTIVE",
+            connection_url="postgresql://rl_user:pw@pgbouncer-tenants:5432/rl_db",
+        )
+
+        env = {
+            "CRYPTD_ENABLED": "true",
+            "SMSLY_CRYPTD_URL": self.daemon_url,
+            "CRYPTD_SHARED_SECRET": "test-cryptd-secret",
+        }
+        with patch.dict(os.environ, env, clear=False), \
+             patch("apps.core.crypto_daemon._resolve_container_upstream", side_effect=lambda h, p: f"172.30.5.9:{p}" if h == "redis-shared" else f"172.18.0.4:{p}"):
+            register_and_unlock_service(self.service, unlock_now=True)
+
+        reg = [c[2] for c in _MockCryptdHandler.calls if c[1] == "/v1/services/register"][-1]
+        self.assertEqual(reg["upstream_pg"], "172.18.0.4:5432")
+        self.assertEqual(reg["upstream_redis"], "172.30.5.9:6379")
+
+    def test_rediss_url_downgraded_for_local_gate_and_sets_upstream_tls(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from apps.core.crypto_daemon import (
+            _resolve_container_upstream,
+            _rewrite_gate_vars_in_env,
+            register_and_unlock_service,
+        )
+        from apps.deployments.models import Addon
+
+        runtime_env = {
+            "REDIS_URL": "rediss://:rpw@redis-tls:6379/0?ssl_cert_reqs=none",
+            "CELERY_BROKER_URL": "rediss://:rpw@redis-tls:6379/1?ssl_cert_reqs=required&socket_timeout=5",
+        }
+        _rewrite_gate_vars_in_env(runtime_env, "", "host.docker.internal:16379")
+        self.assertEqual(runtime_env["REDIS_URL"], "redis://:rpw@host.docker.internal:16379/0")
+        self.assertEqual(
+            runtime_env["CELERY_BROKER_URL"],
+            "redis://:rpw@host.docker.internal:16379/1?socket_timeout=5",
+        )
+
+        # Verify project-network-scoped container resolution prefers project bridge before smsly-net
+        c_shared = SimpleNamespace(
+            name="redis-tls",
+            attrs={
+                "NetworkSettings": {
+                    "Networks": {
+                        "smsly-net": {"IPAddress": "172.18.0.9", "Aliases": ["redis-tls"]},
+                        "smsly-net-proj1": {"IPAddress": "172.25.0.4", "Aliases": ["redis-tls"]},
+                    }
+                }
+            },
+        )
+        mock_docker = MagicMock()
+        mock_docker.containers.list.return_value = [c_shared]
+        with patch("apps.cloud.docker_client.get_docker_client", return_value=mock_docker):
+            self.assertEqual(
+                _resolve_container_upstream("redis-tls", 6379, preferred_network="smsly-net-proj1"),
+                "172.25.0.4:6379",
+            )
+            self.assertEqual(
+                _resolve_container_upstream("redis-tls", 6379),
+                "172.18.0.9:6379",
+            )
+
+        # Verify register_and_unlock_service sends upstream_tls=True for rediss:// addon
+        self.service.encryption_at_rest_enabled = True
+        self.service.save(update_fields=["encryption_at_rest_enabled"])
+        Addon.objects.create(
+            name="tls-redis",
+            addon_type="REDIS",
+            service=self.service,
+            status="ACTIVE",
+            connection_url="rediss://:rpw@redis-tls:6379/0?ssl_cert_reqs=none",
+        )
+        env = {
+            "CRYPTD_ENABLED": "true",
+            "SMSLY_CRYPTD_URL": self.daemon_url,
+            "CRYPTD_SHARED_SECRET": "test-cryptd-secret",
+        }
+        with patch.dict(os.environ, env, clear=False), \
+             patch("apps.cloud.docker_client.get_docker_client", return_value=mock_docker):
+            register_and_unlock_service(self.service, unlock_now=True)
+
+        reg = [c[2] for c in _MockCryptdHandler.calls if c[1] == "/v1/services/register"][-1]
+        self.assertTrue(reg["upstream_tls"])
+        self.assertEqual(reg["upstream_redis"], "172.18.0.9:6379")

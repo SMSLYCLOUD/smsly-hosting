@@ -77,13 +77,16 @@ def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argum
     #    (Celery autodiscover_tasks only finds {app}.tasks modules)
     import apps.deployments.services.heartbeat_bus  # noqa: F401
     import apps.cloud.services.ssl_monitor  # noqa: F401
-    import apps.intelligence.jules_fix.jules_fix  # noqa: F401
+    from django.apps import apps as _django_apps
+    if _django_apps.is_installed('apps.intelligence'):
+        import apps.intelligence.jules_fix.jules_fix  # noqa: F401
     import apps.cloud.views.code_analysis  # noqa: F401
     import apps.autoscaler.services.legacy_autoscaler  # noqa: F401
     import apps.autoscaler.services.tasks_autoscale  # noqa: F401
     import apps.autoscaler.sleeper  # noqa: F401  # sleeper_agent_task
     import apps.deployments.tasks.deploy.promote  # noqa: F401  # auto_promote_staged_deployments
     import apps.deployments.services.redis_failover_recovery  # noqa: F401
+    import apps.addons.tasks.crud  # noqa: F401  # addon provision/delete/migrate tasks (AGENTS.md #3)
     import apps.addons.tasks.ha_watchdog  # noqa: F401  # check_addon_ha_task
     import apps.core.services.log_watchdog  # noqa: F401  # watch_log_errors_task (beat sends it; unregistered workers KeyError it)
     # -- Tasks in subpackages not auto-discovered (not {app}.tasks) --
@@ -141,6 +144,7 @@ app.conf.task_create_missing_queues = True
 app.conf.task_routes = {
     'apps.deployments.tasks.smart_deploy_task': {'queue': 'deploy'},
     'apps.deployments.tasks.resume_deploy_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.refresh_service_sablier_task': {'queue': 'fast'},
     'apps.deployments.tasks_election.heartbeat_task': {'queue': 'fast'},
     'apps.deployments.services.provisioner.cleanup_stale_server_provisioning': {'queue': 'deploy'},
     'apps.deployments.tasks.cleanup_orphaned_containers_task': {'queue': 'deploy'},
@@ -210,22 +214,22 @@ app.conf.task_routes = {
     'apps.deployments.services.provisioner.provision_server': {'queue': 'deploy'},
     # Health monitoring is long-running and must not starve deployment work.
     'apps.core.services.health_monitor.monitor_health_task': {'queue': 'celery'},
-    'apps.autoscaler.services.legacy_autoscaler.check_autoscale_task': {'queue': 'deploy'},
-    'apps.autoscaler.services.tasks_autoscale.analyze_all_services_task': {'queue': 'deploy'},
-    'apps.autoscaler.services.tasks_autoscale.cleanup_stuck_spawning': {'queue': 'deploy'},
-    'apps.autoscaler.services.tasks_autoscale.apply_vpa_limits_task': {'queue': 'deploy'},
-    'apps.autoscaler.services.tasks_autoscale.cleanup_dead_running': {'queue': 'deploy'},
-    # Stats collection does Docker/K8s I/O and mutates platform containers —
-    # keep it off the default 'celery' queue with the other I/O-heavy tasks.
-    'apps.autoscaler.tasks.autoscaler_collect_stats': {'queue': 'deploy'},
-    'apps.autoscaler.tasks.sleeper_agent_task': {'queue': 'deploy'},
+    'apps.autoscaler.services.legacy_autoscaler.check_autoscale_task': {'queue': 'fast'},
+    'apps.autoscaler.services.tasks_autoscale.analyze_all_services_task': {'queue': 'fast'},
+    'apps.autoscaler.services.tasks_autoscale.cleanup_stuck_spawning': {'queue': 'fast'},
+    'apps.autoscaler.services.tasks_autoscale.apply_vpa_limits_task': {'queue': 'fast'},
+    'apps.autoscaler.services.tasks_autoscale.cleanup_dead_running': {'queue': 'fast'},
+    # Stats collection + sleeper run off the heavy 'deploy' queue so multi-minute
+    # image builds never starve autoscaling, metrics, or scale-to-zero sweeps.
+    'apps.autoscaler.tasks.autoscaler_collect_stats': {'queue': 'fast'},
+    'apps.autoscaler.tasks.sleeper_agent_task': {'queue': 'fast'},
     'apps.deployments.tasks.infra.tasks_mesh.check_mesh_health_task': {'queue': 'deploy'},
     'apps.deployments.tasks.infra.tasks_mesh.deploy_mesh_task': {'queue': 'deploy'},
     'apps.deployments.tasks.infra.tasks_mesh_dns.sync_mesh_dns_task': {'queue': 'deploy'},
     'apps.deployments.tasks_replication.deploy_replication_task': {'queue': 'deploy'},
     'apps.deployments.tasks_replication.manual_failover_task': {'queue': 'deploy'},
     'apps.deployments.tasks_cron.trigger_cron_job': {'queue': 'deploy'},
-    'apps.core.tasks.metrics.collect_metrics_task': {'queue': 'deploy'},
+    'apps.core.tasks.metrics.collect_metrics_task': {'queue': 'fast'},
     'apps.core.tasks.metrics.cleanup_build_cache_task': {'queue': 'deploy'},
     'apps.core.tasks.alerts.scan_running_containers_logs_task': {'queue': 'deploy'},
     'apps.notifications.tasks.evaluate_alert_rules_task': {'queue': 'deploy'},
@@ -318,12 +322,6 @@ app.conf.beat_schedule = {
         'task': 'apps.core.services.log_watchdog.watch_log_errors_task',
         'schedule': 300.0,
         'options': {'expires': 300.0},
-    },
-    # Check autoscale thresholds every 30 seconds
-    'check-autoscale-every-30s': {
-        'task': 'apps.autoscaler.services.legacy_autoscaler.check_autoscale_task',
-        'schedule': 30.0,
-        'options': {'expires': 30.0},
     },
     # Collect stats for inline autoscaler dashboard every 60 seconds
     'autoscaler-collect-stats-every-60s': {
@@ -711,8 +709,8 @@ app.conf.beat_schedule = {
     # raced the enqueue in add/remove_peer_from_mesh).
     'mesh-dns-sync-every-5min': {
         'task': 'apps.deployments.tasks.infra.tasks_mesh_dns.sync_mesh_dns_task',
-        'schedule': 300.0,
-        'options': {'expires': 300.0},
+        'schedule': 60.0,
+        'options': {'expires': 60.0},
     },
     # WAF policy converge every 5 minutes: Settings (PlatformConfig
     # .openappsec_mode) is the desired state, the agent's
@@ -796,11 +794,11 @@ app.conf.beat_schedule = {
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
-    # Auto-scaling analysis — Prometheus + Loki → spawn/destroy replicas
+    # Auto-scaling analysis — single authoritative sweep (batched + ACTIVE only)
     'auto-scaling-analyze-every-3m': {
         'task': 'apps.autoscaler.services.tasks_autoscale.analyze_all_services_task',
-        'schedule': 180.0,
-        'options': {'expires': 180.0},
+        'schedule': 60.0,
+        'options': {'expires': 60.0},
     },
     # Run scheduled backups every 1 minute
     'run-scheduled-backups-every-1m': {

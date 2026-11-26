@@ -32,35 +32,35 @@ def service_ha_pass(self):
         manager = ServiceHAManager()
         results = manager.run_ha_pass()
 
-        if results.get("failovers", 0) > 0 or results.get("escalations", 0) > 0:
+        total_failovers = (
+            int(results.get("node_failovers", 0) or 0)
+            + int(results.get("remote_failovers", 0) or 0)
+        )
+        if total_failovers > 0 or int(results.get("escalations", 0) or 0) > 0:
             logger.info(
-                "HA pass: %d checked, %d escalations, %d replica failovers, "
-                "%d node failovers",
+                "HA pass: %d checked, %d escalations, %d remote failovers, "
+                "%d node failovers, %d local reconciles",
                 results.get("checked", 0),
                 results.get("escalations", 0),
-                results.get("replica_failovers", 0),
+                results.get("remote_failovers", 0),
                 results.get("node_failovers", 0),
+                results.get("local_reconciles", 0),
             )
             # Alert on any failovers
             for alert_msg in results.get("alerts", []):
                 try:
                     from apps.core.tasks.alerts import alert_user_task
-                    # Find any superuser to send the alert to
-                    from django.contrib.auth import get_user_model
-                    User = get_user_model()
-                    admin = User.objects.filter(is_superuser=True).first()
-                    if admin:
-                        latest = (
-                            admin.services.order_by("-created_at").first()
-                            if hasattr(admin, "services") else None
+                    from apps.deployments.models import Deployment
+                    latest_dep = (
+                        Deployment.objects.filter(service__isnull=False)
+                        .order_by("-created_at")
+                        .first()
+                    )
+                    if latest_dep:
+                        alert_user_task.delay(
+                            deployment_id=str(latest_dep.id),
+                            error_message=f"HA: {alert_msg}",
                         )
-                        if latest:
-                            alert_user_task.delay(
-                                deployment_id=str(latest.latest_deployment.id)
-                                if hasattr(latest, 'latest_deployment') and latest.latest_deployment
-                                else str(latest.id),
-                                error_message=f"HA: {alert_msg}",
-                            )
                 except Exception as exc:
                     logger.debug("HA alert dispatch failed: %s", exc)
 
@@ -68,7 +68,8 @@ def service_ha_pass(self):
             "status": "ok",
             "checked": results.get("checked", 0),
             "escalations": results.get("escalations", 0),
-            "replica_failovers": results.get("replica_failovers", 0),
+            "local_reconciles": results.get("local_reconciles", 0),
+            "remote_failovers": results.get("remote_failovers", 0),
             "node_failovers": results.get("node_failovers", 0),
         }
 

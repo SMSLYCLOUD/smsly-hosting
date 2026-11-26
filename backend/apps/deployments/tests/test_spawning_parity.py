@@ -151,6 +151,11 @@ class RemoteSpawnParityTests(TestCase):
             "Labels": follower_labels,
         }
         ssh = MagicMock()
+        uploaded_envs = []
+
+        def _upload(local_path, _remote_path):
+            with open(local_path, encoding="utf-8") as fh:
+                uploaded_envs.append(fh.read())
 
         def _exec(cmd, raise_on_error=False, timeout=300):
             if "docker inspect" in cmd and "shop" in cmd and "replica" not in cmd:
@@ -159,6 +164,7 @@ class RemoteSpawnParityTests(TestCase):
                 return "deadbeef" * 8, "", 0
             return "", "", 0
 
+        ssh.upload_file.side_effect = _upload
         ssh.exec_command.side_effect = _exec
         with patch("apps.deployments.models.PlatformConfig"), \
                 patch.object(SpawningService, "_get_ssh", return_value=ssh), \
@@ -183,10 +189,13 @@ class RemoteSpawnParityTests(TestCase):
         self.assertIn(
             "traefik.http.services.shop.loadbalancer.healthcheck.path=/health",
             run_cmd)
-        # Live PORT + secrets carried over; HOSTNAME never copied.
-        self.assertIn("PORT=80", run_cmd)
-        self.assertIn("DATABASE_URL=postgres://follower/db", run_cmd)
-        self.assertNotIn("HOSTNAME", run_cmd)
+        # Live PORT + secrets carried via uploaded --env-file (never CLI -e); HOSTNAME never copied.
+        self.assertIn("--env-file /tmp/smsly-replica-", run_cmd)
+        self.assertNotIn("DATABASE_URL=postgres://follower/db", run_cmd)
+        self.assertEqual(len(uploaded_envs), 1)
+        self.assertIn("PORT=80", uploaded_envs[0])
+        self.assertIn("DATABASE_URL=postgres://follower/db", uploaded_envs[0])
+        self.assertNotIn("HOSTNAME", uploaded_envs[0])
         self.assertEqual(replica.status, "RUNNING")
 
     def test_missing_follower_falls_back_with_minimal_labels(self):

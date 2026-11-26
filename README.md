@@ -26,7 +26,10 @@
 | Feature | Status |
 |---------|--------|
 | Fail-closed config (`SECRET_KEY`, `FIELD_ENCRYPTION_KEY` crash if missing) | ✅ |
-| Docker socket isolation via read-only proxy | ✅ |
+| Fail-closed defaults (`GRAFANA_ANON_ENABLED=false`, `SMSLY_DISABLE_TIER_GATES=false`) | ✅ |
+| Docker socket isolation via read-only / scoped proxy | ✅ |
+| Egress mirror SSRF blocklist + kernel `iptables` `OUTPUT` isolation | ✅ |
+| SPIRE mTLS trust bundle verification (`insecure_bootstrap = false`) | ✅ |
 | Multi-tenancy tested (user-level data isolation) | ✅ |
 | Automatic SSL/TLS via Let's Encrypt (Caddy) | ✅ |
 | IP-mode SSL guard (forces HTTP for raw IPs, prevents HTTPS/IP mismatch) | ✅ |
@@ -139,8 +142,8 @@ For non-interactive automation, use: `FORCE_WIPE=1 sudo bash install.sh --wipe`
 
 | Layer | Technology |
 |-------|------------|
-| **Backend** | Django 5.x, Python 3.11, Celery, Redis |
-| **Frontend** | Next.js 15 (TypeScript), Tailwind CSS v3 |
+| **Backend** | Django 5.x, Python 3.11/3.12, Celery, Redis |
+| **Frontend** | Next.js 15 (TypeScript, Node.js 22), Tailwind CSS v3 |
 | **Database** | PostgreSQL 16 |
 | **Orchestration** | Docker Compose |
 | **SSL/Proxy** | Caddy (Compose master, automatic Let's Encrypt, routes directly to backend/frontend); Traefik (Compose node / lite-agent, label-driven); nginx (bare-metal, **legacy**) |
@@ -209,7 +212,7 @@ For non-interactive automation, use: `FORCE_WIPE=1 sudo bash install.sh --wipe`
 ### Lite Agent Mode
 Lite Agents are lightweight worker nodes that connect to the master's database, Redis, and message queue directly (no local infrastructure). They receive deployment tasks via a node-specific Celery queue and build/run containers locally while reporting back to the master.
 
-> **Security Note:** Lite Agents share the master's infrastructure credentials. See the [Zero-Trust Gaps](#known-zero-trust-gaps-multi-server-features) table above.
+> **Security Note:** Lite Agents receive per-node PostgreSQL users and unique per-node `GATEWAY_SECRET` keys. See the [Zero-Trust Multi-Server Audit Status](#zero-trust-multi-server-audit-status) table above. Single-host installs still have single-node SPOF boundaries for local RabbitMQ (`rabbitmq_data`) and local filesystem Docker Registry (`registry_data`).
 
 ---
 

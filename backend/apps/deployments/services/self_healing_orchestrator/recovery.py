@@ -562,7 +562,7 @@ class RecoveryMixin:
         """Rollback to previous deployment (requires previous deployment to exist)."""
         self._log("Attempting rollback")
 
-        from ..models.core import Deployment as DeploymentModel
+        from apps.deployments.models import Deployment as DeploymentModel
 
         service = getattr(deployment, "service", None)
         if not service:

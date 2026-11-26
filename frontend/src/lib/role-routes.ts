@@ -4,87 +4,44 @@
  * When the AuthProvider detects that the current user lacks the required
  * permission for the current route, it redirects to the specified fallback.
  */
+export interface RoleRouteRule {
+  prefix: string;
+  anyPermissions: string[];
+  redirect: string;
+}
+
+export const ROLE_ROUTE_RULES: RoleRouteRule[] = [
+  { prefix: "/admin-dashboard", anyPermissions: ["admin.access"], redirect: "/dashboard" },
+  { prefix: "/admin-dashboard/users", anyPermissions: ["admin.access"], redirect: "/dashboard" },
+  { prefix: "/admin-dashboard/pricing", anyPermissions: ["admin.access"], redirect: "/dashboard" },
+  { prefix: "/admin-dashboard/customers", anyPermissions: ["admin.access"], redirect: "/dashboard" },
+  { prefix: "/admin-dashboard/pnl", anyPermissions: ["admin.access"], redirect: "/dashboard" },
+  { prefix: "/admin-dashboard/costs", anyPermissions: ["admin.access"], redirect: "/dashboard" },
+  { prefix: "/admin-dashboard/ai-providers", anyPermissions: ["admin.access"], redirect: "/dashboard" },
+  { prefix: "/admin-dashboard/licensing", anyPermissions: ["admin.access"], redirect: "/dashboard" },
+  { prefix: "/billing", anyPermissions: ["billing.view"], redirect: "/dashboard" },
+  { prefix: "/autoscaler", anyPermissions: ["admin.access"], redirect: "/dashboard" },
+  { prefix: "/grafana", anyPermissions: ["admin.access"], redirect: "/dashboard" },
+  { prefix: "/backups", anyPermissions: ["admin.access"], redirect: "/dashboard" },
+  { prefix: "/network", anyPermissions: ["admin.access"], redirect: "/dashboard" },
+  { prefix: "/clusters", anyPermissions: ["admin.access"], redirect: "/dashboard" },
+  { prefix: "/replication", anyPermissions: ["admin.access"], redirect: "/dashboard" },
+  { prefix: "/settings/billing", anyPermissions: ["billing.view"], redirect: "/settings" },
+  { prefix: "/settings/audit-logs", anyPermissions: ["audit.view"], redirect: "/settings" },
+  { prefix: "/settings/slow-queries", anyPermissions: ["admin.access"], redirect: "/settings" },
+  { prefix: "/settings/updates", anyPermissions: ["settings.manage"], redirect: "/settings" },
+  { prefix: "/settings/replication", anyPermissions: ["admin.access"], redirect: "/settings" },
+];
+
 export const ROLE_ROUTE_MAP: Record<
   string,
   { permissions: string[]; redirect: string }
-> = {
-  "/admin-dashboard": {
-    permissions: ["admin.access"],
-    redirect: "/dashboard",
-  },
-  "/admin-dashboard/users": {
-    permissions: ["admin.access"],
-    redirect: "/dashboard",
-  },
-  "/admin-dashboard/pricing": {
-    permissions: ["admin.access"],
-    redirect: "/dashboard",
-  },
-  "/admin-dashboard/customers": {
-    permissions: ["admin.access"],
-    redirect: "/dashboard",
-  },
-  "/admin-dashboard/pnl": {
-    permissions: ["admin.access"],
-    redirect: "/dashboard",
-  },
-  "/admin-dashboard/costs": {
-    permissions: ["admin.access"],
-    redirect: "/dashboard",
-  },
-  "/admin-dashboard/ai-providers": {
-    permissions: ["admin.access"],
-    redirect: "/dashboard",
-  },
-  "/admin-dashboard/licensing": {
-    permissions: ["admin.access"],
-    redirect: "/dashboard",
-  },
-  "/billing": {
-    permissions: ["billing.view"],
-    redirect: "/dashboard",
-  },
-  "/autoscaler": {
-    permissions: ["admin.access"],
-    redirect: "/dashboard",
-  },
-  "/grafana": {
-    permissions: ["admin.access"],
-    redirect: "/dashboard",
-  },
-  "/backups": {
-    permissions: ["admin.access"],
-    redirect: "/dashboard",
-  },
-  "/network": {
-    permissions: ["admin.access"],
-    redirect: "/dashboard",
-  },
-  "/clusters": {
-    permissions: ["admin.access"],
-    redirect: "/dashboard",
-  },
-  "/replication": {
-    permissions: ["admin.access"],
-    redirect: "/dashboard",
-  },
-  "/settings/billing": {
-    permissions: ["billing.view"],
-    redirect: "/settings",
-  },
-  "/settings/audit-logs": {
-    permissions: ["audit.view"],
-    redirect: "/settings",
-  },
-  "/settings/slow-queries": {
-    permissions: ["admin.access"],
-    redirect: "/settings",
-  },
-  "/settings/updates": {
-    permissions: ["settings.manage"],
-    redirect: "/settings",
-  },
-};
+> = Object.fromEntries(
+  ROLE_ROUTE_RULES.map((rule) => [
+    rule.prefix,
+    { permissions: rule.anyPermissions, redirect: rule.redirect },
+  ])
+);
 
 /**
  * Returns the required permissions for a given path, or null if no

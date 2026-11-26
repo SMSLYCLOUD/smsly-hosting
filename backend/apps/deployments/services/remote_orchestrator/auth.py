@@ -64,7 +64,7 @@ class AuthMixin:
         import secrets
         import time
 
-        import requests
+        from .. import remote_orchestrator as _ro_pkg
 
         gateway_secret = str(self.server.gateway_secret or "").strip()
         if not gateway_secret:
@@ -91,7 +91,7 @@ class AuthMixin:
         verify_ssl = _REMOTE_VERIFY if url.startswith("https://") else False
 
         try:
-            response = requests.request(
+            response = _ro_pkg.requests.request(
                 "POST",
                 url,
                 data=body,

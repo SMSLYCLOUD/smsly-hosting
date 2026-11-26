@@ -83,6 +83,7 @@ export default function NewServicePage() {
   const [envVars, setEnvVars] = React.useState<EnvVar[]>([])
   const [scanDepth, setScanDepth] = React.useState<"shallow" | "standard" | "deep">("shallow")
   const [isDeploying, setIsDeploying] = React.useState(false)
+  const [createdServiceId, setCreatedServiceId] = React.useState<string | null>(null)
 
   // AI analysis state
   const [analyzing, setAnalyzing] = React.useState(false)
@@ -323,8 +324,7 @@ export default function NewServicePage() {
     if (step === 6) {
       setStep(5)
     } else if (step === 5) {
-      // Review → back to Deploy Mode (always)
-      setStep(3)
+      setStep(showEnvStep ? 4 : 3)
     } else if (step === 4) {
       // Env Vars → back to Deploy Mode
       setStep(3)
@@ -403,23 +403,52 @@ export default function NewServicePage() {
 
       const deployType = sourceType === "docker" || sourceType === "upload" ? "DOCKER" : "GIT"
 
-      const service = await servicesApi.create({
-          name: finalName,
-          deploy_type: sourceType === "upload" ? "UPLOAD" : deployType,
-          buildpack: sourceType === "docker" ? "DOCKER" : sourceType === "upload" ? "DOCKER" : buildpack,
-          repository_url: (sourceType === "docker" || sourceType === "upload") ? null : finalRepo,
-          docker_image: sourceType === "docker" ? dockerImage ?? undefined : undefined,
-          branch: branch || "main",
-          cpu_cores: cpuCores,
-          memory_mb: memoryMb,
-          env_scan_depth: scanDepth,
-          ...(selectedProject && selectedProject !== "none" ? { project: selectedProject } : {}),
-          ...(sourceType === "docker" && registryCredentialId !== "none" ? { registry_credential: registryCredentialId } : {})
-      }, localOnlyRequest)
+      const service = createdServiceId
+        ? await api.get(`/services/${createdServiceId}/`, localOnlyRequest).then((r) => r.data)
+        : await servicesApi.create({
+            name: finalName,
+            deploy_type: deployType,
+            buildpack: sourceType === "docker" ? "DOCKER" : sourceType === "upload" ? "DOCKER" : buildpack,
+            repository_url: (sourceType === "docker" || sourceType === "upload") ? null : finalRepo,
+            docker_image: sourceType === "docker" ? dockerImage ?? undefined : undefined,
+            branch: branch || "main",
+            cpu_cores: cpuCores,
+            memory_mb: memoryMb,
+            env_scan_depth: scanDepth,
+            ...(selectedProject && selectedProject !== "none" ? { project: selectedProject } : {}),
+            ...(sourceType === "docker" && registryCredentialId !== "none" ? { registry_credential: registryCredentialId } : {})
+          }, localOnlyRequest)
+
+      if (!createdServiceId) {
+        setCreatedServiceId(service.id)
+      }
+
+      // Merge userRequiredVars (non-empty entries) into envVars
+      const mergedEnvMap = new Map<string, EnvVar>()
+      for (const v of envVars) {
+        if (v.key?.trim()) {
+          mergedEnvMap.set(v.key.trim(), v)
+        }
+      }
+      for (const [k, val] of Object.entries(userRequiredVars)) {
+        const trimmedVal = String(val ?? "").trim()
+        if (trimmedVal) {
+          const existing = mergedEnvMap.get(k)
+          const meta = Array.isArray(analysis?.env_vars)
+            ? analysis.env_vars.find((ev: AnalysisEnvVar) => ev.key === k)
+            : undefined
+          mergedEnvMap.set(k, {
+            key: k,
+            value: trimmedVal,
+            isSecret: existing?.isSecret ?? Boolean(meta?.is_secret),
+          })
+        }
+      }
+      const finalEnvVars = Array.from(mergedEnvMap.values())
 
       // Set Env Vars
-      if (envVars.length > 0) {
-        for (const v of envVars) {
+      if (finalEnvVars.length > 0) {
+        for (const v of finalEnvVars) {
           await api.post(
             `/services/${service.id}/env_vars/`,
             { key: v.key, value: v.value, is_secret: v.isSecret },
@@ -541,10 +570,19 @@ export default function NewServicePage() {
                 exit={{ opacity: 0, x: -20 }}
                 className="space-y-6"
               >
-                <div className="grid grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                   <Card
-                    className={cn("cursor-pointer hover:border-primary transition-all", sourceType === "git" && "border-primary bg-primary/5")}
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={sourceType === "git"}
+                    className={cn("cursor-pointer hover:border-primary transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", sourceType === "git" && "border-primary bg-primary/5")}
                     onClick={() => setSourceType("git")}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault()
+                        setSourceType("git")
+                      }
+                    }}
                   >
                     <CardHeader className="p-6 text-center">
                       <Github className="h-8 w-8 mx-auto mb-2" />
@@ -553,8 +591,17 @@ export default function NewServicePage() {
                     </CardHeader>
                   </Card>
                   <Card
-                    className={cn("cursor-pointer hover:border-primary transition-all", sourceType === "template" && "border-primary bg-primary/5")}
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={sourceType === "template"}
+                    className={cn("cursor-pointer hover:border-primary transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", sourceType === "template" && "border-primary bg-primary/5")}
                     onClick={() => setSourceType("template")}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault()
+                        setSourceType("template")
+                      }
+                    }}
                   >
                     <CardHeader className="p-6 text-center">
                       <Layers className="h-8 w-8 mx-auto mb-2" />
@@ -563,8 +610,17 @@ export default function NewServicePage() {
                     </CardHeader>
                   </Card>
                   <Card
-                    className={cn("cursor-pointer hover:border-primary transition-all", sourceType === "docker" && "border-primary bg-primary/5")}
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={sourceType === "docker"}
+                    className={cn("cursor-pointer hover:border-primary transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", sourceType === "docker" && "border-primary bg-primary/5")}
                     onClick={() => setSourceType("docker")}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault()
+                        setSourceType("docker")
+                      }
+                    }}
                   >
                     <CardHeader className="p-6 text-center">
                       <Box className="h-8 w-8 mx-auto mb-2" />
@@ -573,8 +629,17 @@ export default function NewServicePage() {
                     </CardHeader>
                   </Card>
                   <Card
-                    className={cn("cursor-pointer hover:border-primary transition-all", sourceType === "upload" && "border-primary bg-primary/5")}
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={sourceType === "upload"}
+                    className={cn("cursor-pointer hover:border-primary transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", sourceType === "upload" && "border-primary bg-primary/5")}
                     onClick={() => setSourceType("upload")}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault()
+                        setSourceType("upload")
+                      }
+                    }}
                   >
                     <CardHeader className="p-6 text-center">
                       <UploadCloud className="h-8 w-8 mx-auto mb-2" />
@@ -801,11 +866,20 @@ export default function NewServicePage() {
                     {templates.length > 0 ? templates.map((t: any) => (
                       <div
                         key={t.id || t.slug}
+                        role="button"
+                        tabIndex={0}
+                        aria-pressed={selectedTemplate === (t.slug || t.id)}
                         className={cn(
-                          "flex items-center gap-3 p-4 rounded-lg border cursor-pointer hover:bg-muted",
+                          "flex items-center gap-3 p-4 rounded-lg border cursor-pointer hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                           selectedTemplate === (t.slug || t.id) && "border-primary bg-primary/5"
                         )}
                         onClick={() => setSelectedTemplate(t.slug || t.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault()
+                            setSelectedTemplate(t.slug || t.id)
+                          }
+                        }}
                       >
                         <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-900/50 border border-zinc-800 overflow-hidden p-1">
                           {(t.icon || t.logo_url)?.startsWith('http') || (t.icon || t.logo_url)?.startsWith('/') ? (
@@ -1115,13 +1189,22 @@ export default function NewServicePage() {
                   <h3 className="font-semibold text-lg">How would you like to deploy?</h3>
                   <div className="grid grid-cols-2 gap-4">
                     <Card
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={deployMode === "auto"}
                       className={cn(
-                        "cursor-pointer transition-all hover:shadow-lg",
+                        "cursor-pointer transition-all hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                         deployMode === "auto"
                           ? "border-primary bg-primary/5 shadow-primary/10"
                           : "hover:border-primary/50"
                       )}
                       onClick={() => setDeployMode("auto")}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault()
+                          setDeployMode("auto")
+                        }
+                      }}
                     >
                       <CardHeader className="text-center pb-2">
                         <Zap className={cn("h-10 w-10 mx-auto mb-2", deployMode === "auto" ? "text-primary" : "text-muted-foreground")} />
@@ -1140,13 +1223,22 @@ export default function NewServicePage() {
                     </Card>
 
                     <Card
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={deployMode === "manual"}
                       className={cn(
-                        "cursor-pointer transition-all hover:shadow-lg",
+                        "cursor-pointer transition-all hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                         deployMode === "manual"
                           ? "border-primary bg-primary/5 shadow-primary/10"
                           : "hover:border-primary/50"
                       )}
                       onClick={() => setDeployMode("manual")}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault()
+                          setDeployMode("manual")
+                        }
+                      }}
                     >
                       <CardHeader className="text-center pb-2">
                         <Settings2 className={cn("h-10 w-10 mx-auto mb-2", deployMode === "manual" ? "text-primary" : "text-muted-foreground")} />

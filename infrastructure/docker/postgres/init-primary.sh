@@ -7,17 +7,19 @@ set -e
 # they cause CREATE DATABASE to block waiting for a standby that does
 # not exist yet (the replica is initialized later).
 PG_SYNCHRONOUS_COMMIT="${PG_SYNCHRONOUS_COMMIT:-on}"
-PG_SYNCHRONOUS_STANDBY_NAMES="${PG_SYNCHRONOUS_STANDBY_NAMES:-*}"
+PG_SYNCHRONOUS_STANDBY_NAMES="${PG_SYNCHRONOUS_STANDBY_NAMES:-}"
 
 if grep -q '^synchronous_commit' "$PGDATA/postgresql.conf"; then
     sed -i "s/^synchronous_commit = .*/synchronous_commit = $PG_SYNCHRONOUS_COMMIT/" "$PGDATA/postgresql.conf"
 else
     echo "synchronous_commit = $PG_SYNCHRONOUS_COMMIT" >> "$PGDATA/postgresql.conf"
 fi
-if grep -q '^synchronous_standby_names' "$PGDATA/postgresql.conf"; then
-    sed -i "s/^synchronous_standby_names = .*/synchronous_standby_names = '$PG_SYNCHRONOUS_STANDBY_NAMES'/" "$PGDATA/postgresql.conf"
-else
-    echo "synchronous_standby_names = '$PG_SYNCHRONOUS_STANDBY_NAMES'" >> "$PGDATA/postgresql.conf"
+if [ -n "$PG_SYNCHRONOUS_STANDBY_NAMES" ]; then
+    if grep -q '^synchronous_standby_names' "$PGDATA/postgresql.conf"; then
+        sed -i "s/^synchronous_standby_names = .*/synchronous_standby_names = '$PG_SYNCHRONOUS_STANDBY_NAMES'/" "$PGDATA/postgresql.conf"
+    else
+        echo "synchronous_standby_names = '$PG_SYNCHRONOUS_STANDBY_NAMES'" >> "$PGDATA/postgresql.conf"
+    fi
 fi
 
 # Create replication user so the replica can connect for streaming

@@ -63,15 +63,19 @@ class ManagedServerHostPreSaveSignalTests(TestCase):
         with self.assertRaises(ValidationError):
             s.save()
 
-    def test_save_rejects_private_rfc1918_ip(self):
-        for bad in ("10.0.0.5", "172.16.0.5", "192.168.1.5"):
+    def test_save_allows_private_rfc1918_ip_for_vpc_fleets(self):
+        """RFC1918 ranges are allowed by pre_save for VPC/WireGuard fleets."""
+        for addr in ("10.0.0.5", "172.16.0.5", "192.168.1.5"):
             s = ManagedServer(
                 owner=self.user,
-                name=f"srv-{bad.replace('.', '-')}",
-                host=bad,
+                name=f"srv-{addr.replace('.', '-')}",
+                host=addr,
             )
-            with self.assertRaises(ValidationError):
-                s.save()
+            s.save()
+        self.assertEqual(
+            ManagedServer.objects.filter(owner=self.user, host__in=["10.0.0.5", "172.16.0.5", "192.168.1.5"]).count(),
+            3,
+        )
 
     def test_save_rejects_metadata_ip(self):
         s = ManagedServer(

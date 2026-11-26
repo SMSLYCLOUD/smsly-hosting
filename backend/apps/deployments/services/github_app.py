@@ -202,7 +202,14 @@ class GitHubAppService:
         # 422 "There is at least one repository that does not exist or is
         # not accessible to the parent installation."
         repo_id = self._resolve_repo_id(installation_id, repo_name, headers)
-        payload: dict = {"repositories": [repo_id]} if repo_id else {}
+        if not repo_id:
+            logger.warning(
+                "GitHubAppService: repository %s not accessible in installation %s — refusing unscoped token.",
+                repo_name,
+                installation_id,
+            )
+            return None
+        payload: dict = {"repositories": [repo_id]}
 
         try:
             resp = requests.post(
@@ -228,49 +235,6 @@ class GitHubAppService:
                     installation_id,
                 )
                 return token
-
-        # First attempt failed — log the error, then fall back to a
-        # bare installation token (no repositories filter). The token
-        # still only grants access to repos the App can see, so this is
-        # a safe retry. Many production installs hit the 422 because
-        # the App's installation explicitly omitted this repo even
-        # though it's still in the org; the bare token + Docker git
-        # auth then succeeds if the App is installed "All repositories"
-        # OR if the repo is public.
-        if payload:
-            logger.warning(
-                "GitHubAppService: repo-scoped token failed for %s "
-                "(status %s) — falling back to bare installation token.",
-                repo_name, resp.status_code,
-            )
-            try:
-                fallback = requests.post(
-                    f"{_GH_API}/app/installations/{installation_id}/access_tokens",
-                    headers=headers,
-                    json={},
-                    timeout=10,
-                )
-            except requests.Timeout:
-                logger.error(
-                    "GitHubAppService: timeout creating bare installation token",
-                )
-                return None
-
-            if fallback.status_code == 201:
-                token = fallback.json().get("token")
-                if token:
-                    logger.info(
-                        "GitHubAppService: bare installation token issued "
-                        "(installation %s, 1hr expiry). Note: if the repo "
-                        "is private and the App has 'Selected repositories', "
-                        "the clone may still fail.",
-                        installation_id,
-                    )
-                    return token
-            logger.error(
-                "GitHubAppService: bare token also failed (status %s): %s",
-                fallback.status_code, fallback.text[:200],
-            )
 
         logger.error(
             "GitHubAppService: failed to create installation token "
@@ -696,7 +660,9 @@ def get_github_app_service() -> GitHubAppService | None:
     return GitHubAppService(app_id=app_id, private_key_pem=private_key)
 
 
-def get_installation_token_for_repo(repo_full_name: str) -> str | None:
+def get_installation_token_for_repo(
+    repo_full_name: str, user=None, allow_unscoped: bool = False
+) -> str | None:
     """
     Convenience wrapper: get a repo-scoped token using the configured App.
 
@@ -705,10 +671,24 @@ def get_installation_token_for_repo(repo_full_name: str) -> str | None:
 
     Args:
         repo_full_name: ``"SMSLYCLOUD/smsly-shared"``
+        user: Optional user to scope ``GitHubAppInstallation`` lookup to.
+        allow_unscoped: True only for platform/ecosystem/superuser operations.
     """
     svc = get_github_app_service()
     if svc is None:
         return None
+    if user is not None and not getattr(user, "is_superuser", False) and not allow_unscoped:
+        inst = get_installation_for_repo(repo_full_name, user=user)
+        if inst is None:
+            return None
+        parts = (repo_full_name or "").split("/", 1)
+        if len(parts) != 2 or not parts[1]:
+            return None
+        return svc._create_installation_token(
+            installation_id=inst.installation_id,
+            repo_name=parts[1],
+            headers=svc._auth_headers(),
+        )
     return svc.get_installation_token(repo_full_name)
 
 
@@ -720,16 +700,23 @@ def get_installation_token_for_installation_id(installation_id: int) -> str | No
     return svc.get_installation_token_for_id(installation_id)
 
 
-def get_installation_for_repo(repo_full_name: str):  # noqa: ANN201
+def get_installation_for_repo(repo_full_name: str, user=None, allow_unscoped: bool = False):  # noqa: ANN201
     """Look up the GitHubAppInstallation that covers a given repo.
 
+    When *user* is provided (unless superuser or *allow_unscoped*), scopes
+    the lookup to installations owned by ``user=user``.
     Returns the installation instance or None.
     """
     from apps.deployments.models.github_app import GitHubAppInstallation
 
-    # Check installations with explicit repo lists
-    inst = GitHubAppInstallation.objects.filter(
+    qs = GitHubAppInstallation.objects.filter(
         status=GitHubAppInstallation.Status.ACTIVE,
+    )
+    if user is not None and not getattr(user, "is_superuser", False) and not allow_unscoped:
+        qs = qs.filter(user=user)
+
+    # Check installations with explicit repo lists
+    inst = qs.filter(
         repository_selection="selected",
         repositories__contains=[{"name": repo_full_name}],
     ).first()
@@ -739,8 +726,7 @@ def get_installation_for_repo(repo_full_name: str):  # noqa: ANN201
     # Check "all repos" installations — match by account_login (owner)
     owner = repo_full_name.split("/")[0] if "/" in repo_full_name else ""
     if owner:
-        inst = GitHubAppInstallation.objects.filter(
-            status=GitHubAppInstallation.Status.ACTIVE,
+        inst = qs.filter(
             repository_selection="all",
             account_login=owner,
         ).first()

@@ -35,7 +35,8 @@ recover_runtime_stack() {
         mv "${_tmp_dir}/registry.key" "$INSTALL_DIR/certs/registry.key"
         mv "${_tmp_dir}/registry.crt" "$INSTALL_DIR/certs/registry.crt"
         rm -rf "$_tmp_dir"
-        chmod 644 "$INSTALL_DIR/certs/registry.crt" "$INSTALL_DIR/certs/registry.key"
+        chmod 644 "$INSTALL_DIR/certs/registry.crt"
+        chmod 600 "$INSTALL_DIR/certs/registry.key"
     }
     _registry_tls_ok() {
         [ -f "$INSTALL_DIR/certs/registry.key" ] || return 1
@@ -121,14 +122,14 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
     fi
 
     if [ "$MODE_AGENT_LITE" = "true" ]; then
-        docker compose -f "$COMPOSE_FILE" up -d redis rabbitmq socket-proxy || true
-        wait_for_container_ready "smsly-redis-primary" 120 || true
+        docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy || true
+        wait_for_container_ready "smsly-hosting-redis-1" 120 || true
         sync_agent_lite_rabbitmq_password
     else
-        docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) redis rabbitmq socket-proxy registry || true
+        docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry || true
         wait_for_container_ready "smsly-postgres-primary" 120 || true
         if [ -n "$(get_pgcat_if_exists)" ]; then wait_for_container_ready "smsly-hosting-pgcat-1" 120 || true; fi
-        wait_for_container_ready "smsly-hosting-redis-1" 120 || true
+        wait_for_container_ready "smsly-redis-primary" 120 || true
     fi
 
     if should_manage_caddy && docker compose -f "$COMPOSE_FILE" ps caddy  | grep -q "Up"; then

@@ -28,6 +28,8 @@ var (
 	ErrServiceLocked     = errors.New("service access is locked by encryption controller")
 	ErrServiceNotOptedIn = errors.New("service encryption is opted out")
 	ErrRollbackDetected  = errors.New("vault returned week older than monotonic floor")
+	errSkipStoreSave     = errors.New("skip store save")
+	errUseExistingDEK    = errors.New("use existing wrapped DEK")
 )
 
 // Config tunes epoch timing, grace period, and lock behavior.
@@ -185,6 +187,16 @@ func (m *Manager) SetNowFunc(fn func() time.Time) {
 	if fn != nil {
 		m.nowFn = fn
 	}
+}
+
+func (m *Manager) now() time.Time {
+	m.mu.RLock()
+	fn := m.nowFn
+	m.mu.RUnlock()
+	if fn == nil {
+		return time.Now().UTC()
+	}
+	return fn()
 }
 
 // SetCallbacks installs hooks fired on global lockdown or per-service lock.
@@ -350,7 +362,7 @@ func (m *Manager) preRotateNext(ctx context.Context, nextW uint64) error {
 
 // SyncNow fetches the current week's SMK from the external vault and transitions ACTIVE.
 func (m *Manager) SyncNow(ctx context.Context) error {
-	now := m.nowFn()
+	now := m.now()
 	targetWeek := m.WeekForTime(now)
 
 	m.mu.RLock()
@@ -407,11 +419,12 @@ func (m *Manager) SyncNow(ctx context.Context) error {
 		m.nextWeek = 0
 	}
 	m.persistEpochLocked()
+	noPrevSMK := len(m.prevSMK) == 0
 	m.mu.Unlock()
 
 	if prevW != 0 && prevW != targetWeek {
 		m.rewrapServices(ctx)
-	} else if len(m.prevSMK) == 0 {
+	} else if noPrevSMK {
 		// Recovery from lockdown or cold restart may have un-rewrapped records from last week.
 		m.rewrapServices(ctx)
 	}
@@ -464,6 +477,9 @@ func (m *Manager) rewrapTokenForService(
 	}
 	if parsed.Week == currW {
 		return wrapped, false, nil
+	}
+	if parsed.Week == 0 || parsed.Week > currW+1 {
+		return "", false, fmt.Errorf("wrapped DEK week %d out of valid bounds (current=%d)", parsed.Week, currW)
 	}
 	var oldSMK []byte
 	var zeroOld bool
@@ -534,41 +550,69 @@ func (m *Manager) rewrapServiceRecord(ctx context.Context, rec *crypto.ServiceKe
 	defer crypto.ZeroBytes(currSMK)
 	defer crypto.ZeroBytes(prevSMK)
 
-	changed := false
-	now := m.nowFn()
+	now := m.now()
+	origWrapped := rec.WrappedDEK
+	var newWrapped string
 	if rec.WrappedDEK != "" && rec.WrapWeek != currW {
-		newWrapped, updated, err := m.rewrapTokenForService(ctx, rec, rec.WrappedDEK, rec.CurrentKeyID, currW, currSMK, prevW, prevSMK)
+		nw, updated, err := m.rewrapTokenForService(ctx, rec, rec.WrappedDEK, rec.CurrentKeyID, currW, currSMK, prevW, prevSMK)
 		if err != nil {
 			return err
 		}
 		if updated {
-			rec.WrappedDEK = newWrapped
-			rec.WrapWeek = currW
-			rec.RotatedAt = now
-			changed = true
+			newWrapped = nw
 		}
 	}
+	origVolWrapped := make(map[string]string, len(rec.VolumeDEKs))
+	updatedVols := make(map[string]string, len(rec.VolumeDEKs))
 	for volName, vrec := range rec.VolumeDEKs {
 		if vrec.WrappedDEK == "" || vrec.WrapWeek == currW {
 			continue
 		}
-		newWrapped, updated, err := m.rewrapTokenForService(ctx, rec, vrec.WrappedDEK, vrec.KeyID, currW, currSMK, prevW, prevSMK)
+		nw, updated, err := m.rewrapTokenForService(ctx, rec, vrec.WrappedDEK, vrec.KeyID, currW, currSMK, prevW, prevSMK)
 		if err != nil {
 			log.Printf("WARN [cryptd]: rewrap volume %s for %s failed: %v", volName, rec.ServiceID, err)
 			continue
 		}
 		if updated {
-			vrec.WrappedDEK = newWrapped
-			vrec.WrapWeek = currW
-			vrec.RotatedAt = now
-			rec.VolumeDEKs[volName] = vrec
-			changed = true
+			origVolWrapped[volName] = vrec.WrappedDEK
+			updatedVols[volName] = nw
 		}
 	}
-	if !changed {
+	if newWrapped == "" && len(updatedVols) == 0 {
 		return nil
 	}
-	return m.store.SaveService(rec)
+	err := m.store.UpdateService(rec.ServiceID, func(cur *crypto.ServiceKeyRecord) error {
+		if cur.CreatedAt.IsZero() && cur.WrappedDEK == "" && len(cur.VolumeDEKs) == 0 && !cur.OptedIn {
+			return errSkipStoreSave
+		}
+		didChange := false
+		if newWrapped != "" && cur.WrappedDEK == origWrapped && cur.WrapWeek != currW {
+			cur.WrappedDEK = newWrapped
+			cur.WrapWeek = currW
+			cur.RotatedAt = now
+			didChange = true
+		}
+		for vn, nw := range updatedVols {
+			if cur.VolumeDEKs == nil {
+				continue
+			}
+			if cv, ok := cur.VolumeDEKs[vn]; ok && cv.WrappedDEK == origVolWrapped[vn] && cv.WrapWeek != currW {
+				cv.WrappedDEK = nw
+				cv.WrapWeek = currW
+				cv.RotatedAt = now
+				cur.VolumeDEKs[vn] = cv
+				didChange = true
+			}
+		}
+		if !didChange {
+			return errSkipStoreSave
+		}
+		return nil
+	})
+	if errors.Is(err, errSkipStoreSave) {
+		return nil
+	}
+	return err
 }
 
 // ForceLockdown immediately zeroes all key material in memory, transitions to LOCKED,
@@ -641,10 +685,30 @@ func (m *Manager) Status() StatusSnapshot {
 	}
 }
 
+// ServiceRoutePatch carries optional replace-semantics overrides for service DB/Redis routing.
+// Nil pointer fields preserve existing persisted routes; non-nil pointer fields replace them
+// (including empty slices/strings to clear stale routes).
+type ServiceRoutePatch struct {
+	DBRoles          *[]string
+	DBNames          *[]string
+	RedisUsers       *[]string
+	RedisPrefixes    *[]string
+	UpstreamPG       *string
+	UpstreamRedis    *string
+	UpstreamRedisTLS *bool
+	EncryptRedisVals *bool
+}
+
 // RegisterService configures opt-in status and persistent record for a service.
 // Because encryption is opt-in ("choose to use it or not"), services with OptedIn=false
 // bypass enforcement and operate in passthrough mode.
 func (m *Manager) RegisterService(rec *crypto.ServiceKeyRecord, optedIn bool) error {
+	return m.RegisterServiceWithPatch(rec, optedIn, nil)
+}
+
+// RegisterServiceWithPatch configures opt-in status and persistent record for a service
+// using optional pointer-based replace semantics for DB/Redis routing fields.
+func (m *Manager) RegisterServiceWithPatch(rec *crypto.ServiceKeyRecord, optedIn bool, patch *ServiceRoutePatch) error {
 	if rec == nil {
 		return errors.New("nil service record")
 	}
@@ -658,6 +722,32 @@ func (m *Manager) RegisterService(rec *crypto.ServiceKeyRecord, optedIn bool) er
 			rec.ProjectID = "control-plane"
 		} else {
 			rec.ProjectID = "default"
+		}
+	}
+	if patch != nil {
+		if patch.DBRoles != nil {
+			rec.DBRoles = append([]string(nil), (*patch.DBRoles)...)
+		}
+		if patch.DBNames != nil {
+			rec.DBNames = append([]string(nil), (*patch.DBNames)...)
+		}
+		if patch.RedisUsers != nil {
+			rec.RedisUsers = append([]string(nil), (*patch.RedisUsers)...)
+		}
+		if patch.RedisPrefixes != nil {
+			rec.RedisPrefixes = append([]string(nil), (*patch.RedisPrefixes)...)
+		}
+		if patch.UpstreamPG != nil {
+			rec.UpstreamPG = *patch.UpstreamPG
+		}
+		if patch.UpstreamRedis != nil {
+			rec.UpstreamRedis = *patch.UpstreamRedis
+		}
+		if patch.UpstreamRedisTLS != nil {
+			rec.UpstreamRedisTLS = *patch.UpstreamRedisTLS
+		}
+		if patch.EncryptRedisVals != nil {
+			rec.EncryptRedisVals = *patch.EncryptRedisVals && optedIn
 		}
 	}
 
@@ -681,92 +771,156 @@ func (m *Manager) RegisterService(rec *crypto.ServiceKeyRecord, optedIn bool) er
 	rec.OptedIn = optedIn
 	rec.Locked = locked
 
-	var existingRec *crypto.ServiceKeyRecord
-	if m.store != nil {
-		if loaded, err := m.store.GetService(cleanID); err == nil && loaded != nil {
-			existingRec = loaded
-		}
-	}
-	if existingRec != nil {
-		if rec.WrappedDEK == "" && existingRec.WrappedDEK != "" {
-			rec.WrappedDEK = existingRec.WrappedDEK
-			rec.WrapWeek = existingRec.WrapWeek
-			rec.CurrentKeyID = existingRec.CurrentKeyID
-			rec.RotatedAt = existingRec.RotatedAt
-		}
-		if len(existingRec.VolumeNames) > 0 || len(rec.VolumeNames) > 0 {
-			seen := make(map[string]struct{}, len(existingRec.VolumeNames)+len(rec.VolumeNames))
-			merged := make([]string, 0, len(existingRec.VolumeNames)+len(rec.VolumeNames))
-			for _, vn := range existingRec.VolumeNames {
-				if vn != "" {
-					if _, ok := seen[vn]; !ok {
-						seen[vn] = struct{}{}
-						merged = append(merged, vn)
-					}
-				}
-			}
-			for _, vn := range rec.VolumeNames {
-				if vn != "" {
-					if _, ok := seen[vn]; !ok {
-						seen[vn] = struct{}{}
-						merged = append(merged, vn)
-					}
-				}
-			}
-			rec.VolumeNames = merged
-		}
-		if len(existingRec.VolumeDEKs) > 0 {
-			if rec.VolumeDEKs == nil {
-				rec.VolumeDEKs = make(map[string]crypto.VolumeDEKRecord, len(existingRec.VolumeDEKs))
-			}
-			for k, v := range existingRec.VolumeDEKs {
-				if _, exists := rec.VolumeDEKs[k]; !exists {
-					rec.VolumeDEKs[k] = v
-				}
-			}
-		}
-		if rec.Cipher == "" {
-			rec.Cipher = existingRec.Cipher
-		}
-		if rec.OwnerUID == 0 {
-			rec.OwnerUID = existingRec.OwnerUID
-		}
-		if rec.OwnerGID == 0 {
-			rec.OwnerGID = existingRec.OwnerGID
-		}
-		if !rec.LeasePersistent && existingRec.LeasePersistent {
-			rec.LeasePersistent = true
-		}
-		if rec.LeaseExpiresAt.IsZero() {
-			rec.LeaseExpiresAt = existingRec.LeaseExpiresAt
-		}
-		if !existingRec.CreatedAt.IsZero() {
-			rec.CreatedAt = existingRec.CreatedAt
-		}
-	}
-	if rec.CreatedAt.IsZero() {
-		rec.CreatedAt = m.nowFn()
-	}
+	var sek []byte
+	var week uint64
 	if optedIn && rec.WrappedDEK == "" && m.store != nil {
-		// Provision initial wrapped DEK ONLY if none existed in keystore.
-		if sek, week, err := m.ActiveSEK(rec.ProjectID, rec.ServiceID); err == nil {
+		if s, w, serr := m.ActiveSEK(rec.ProjectID, rec.ServiceID); serr == nil {
+			sek = s
+			week = w
 			defer crypto.ZeroBytes(sek)
-			rawDEK, gerr := crypto.GenerateRandomBytes(crypto.KeySize)
-			if gerr == nil {
-				defer crypto.ZeroBytes(rawDEK)
-				if wrapped, werr := crypto.WrapDEK(sek, week, rec.ServiceID, crypto.DefaultKeyID, rawDEK); werr == nil {
-					rec.WrappedDEK = wrapped
-					rec.WrapWeek = week
-					rec.CurrentKeyID = crypto.DefaultKeyID
-					rec.RotatedAt = m.nowFn()
-				}
-			}
 		}
 	}
+
 	if m.store != nil {
-		if err := m.store.SaveService(rec); err != nil {
+		now := m.now()
+		if err := m.store.UpdateService(cleanID, func(cur *crypto.ServiceKeyRecord) error {
+			hasExisting := !cur.CreatedAt.IsZero() || cur.ProjectID != "" || cur.WrappedDEK != "" || len(cur.VolumeDEKs) > 0 || len(cur.VolumeNames) > 0 || cur.OptedIn
+			if hasExisting {
+				if rec.WrappedDEK == "" && cur.WrappedDEK != "" {
+					rec.WrappedDEK = cur.WrappedDEK
+					rec.WrapWeek = cur.WrapWeek
+					rec.CurrentKeyID = cur.CurrentKeyID
+					rec.RotatedAt = cur.RotatedAt
+				}
+				if len(cur.VolumeNames) > 0 || len(rec.VolumeNames) > 0 {
+					seen := make(map[string]struct{}, len(cur.VolumeNames)+len(rec.VolumeNames))
+					merged := make([]string, 0, len(cur.VolumeNames)+len(rec.VolumeNames))
+					for _, vn := range cur.VolumeNames {
+						if vn != "" {
+							if _, ok := seen[vn]; !ok {
+								seen[vn] = struct{}{}
+								merged = append(merged, vn)
+							}
+						}
+					}
+					for _, vn := range rec.VolumeNames {
+						if vn != "" {
+							if _, ok := seen[vn]; !ok {
+								seen[vn] = struct{}{}
+								merged = append(merged, vn)
+							}
+						}
+					}
+					rec.VolumeNames = merged
+				}
+				if len(cur.VolumeDEKs) > 0 {
+					if rec.VolumeDEKs == nil {
+						rec.VolumeDEKs = make(map[string]crypto.VolumeDEKRecord, len(cur.VolumeDEKs))
+					}
+					for k, v := range cur.VolumeDEKs {
+						if _, exists := rec.VolumeDEKs[k]; !exists {
+							rec.VolumeDEKs[k] = v
+						}
+					}
+				}
+				if rec.Cipher == "" {
+					rec.Cipher = cur.Cipher
+				}
+				if rec.OwnerUID == 0 {
+					rec.OwnerUID = cur.OwnerUID
+				}
+				if rec.OwnerGID == 0 {
+					rec.OwnerGID = cur.OwnerGID
+				}
+				if patch != nil {
+					if patch.DBRoles == nil {
+						rec.DBRoles = append([]string(nil), cur.DBRoles...)
+					}
+					if patch.DBNames == nil {
+						rec.DBNames = append([]string(nil), cur.DBNames...)
+					}
+					if patch.RedisUsers == nil {
+						rec.RedisUsers = append([]string(nil), cur.RedisUsers...)
+					}
+					if patch.RedisPrefixes == nil {
+						rec.RedisPrefixes = append([]string(nil), cur.RedisPrefixes...)
+					}
+					if patch.UpstreamPG == nil {
+						rec.UpstreamPG = cur.UpstreamPG
+					}
+					if patch.UpstreamRedis == nil {
+						rec.UpstreamRedis = cur.UpstreamRedis
+					}
+					if patch.UpstreamRedisTLS == nil {
+						rec.UpstreamRedisTLS = cur.UpstreamRedisTLS
+					}
+					if patch.EncryptRedisVals == nil {
+						if !optedIn {
+							rec.EncryptRedisVals = false
+						} else if cur.OptedIn {
+							rec.EncryptRedisVals = cur.EncryptRedisVals
+						} else {
+							rec.EncryptRedisVals = true
+						}
+					}
+				} else {
+					if len(rec.DBRoles) == 0 && len(cur.DBRoles) > 0 {
+						rec.DBRoles = append([]string(nil), cur.DBRoles...)
+					}
+					if len(rec.DBNames) == 0 && len(cur.DBNames) > 0 {
+						rec.DBNames = append([]string(nil), cur.DBNames...)
+					}
+					if len(rec.RedisUsers) == 0 && len(cur.RedisUsers) > 0 {
+						rec.RedisUsers = append([]string(nil), cur.RedisUsers...)
+					}
+					if len(rec.RedisPrefixes) == 0 && len(cur.RedisPrefixes) > 0 {
+						rec.RedisPrefixes = append([]string(nil), cur.RedisPrefixes...)
+					}
+					if rec.UpstreamPG == "" {
+						rec.UpstreamPG = cur.UpstreamPG
+					}
+					if rec.UpstreamRedis == "" {
+						rec.UpstreamRedis = cur.UpstreamRedis
+					}
+					if !rec.UpstreamRedisTLS && cur.UpstreamRedisTLS && rec.UpstreamRedis == "" {
+						rec.UpstreamRedisTLS = true
+					}
+					if !rec.EncryptRedisVals && cur.EncryptRedisVals && rec.UpstreamRedis == "" && len(rec.RedisUsers) == 0 && len(rec.RedisPrefixes) == 0 {
+						rec.EncryptRedisVals = true
+					}
+				}
+				if !rec.LeasePersistent && cur.LeasePersistent {
+					rec.LeasePersistent = true
+				}
+				if rec.LeaseExpiresAt.IsZero() {
+					rec.LeaseExpiresAt = cur.LeaseExpiresAt
+				}
+				if !cur.CreatedAt.IsZero() {
+					rec.CreatedAt = cur.CreatedAt
+				}
+			}
+			if rec.CreatedAt.IsZero() {
+				rec.CreatedAt = now
+			}
+			if optedIn && rec.WrappedDEK == "" && len(sek) == crypto.KeySize {
+				rawDEK, gerr := crypto.GenerateRandomBytes(crypto.KeySize)
+				if gerr == nil {
+					defer crypto.ZeroBytes(rawDEK)
+					if wrapped, werr := crypto.WrapDEK(sek, week, rec.ServiceID, crypto.DefaultKeyID, rawDEK); werr == nil {
+						rec.WrappedDEK = wrapped
+						rec.WrapWeek = week
+						rec.CurrentKeyID = crypto.DefaultKeyID
+						rec.RotatedAt = now
+					}
+				}
+			}
+			*cur = *rec
+			return nil
+		}); err != nil {
 			return err
 		}
+	} else if rec.CreatedAt.IsZero() {
+		rec.CreatedAt = m.now()
 	}
 	return nil
 }
@@ -774,21 +928,47 @@ func (m *Manager) RegisterService(rec *crypto.ServiceKeyRecord, optedIn bool) er
 // GetServicePolicy reports whether serviceID is opted-in and currently allowed (unlocked).
 func (m *Manager) GetServicePolicy(serviceID string) (optedIn bool, allowed bool, err error) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	state := m.state
+	defaultOptedIn := m.cfg.DefaultOptedIn
 	lease, ok := m.leases[serviceID]
-	if !ok {
-		return m.cfg.DefaultOptedIn, !m.cfg.DefaultOptedIn, nil
+	var leaseCopy ServiceLease
+	if ok && lease != nil {
+		leaseCopy = *lease
 	}
-	if !lease.OptedIn {
+	m.mu.RUnlock()
+
+	if !ok {
+		if m.store != nil {
+			if rec, gerr := m.store.GetService(serviceID); gerr != nil {
+				return true, false, gerr
+			} else if rec != nil {
+				if !rec.OptedIn {
+					return false, true, nil
+				}
+				if state == StateLocked || state == StateInitializing {
+					return true, false, ErrVaultLocked
+				}
+				if rec.Locked {
+					return true, false, ErrServiceLocked
+				}
+				if !rec.LeasePersistent && !rec.LeaseExpiresAt.IsZero() && m.now().After(rec.LeaseExpiresAt) {
+					return true, false, ErrServiceLocked
+				}
+				return true, true, nil
+			}
+		}
+		return defaultOptedIn, !defaultOptedIn, nil
+	}
+	if !leaseCopy.OptedIn {
 		return false, true, nil
 	}
-	if m.state == StateLocked {
+	if state == StateLocked || state == StateInitializing {
 		return true, false, ErrVaultLocked
 	}
-	if lease.Locked {
+	if leaseCopy.Locked {
 		return true, false, ErrServiceLocked
 	}
-	if !lease.Persistent && !lease.ExpiresAt.IsZero() && m.nowFn().After(lease.ExpiresAt) {
+	if !leaseCopy.Persistent && !leaseCopy.ExpiresAt.IsZero() && m.now().After(leaseCopy.ExpiresAt) {
 		return true, false, ErrServiceLocked
 	}
 	return true, true, nil
@@ -834,19 +1014,26 @@ func (m *Manager) UnlockService(serviceID, projectID string, ttl time.Duration, 
 	} else {
 		lease.ExpiresAt = now.Add(ttl)
 	}
-	if m.store != nil {
-		if rec, _ := m.store.GetService(cleanID); rec != nil {
-			if rec.Locked || rec.LeasePersistent != lease.Persistent || !rec.LeaseExpiresAt.Equal(lease.ExpiresAt) {
-				rec.Locked = false
-				rec.LeasePersistent = lease.Persistent
-				rec.LeaseExpiresAt = lease.ExpiresAt
-				_ = m.store.SaveService(rec)
-			}
-		}
-	}
+	leasePersistent := lease.Persistent
+	leaseExpiresAt := lease.ExpiresAt
 	cp := *lease
 	unlockCB := m.onServiceUnlock
 	m.mu.Unlock()
+
+	if m.store != nil {
+		_ = m.store.UpdateService(cleanID, func(rec *crypto.ServiceKeyRecord) error {
+			if rec.CreatedAt.IsZero() && rec.ProjectID == "" && rec.WrappedDEK == "" && len(rec.VolumeDEKs) == 0 && !rec.OptedIn {
+				return errSkipStoreSave
+			}
+			if !rec.Locked && rec.LeasePersistent == leasePersistent && rec.LeaseExpiresAt.Equal(leaseExpiresAt) {
+				return errSkipStoreSave
+			}
+			rec.Locked = false
+			rec.LeasePersistent = leasePersistent
+			rec.LeaseExpiresAt = leaseExpiresAt
+			return nil
+		})
+	}
 
 	if unlockCB != nil {
 		if uerr := unlockCB(cleanID); uerr != nil {
@@ -885,12 +1072,15 @@ func (m *Manager) LockService(serviceID, reason string) error {
 	m.mu.Unlock()
 
 	if m.store != nil {
-		if rec, _ := m.store.GetService(cleanID); rec != nil {
+		_ = m.store.UpdateService(cleanID, func(rec *crypto.ServiceKeyRecord) error {
+			if rec.CreatedAt.IsZero() && rec.ProjectID == "" && rec.WrappedDEK == "" && len(rec.VolumeDEKs) == 0 && !rec.OptedIn {
+				return errSkipStoreSave
+			}
 			rec.Locked = true
 			rec.LeasePersistent = false
 			rec.LeaseExpiresAt = time.Time{}
-			_ = m.store.SaveService(rec)
-		}
+			return nil
+		})
 	}
 	if cb != nil {
 		cb(cleanID, reason)
@@ -936,10 +1126,16 @@ func (m *Manager) AuthorizeDBAccess(serviceID string) (optedIn bool, projectID s
 			return true, lease.ProjectID, ErrServiceLocked
 		}
 		if now.After(lease.ExpiresAt) {
+			wasLocked := lease.Locked
 			lease.Locked = true
 			lease.LockReason = "lease expired"
+			proj := lease.ProjectID
+			cb := m.onServiceLock
 			m.mu.Unlock()
-			return true, lease.ProjectID, ErrServiceLocked
+			if !wasLocked && cb != nil {
+				cb(serviceID, "lease expired")
+			}
+			return true, proj, ErrServiceLocked
 		}
 	}
 	proj := lease.ProjectID
@@ -949,13 +1145,20 @@ func (m *Manager) AuthorizeDBAccess(serviceID string) (optedIn bool, projectID s
 
 // ActiveSEK derives the current week's SEK_{project,service,week} into RAM (caller must ZeroBytes).
 func (m *Manager) ActiveSEK(projectID, serviceID string) ([]byte, uint64, error) {
+	cleanID, err := crypto.ValidateIdentifier(serviceID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := m.checkServiceNotLocked(cleanID); err != nil {
+		return nil, 0, err
+	}
 	m.mu.RLock()
 	state := m.state
 	week := m.currentWeek
 	smk := append([]byte(nil), m.currentSMK...)
-	lease := m.leases[serviceID]
+	lease := m.leases[cleanID]
 	if lease != nil {
-		if lease.OptedIn && lease.Locked {
+		if lease.OptedIn && (lease.Locked || (!lease.Persistent && !lease.ExpiresAt.IsZero() && m.nowFn().After(lease.ExpiresAt))) {
 			m.mu.RUnlock()
 			crypto.ZeroBytes(smk)
 			return nil, 0, ErrServiceLocked
@@ -967,13 +1170,19 @@ func (m *Manager) ActiveSEK(projectID, serviceID string) ([]byte, uint64, error)
 	m.mu.RUnlock()
 	defer crypto.ZeroBytes(smk)
 
+	if projectID == "" && m.store != nil {
+		if rec, gerr := m.store.GetService(cleanID); gerr == nil && rec != nil && rec.ProjectID != "" {
+			projectID = rec.ProjectID
+		}
+	}
+
 	if state != StateActive && state != StateGrace {
 		return nil, 0, ErrVaultLocked
 	}
 	if len(smk) != crypto.KeySize {
 		return nil, 0, ErrVaultLocked
 	}
-	sek, err := crypto.DeriveServiceSEK(smk, projectID, serviceID, week)
+	sek, err := crypto.DeriveServiceSEK(smk, projectID, cleanID, week)
 	return sek, week, err
 }
 
@@ -998,6 +1207,12 @@ func (m *Manager) SEKForWeek(projectID, serviceID string, week uint64) ([]byte, 
 	m.mu.RUnlock()
 	defer crypto.ZeroBytes(smk)
 
+	if projectID == "" && m.store != nil {
+		if rec, gerr := m.store.GetService(serviceID); gerr == nil && rec != nil && rec.ProjectID != "" {
+			projectID = rec.ProjectID
+		}
+	}
+
 	if state != StateActive && state != StateGrace {
 		return nil, ErrVaultLocked
 	}
@@ -1018,6 +1233,9 @@ func (m *Manager) SEKForWeekOrFetch(projectID, serviceID string, week uint64) ([
 	if st.State != StateActive && st.State != StateGrace {
 		return nil, err
 	}
+	if week == 0 || week > st.CurrentWeek+1 {
+		return nil, fmt.Errorf("requested week %d out of valid bounds (current=%d)", week, st.CurrentWeek)
+	}
 	m.mu.RLock()
 	resolvedProj := projectID
 	if resolvedProj == "" {
@@ -1026,6 +1244,11 @@ func (m *Manager) SEKForWeekOrFetch(projectID, serviceID string, week uint64) ([
 		}
 	}
 	m.mu.RUnlock()
+	if resolvedProj == "" && m.store != nil {
+		if rec, gerr := m.store.GetService(serviceID); gerr == nil && rec != nil && rec.ProjectID != "" {
+			resolvedProj = rec.ProjectID
+		}
+	}
 
 	sctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -1044,10 +1267,10 @@ func (m *Manager) checkServiceNotLocked(cleanID string) error {
 	state := m.state
 	lease := m.leases[cleanID]
 	leaseLocked := false
-	if lease != nil && lease.OptedIn {
+	if lease != nil {
 		if lease.Locked {
 			leaseLocked = true
-		} else if !lease.Persistent && !lease.ExpiresAt.IsZero() && m.nowFn().After(lease.ExpiresAt) {
+		} else if lease.OptedIn && !lease.Persistent && !lease.ExpiresAt.IsZero() && m.nowFn().After(lease.ExpiresAt) {
 			leaseLocked = true
 		}
 	}
@@ -1060,8 +1283,17 @@ func (m *Manager) checkServiceNotLocked(cleanID string) error {
 		return ErrServiceLocked
 	}
 	if m.store != nil {
-		if rec, err := m.store.GetService(cleanID); err == nil && rec != nil && rec.Locked {
-			return ErrServiceLocked
+		rec, err := m.store.GetService(cleanID)
+		if err != nil {
+			return err
+		}
+		if rec != nil {
+			if rec.Locked {
+				return ErrServiceLocked
+			}
+			if rec.OptedIn && !rec.LeasePersistent && !rec.LeaseExpiresAt.IsZero() && m.now().After(rec.LeaseExpiresAt) {
+				return ErrServiceLocked
+			}
 		}
 	}
 	return nil
@@ -1096,7 +1328,7 @@ func (m *Manager) EnsureServiceDEK(serviceID, projectID string) ([]byte, string,
 			ServiceID:    cleanID,
 			ProjectID:    projectID,
 			CurrentKeyID: crypto.DefaultKeyID,
-			CreatedAt:    m.nowFn(),
+			CreatedAt:    m.now(),
 		}
 	} else if rec.ProjectID != "" {
 		projectID = rec.ProjectID
@@ -1119,7 +1351,7 @@ func (m *Manager) EnsureServiceDEK(serviceID, projectID string) ([]byte, string,
 		return dek, parsed.KeyID, projectID, nil
 	}
 
-	// Provision new DEK wrapped with current SEK_w
+	// Provision new DEK wrapped with current SEK_w, then persist atomically via UpdateService.
 	sek, week, err := m.ActiveSEK(projectID, cleanID)
 	if err != nil {
 		return nil, "", "", err
@@ -1134,13 +1366,61 @@ func (m *Manager) EnsureServiceDEK(serviceID, projectID string) ([]byte, string,
 		crypto.ZeroBytes(dek)
 		return nil, "", "", err
 	}
-	rec.WrappedDEK = wrapped
-	rec.WrapWeek = week
-	rec.CurrentKeyID = crypto.DefaultKeyID
-	rec.RotatedAt = m.nowFn()
-	if err := m.store.SaveService(rec); err != nil {
+	if projectID == "" {
+		if cleanID == crypto.ControlPlaneServiceID {
+			projectID = "control-plane"
+		} else {
+			projectID = "default"
+		}
+	}
+
+	var racedWrapped string
+	var racedProj string
+	now := m.now()
+	uerr := m.store.UpdateService(cleanID, func(cur *crypto.ServiceKeyRecord) error {
+		if cur.WrappedDEK != "" {
+			racedWrapped = cur.WrappedDEK
+			if cur.ProjectID != "" {
+				racedProj = cur.ProjectID
+			} else {
+				racedProj = projectID
+			}
+			return errUseExistingDEK
+		}
+		if cur.ProjectID == "" {
+			cur.ProjectID = projectID
+		} else {
+			projectID = cur.ProjectID
+		}
+		if cur.CreatedAt.IsZero() {
+			cur.CreatedAt = now
+		}
+		cur.WrappedDEK = wrapped
+		cur.WrapWeek = week
+		cur.CurrentKeyID = crypto.DefaultKeyID
+		cur.RotatedAt = now
+		return nil
+	})
+	if errors.Is(uerr, errUseExistingDEK) && racedWrapped != "" {
 		crypto.ZeroBytes(dek)
-		return nil, "", "", err
+		parsed, perr := crypto.ParseToken(racedWrapped)
+		if perr != nil {
+			return nil, "", "", perr
+		}
+		rsek, serr := m.SEKForWeekOrFetch(racedProj, cleanID, parsed.Week)
+		if serr != nil {
+			return nil, "", "", serr
+		}
+		defer crypto.ZeroBytes(rsek)
+		existingDEK, _, derr := crypto.UnwrapDEK(rsek, racedWrapped)
+		if derr != nil {
+			return nil, "", "", derr
+		}
+		return existingDEK, parsed.KeyID, racedProj, nil
+	}
+	if uerr != nil {
+		crypto.ZeroBytes(dek)
+		return nil, "", "", uerr
 	}
 	return dek, crypto.DefaultKeyID, projectID, nil
 }
@@ -1148,9 +1428,21 @@ func (m *Manager) EnsureServiceDEK(serviceID, projectID string) ([]byte, string,
 // EncryptTransit encrypts plaintext for serviceID using either ephemeral weekly SEK ("epoch")
 // or the service's persistent wrapped DEK ("persistent").
 func (m *Manager) EncryptTransit(serviceID, projectID, contextStr, mode string, plaintext []byte) (string, error) {
-	if m.Status().State == StateLocked {
-		return "", ErrVaultLocked
+	cleanID, err := crypto.ValidateIdentifier(serviceID)
+	if err != nil {
+		return "", err
 	}
+	if err := m.checkServiceNotLocked(cleanID); err != nil {
+		return "", err
+	}
+	if optedIn, allowed, perr := m.GetServicePolicy(cleanID); perr != nil {
+		return "", perr
+	} else if !optedIn {
+		return "", ErrServiceNotOptedIn
+	} else if !allowed {
+		return "", ErrServiceLocked
+	}
+	serviceID = cleanID
 	if mode == "" || mode == "epoch" {
 		sek, week, err := m.ActiveSEK(projectID, serviceID)
 		if err != nil {
@@ -1219,7 +1511,8 @@ func (m *Manager) DecryptTransit(serviceID, projectID, contextStr, token string)
 	return crypto.DecryptToken(sek, parsed, contextStr)
 }
 
-// WrapBackupDEK wraps a backup tarball/stream DEK under the service SEK_w.
+// WrapBackupDEK wraps a backup tarball/stream DEK under the service's persistent DEK
+// (week = 0, re-wrapped automatically across weekly epoch rotations via keystore).
 func (m *Manager) WrapBackupDEK(serviceID, projectID string, rawDEK []byte) (string, error) {
 	cleanID, err := crypto.ValidateIdentifier(serviceID)
 	if err != nil {
@@ -1229,25 +1522,26 @@ func (m *Manager) WrapBackupDEK(serviceID, projectID string, rawDEK []byte) (str
 		return "", err
 	}
 	serviceID = cleanID
-	sek, week, err := m.ActiveSEK(projectID, serviceID)
+	dek, _, _, err := m.EnsureServiceDEK(serviceID, projectID)
 	if err != nil {
 		return "", err
 	}
-	defer crypto.ZeroBytes(sek)
-	subkey, err := crypto.DerivePurposeSubkey(sek, "backup-wrap")
+	defer crypto.ZeroBytes(dek)
+	subkey, err := crypto.DerivePurposeSubkey(dek, "backup-wrap")
 	if err != nil {
 		return "", err
 	}
 	defer crypto.ZeroBytes(subkey)
-	aad := crypto.FormatAAD(week, serviceID, "bak1", "backup-dek")
+	aad := crypto.FormatAAD(0, serviceID, "bak1", "backup-dek")
 	blob, err := crypto.EncryptAEAD(subkey, rawDEK, aad)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("grid:v1:%d:%s:bak1:%s", week, serviceID, base64.RawURLEncoding.EncodeToString(blob)), nil
+	return fmt.Sprintf("grid:v1:0:%s:bak1:%s", serviceID, base64.RawURLEncoding.EncodeToString(blob)), nil
 }
 
-// UnwrapBackupDEK recovers a backup DEK, returning an error if wrong service or locked.
+// UnwrapBackupDEK recovers a backup DEK (supporting both week=0 DEK-wrapped and legacy week>0 SEK-wrapped tokens),
+// returning an error if wrong service or locked.
 func (m *Manager) UnwrapBackupDEK(serviceID, projectID, wrappedToken string) ([]byte, error) {
 	cleanID, err := crypto.ValidateIdentifier(serviceID)
 	if err != nil {
@@ -1263,12 +1557,22 @@ func (m *Manager) UnwrapBackupDEK(serviceID, projectID, wrappedToken string) ([]
 	if parsed.ServiceID != cleanID {
 		return nil, fmt.Errorf("backup token belongs to service %s, not %s", parsed.ServiceID, cleanID)
 	}
-	sek, err := m.SEKForWeekOrFetch(projectID, parsed.ServiceID, parsed.Week)
-	if err != nil {
-		return nil, err
+	var baseKey []byte
+	if parsed.Week == 0 {
+		dek, _, _, derr := m.EnsureServiceDEK(parsed.ServiceID, projectID)
+		if derr != nil {
+			return nil, derr
+		}
+		baseKey = dek
+	} else {
+		sek, serr := m.SEKForWeekOrFetch(projectID, parsed.ServiceID, parsed.Week)
+		if serr != nil {
+			return nil, serr
+		}
+		baseKey = sek
 	}
-	defer crypto.ZeroBytes(sek)
-	subkey, err := crypto.DerivePurposeSubkey(sek, "backup-wrap")
+	defer crypto.ZeroBytes(baseKey)
+	subkey, err := crypto.DerivePurposeSubkey(baseKey, "backup-wrap")
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -10,6 +11,7 @@ class TestInstallScript(unittest.TestCase):
         self.test_dir = tempfile.mkdtemp()
         self.install_script = os.path.abspath("install.sh")
         self.env_file = os.path.join(self.test_dir, ".env")
+        self._orig_path = os.environ.get("PATH", "")
 
         # Copy install script to temp dir
         shutil.copy(self.install_script, os.path.join(self.test_dir, "install.sh"))
@@ -17,7 +19,7 @@ class TestInstallScript(unittest.TestCase):
         # Mock commands that might fail or have side effects
         self.mock_bin_dir = os.path.join(self.test_dir, "bin")
         os.makedirs(self.mock_bin_dir)
-        os.environ["PATH"] = f"{self.mock_bin_dir}:{os.environ['PATH']}"
+        os.environ["PATH"] = f"{self.mock_bin_dir}{os.pathsep}{self._orig_path}"
 
         # Mock docker
         with open(os.path.join(self.mock_bin_dir, "docker"), "w") as f:
@@ -30,6 +32,7 @@ class TestInstallScript(unittest.TestCase):
         os.chmod(os.path.join(self.mock_bin_dir, "curl"), 0o755)
 
     def tearDown(self):
+        os.environ["PATH"] = self._orig_path
         shutil.rmtree(self.test_dir)
 
     def test_install_ip_mode_non_interactive(self):
@@ -63,7 +66,7 @@ print(f'REDIS_PASSWORD={redis_pass}')
 print(f'GATEWAY_SECRET={gateway_secret}')
 print(f'GITHUB_WEBHOOK_SECRET={webhook_secret}')
 """
-        result = subprocess.run(["python3", "-c", script], capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
         output = result.stdout
 

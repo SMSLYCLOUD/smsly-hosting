@@ -19,7 +19,6 @@ from apps.teams.permissions import (
     assert_can_write,
     get_team_q_filter,
     user_can_read,
-    user_is_team_admin,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,9 +46,9 @@ def list_services(user_id: str | None = None, user_email: str | None = None) -> 
     """List all deployed ecosystem services and their current status."""
     try:
         user = _resolve_user(user_id, user_email)
-        services = Service.objects.all()
-        if user:
-            services = services.filter(get_team_q_filter(user))
+        if not user:
+            return [{"error": "Authentication required: caller identity missing."}]
+        services = Service.objects.filter(get_team_q_filter(user))
 
         results = []
         for svc in services:
@@ -71,8 +70,10 @@ def get_deployment_status(deployment_id: str, user_id: str | None = None, user_e
     """Get detailed status, stage timings, and commit hash for a deployment."""
     try:
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return {"error": "Authentication required: caller identity missing."}
         deploy = Deployment.objects.get(id=deployment_id)
-        if user and deploy.service and not user_can_read(user, deploy.service):
+        if not deploy.service or not user_can_read(user, deploy.service):
             return {"error": "Permission denied: You do not have read access to this deployment's service."}
 
         return {
@@ -94,8 +95,10 @@ def get_service_logs(service_id: str, lines: int = 50, user_id: str | None = Non
     """Fetch the latest deployment or runtime logs for a service."""
     try:
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return "Error: Authentication required: caller identity missing."
         svc = Service.objects.get(id=service_id)
-        if user and not user_can_read(user, svc):
+        if not user_can_read(user, svc):
             return "Error: Permission denied. You do not have read access to this service."
 
         latest_deploy = svc.deployments.order_by('-created_at').first()
@@ -106,7 +109,9 @@ def get_service_logs(service_id: str, lines: int = 50, user_id: str | None = Non
         if not log_content:
             return "No logs recorded for latest deployment."
 
-        log_lines = log_content.splitlines()
+        from apps.deployments.utils.log_scrub import mask_secrets_in_text
+        scrubbed = mask_secrets_in_text(log_content) or ""
+        log_lines = scrubbed.splitlines()
         return "\n".join(log_lines[-lines:])
     except ObjectDoesNotExist:
         return f"Error: Service {service_id} not found."
@@ -118,8 +123,10 @@ def get_service_env_vars(service_id: str, user_id: str | None = None, user_email
     """Get environment variables for a service. Secret values are masked."""
     try:
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return [{"error": "Authentication required: caller identity missing."}]
         svc = Service.objects.get(id=service_id)
-        if user and not user_can_read(user, svc):
+        if not user_can_read(user, svc):
             return [{"error": "Permission denied: You do not have read access to this service."}]
 
         from apps.deployments.serializers.service import _must_mask_env_value
@@ -140,19 +147,60 @@ def get_service_env_vars(service_id: str, user_id: str | None = None, user_email
         return [{"error": f"Error: {e!s}"}]
 
 
+_DANGEROUS_ENV_KEYS = frozenset({
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "NODE_OPTIONS",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "BASH_ENV",
+    "ENV",
+    "PERL5OPT",
+    "RUBYOPT",
+    "DYLD_INSERT_LIBRARIES",
+})
+
+
+def _validate_and_scrub_env_entry(key: str, value: str) -> tuple[str | None, str | None, str | None]:
+    """Validate an env var key and scrub/validate its value.
+
+    Returns ``(clean_key, clean_value, error_message)``.
+    """
+    from apps.deployments.utils.env_sanitizer import is_placeholder, sanitize_env_value
+    from apps.deployments.views._helpers import _is_valid_env_key
+
+    clean_key = str(key or "").strip()
+    if not clean_key or clean_key.upper() in _DANGEROUS_ENV_KEYS or not _is_valid_env_key(clean_key):
+        return None, None, f"Environment variable key '{clean_key}' is invalid or restricted."
+
+    cleaned = sanitize_env_value(value, key=clean_key, allow_empty=True)
+    if cleaned is None or is_placeholder(cleaned):
+        cleaned = ""
+    if isinstance(cleaned, str) and cleaned.startswith("gAAAA"):
+        return None, None, f"Environment variable '{clean_key}' appears to be encrypted ciphertext; supply plaintext."
+    return clean_key, str(cleaned), None
+
+
 def set_service_env_var(service_id: str, key: str, value: str, is_secret: bool = False, user_id: str | None = None, user_email: str | None = None) -> dict[str, str]:
     """Set or update an environment variable for a service."""
     try:
+        clean_key, clean_value, err = _validate_and_scrub_env_entry(key, value)
+        if err or not clean_key:
+            return {"error": err or "Invalid environment variable key."}
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return {"error": "Authentication required: caller identity missing."}
         svc = Service.objects.get(id=service_id)
-        if user:
-            assert_can_write(user, svc, action='modify environment variables')
+        assert_can_write(user, svc, action='modify environment variables')
+
+        if EnvironmentVariable.objects.filter(service=svc, key=clean_key, is_locked=True).exists():
+            return {"error": f"Environment variable '{clean_key}' is locked and cannot be modified."}
 
         ev, created = EnvironmentVariable.objects.update_or_create(
             service=svc,
-            key=key,
+            key=clean_key,
             defaults={
-                "value": value,
+                "value": clean_value,
                 "is_secret": is_secret,
                 "source": "USER_MCP"
             }
@@ -168,9 +216,13 @@ def delete_service_env_var(service_id: str, key: str, user_id: str | None = None
     """Delete an environment variable from a service."""
     try:
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return {"error": "Authentication required: caller identity missing."}
         svc = Service.objects.get(id=service_id)
-        if user:
-            assert_can_delete(user, svc, action='delete environment variable')
+        assert_can_delete(user, svc)
+
+        if svc.env_vars.filter(key=key, is_locked=True).exists():
+            return {"error": f"Environment variable '{key}' is locked and cannot be deleted."}
 
         deleted_count, _ = svc.env_vars.filter(key=key).delete()
         if deleted_count > 0:
@@ -186,11 +238,22 @@ def trigger_service_rebuild(service_id: str, user_id: str | None = None, user_em
     """Trigger an automated deployment rebuild for a service (auto-remediation)."""
     try:
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return {"error": "Authentication required: caller identity missing."}
         svc = Service.objects.get(id=service_id)
-        if user:
-            assert_can_write(user, svc, action='trigger deployment rebuild')
-            if not user_is_team_admin(user, svc):
-                return {"error": "Only team admins can trigger rebuilds."}
+        assert_can_write(user, svc, action='trigger deployment rebuild')
+
+        if getattr(svc, "require_deploy_approval", False):
+            new_deploy = Deployment.objects.create(
+                service=svc,
+                status=Deployment.Status.AWAITING_APPROVAL,
+                commit_hash=getattr(svc, "latest_commit", "latest")
+            )
+            return {
+                "status": "awaiting_approval",
+                "deployment_id": str(new_deploy.id),
+                "service": svc.name,
+            }
 
         new_deploy = Deployment.objects.create(
             service=svc,
@@ -212,8 +275,10 @@ def get_error_diagnostics(deployment_id: str, user_id: str | None = None, user_e
     """Analyze deployment failure logs and suggest auto-remediation actions."""
     try:
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return {"error": "Authentication required: caller identity missing."}
         deploy = Deployment.objects.get(id=deployment_id)
-        if user and deploy.service and not user_can_read(user, deploy.service):
+        if not deploy.service or not user_can_read(user, deploy.service):
             return {"error": "Permission denied: You do not have read access to this deployment's service."}
 
         if deploy.status != "FAILED":
@@ -253,21 +318,22 @@ def list_projects(user_id: str | None = None, user_email: str | None = None) -> 
     try:
         from django.db.models import Q
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return [{"error": "Authentication required: caller identity missing."}]
         projects = Project.objects.all()
-        if user:
-            if not user.is_superuser:
-                # Project-correct scoping: owned OR team-member. NOTE:
-                # get_team_q_filter() builds service-shaped lookups
-                # (project__team_id) which raise FieldError on Project
-                # querysets — do not use it here.
-                from apps.teams.models import TeamMember
-                from django.utils import timezone
-                team_ids = list(TeamMember.objects.filter(
-                    user=user, is_active=True,
-                ).exclude(
-                    expires_at__isnull=False, expires_at__lt=timezone.now(),
-                ).values_list('team_id', flat=True))
-                projects = projects.filter(Q(owner=user) | Q(team_id__in=team_ids))
+        if not user.is_superuser:
+            # Project-correct scoping: owned OR team-member. NOTE:
+            # get_team_q_filter() builds service-shaped lookups
+            # (project__team_id) which raise FieldError on Project
+            # querysets — do not use it here.
+            from apps.teams.models import TeamMember
+            from django.utils import timezone
+            team_ids = list(TeamMember.objects.filter(
+                user=user, is_active=True,
+            ).exclude(
+                expires_at__isnull=False, expires_at__lt=timezone.now(),
+            ).values_list('team_id', flat=True))
+            projects = projects.filter(Q(owner=user) | Q(team_id__in=team_ids))
 
         results = []
         for proj in projects:
@@ -287,8 +353,10 @@ def get_project_services(project_id: str, user_id: str | None = None, user_email
     """Get all services deployed within a specific project."""
     try:
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return [{"error": "Authentication required: caller identity missing."}]
         proj = Project.objects.get(id=project_id)
-        if user and not user_can_read(user, proj):
+        if not user_can_read(user, proj):
             return [{"error": "Permission denied: You do not have read access to this project."}]
 
         services = Service.objects.filter(project=proj)
@@ -313,17 +381,28 @@ def bulk_import_env_vars(service_id: str, env_vars: dict[str, str], is_secret: b
     """Import multiple environment variables or secrets at once into a service."""
     try:
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return {"error": "Authentication required: caller identity missing."}
         svc = Service.objects.get(id=service_id)
-        if user:
-            assert_can_write(user, svc, action='bulk import environment variables')
+        assert_can_write(user, svc, action='bulk import environment variables')
+
+        locked_keys = set(svc.env_vars.filter(is_locked=True).values_list("key", flat=True))
+        validated_items: list[tuple[str, str]] = []
+        for key, value in env_vars.items():
+            clean_key, clean_value, err = _validate_and_scrub_env_entry(key, str(value))
+            if err or not clean_key:
+                return {"error": err or "Invalid environment variable."}
+            if clean_key in locked_keys:
+                return {"error": f"Environment variable '{clean_key}' is locked and cannot be modified."}
+            validated_items.append((clean_key, clean_value or ""))
 
         updated_keys = []
-        for key, value in env_vars.items():
+        for clean_key, clean_value in validated_items:
             ev, _ = EnvironmentVariable.objects.update_or_create(
                 service=svc,
-                key=key,
+                key=clean_key,
                 defaults={
-                    "value": str(value),
+                    "value": clean_value,
                     "is_secret": is_secret,
                     "source": "USER_MCP"
                 }
@@ -340,8 +419,10 @@ def list_service_addons(service_id: str, user_id: str | None = None, user_email:
     """List all databases, caches, and storage addons attached to a service."""
     try:
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return [{"error": "Authentication required: caller identity missing."}]
         svc = Service.objects.get(id=service_id)
-        if user and not user_can_read(user, svc):
+        if not user_can_read(user, svc):
             return [{"error": "Permission denied: You do not have read access to this service."}]
 
         results = []
@@ -361,39 +442,55 @@ def list_service_addons(service_id: str, user_id: str | None = None, user_email:
 
 
 def provision_service_addon(service_id: str, addon_type: str, user_id: str | None = None, user_email: str | None = None) -> dict[str, Any]:
-    """Trigger automated provisioning of an addon (POSTGRES, REDIS, MONGODB, etc.) for a service."""
+    """Queue automated provisioning of an addon (POSTGRES, REDIS, MONGODB, etc.) for a service."""
     try:
-        user = _resolve_user(user_id, user_email)
-        svc = Service.objects.get(id=service_id)
-        if user:
-            assert_can_write(user, svc, action='provision database addon')
+        from django.conf import settings
+        from django.db import transaction
+        from apps.addons.tasks.crud import provision_addon_task
 
-        from apps.addons.services.addon_provisioner import addon_provisioner
-        addon_type_upper = addon_type.upper()
+        user = _resolve_user(user_id, user_email)
+        if not user:
+            return {"error": "Authentication required: caller identity missing."}
+        svc = Service.objects.get(id=service_id)
+        assert_can_write(user, svc, action='provision database addon')
+
+        addon_type_upper = str(addon_type or "").strip().upper()
         if addon_type_upper not in dict(Addon.Type.choices):
             return {"error": f"Unsupported addon type: {addon_type}. Valid options: {list(dict(Addon.Type.choices).keys())}"}
 
-        addon, _ = Addon.objects.get_or_create(
-            service=svc,
-            addon_type=addon_type_upper,
-            defaults={
-                "name": f"{addon_type_upper.lower()}-{svc.name}"[:255],
-                "status": Addon.Status.PROVISIONING
-            }
-        )
-        _, url = addon_provisioner.provision_dispatch(addon)
-        if url:
-            addon.connection_url = url
-            addon.status = Addon.Status.ACTIVE
-            addon.save()
+        with transaction.atomic():
+            if not bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False)):
+                from apps.billing.services.metering import UsageMeter
+                allowed, _ = UsageMeter().check_quota(user, "ADDON", requested_amount=1)
+                if not allowed:
+                    return {"error": "Addon quota exceeded for your current subscription plan."}
 
-            env_key = addon_provisioner.ENV_KEY_MAP.get(addon_type_upper, f"{addon_type_upper}_URL")
-            EnvironmentVariable.objects.update_or_create(
-                service=svc, key=env_key,
-                defaults={'value': url, 'is_secret': True, 'source': 'MCP_ADDON'}
+            addon, created = Addon.objects.get_or_create(
+                service=svc,
+                addon_type=addon_type_upper,
+                defaults={
+                    "name": f"{addon_type_upper.lower()}-{svc.name}"[:255],
+                    "status": Addon.Status.PROVISIONING,
+                },
             )
-            return {"status": "provisioned", "addon_id": str(addon.id), "env_key": env_key}
-        return {"status": getattr(addon, "status", "UNKNOWN"), "addon_id": str(addon.id), "message": "Provisioning dispatched."}
+            if not created and addon.status == Addon.Status.ACTIVE:
+                return {
+                    "status": "already_active",
+                    "addon_id": str(addon.id),
+                    "addon_type": addon_type_upper,
+                }
+            if not created and addon.status != Addon.Status.PROVISIONING:
+                addon.status = Addon.Status.PROVISIONING
+                addon.save(update_fields=["status"])
+
+        task = provision_addon_task.delay(addon_id=str(addon.id))
+        return {
+            "status": "provisioning_queued",
+            "addon_id": str(addon.id),
+            "addon_type": addon_type_upper,
+            "task_id": getattr(task, "id", None),
+            "message": "Addon provisioning queued asynchronously.",
+        }
     except Exception as e:
         return {"error": f"Permission denied or addon provisioning failed: {e!s}"}
 
@@ -402,8 +499,10 @@ def get_exhaustive_deployment_diagnostics(deployment_id: str, user_id: str | Non
     """Parse and return structured telemetry from the 9 exhaustive logging pillars."""
     try:
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return {"error": "Authentication required: caller identity missing."}
         deploy = Deployment.objects.get(id=deployment_id)
-        if user and deploy.service and not user_can_read(user, deploy.service):
+        if not deploy.service or not user_can_read(user, deploy.service):
             return {"error": "Permission denied: You do not have read access to this deployment's service."}
 
         logs = getattr(deploy, "build_logs", "") or getattr(deploy, "runtime_logs", "") or ""
@@ -456,8 +555,10 @@ def list_managed_servers(user_id: str | None = None, user_email: str | None = No
     """List all cloud nodes and servers in the cluster with their online status."""
     try:
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return [{"error": "Authentication required: caller identity missing."}]
         servers = ManagedServer.objects.all()
-        if user and not user.is_superuser:
+        if not user.is_superuser:
             servers = servers.filter(owner=user)
 
         results = []
@@ -478,8 +579,10 @@ def get_server_health(server_id: str, user_id: str | None = None, user_email: st
     """Get detailed health and provisioning status for a managed cluster server."""
     try:
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return {"error": "Authentication required: caller identity missing."}
         srv = ManagedServer.objects.get(id=server_id)
-        if user and not user.is_superuser and srv.owner != user:
+        if not user.is_superuser and srv.owner != user:
             return {"error": "Permission denied: Only server owners or platform admins can view server diagnostics."}
 
         return {
@@ -500,32 +603,72 @@ def deploy_from_local_archive(service_id: str, file_path: str, user_id: str | No
     """Deploy a service directly from a local source code archive (.zip, .tar.gz, .tgz)."""
     try:
         import os
+        import tarfile
+        import zipfile
         from pathlib import Path
+        from django.conf import settings
+
         user = _resolve_user(user_id, user_email)
+        if not user or not getattr(user, "is_active", False):
+            return {"error": "Authentication required: a valid active user is required."}
+        if not getattr(user, "is_superuser", False):
+            return {"error": "Permission denied: deploy_from_local_archive requires superuser privileges."}
+
         svc = Service.objects.get(id=service_id)
-        if user:
-            assert_can_write(user, svc, action='deploy from local file archive')
+        assert_can_write(user, svc, action='deploy from local file archive')
 
-        if not os.path.exists(file_path):
-            return {"error": f"Local file archive not found at path: {file_path}"}
-
-        filename_lower = file_path.lower()
+        raw_path = str(file_path or "").strip()
+        filename_lower = raw_path.lower()
         if not (filename_lower.endswith('.zip') or filename_lower.endswith('.tar.gz') or filename_lower.endswith('.tgz')):
             return {"error": "Invalid archive format. Allowed extensions: .zip, .tar.gz, .tgz"}
 
-        file_size = os.path.getsize(file_path)
+        allowed_root = os.path.realpath("/app/var/uploads")
+        real_path = os.path.realpath(raw_path)
+        if not real_path.startswith(allowed_root + os.sep):
+            return {"error": "Archive path must be inside /app/var/uploads."}
+
+        if not os.path.isfile(real_path):
+            return {"error": f"Local file archive not found at path: {raw_path}"}
+
+        file_size = os.path.getsize(real_path)
         if file_size > 100 * 1024 * 1024:
             return {"error": f"Archive size ({file_size / 1024 / 1024:.1f}MB) exceeds 100MB limit."}
 
+        max_uncompressed = 500 * 1024 * 1024
+        if filename_lower.endswith('.zip'):
+            with zipfile.ZipFile(real_path, 'r') as zf:
+                total_uncompressed = 0
+                for info in zf.infolist():
+                    norm_name = info.filename.replace("\\", "/")
+                    if norm_name.startswith("/") or ".." in norm_name.split("/"):
+                        return {"error": f"Unsafe archive entry path: {info.filename}"}
+                    if ((info.external_attr >> 16) & 0o170000) == 0o120000:
+                        return {"error": f"Symbolic links are not allowed in archive: {info.filename}"}
+                    total_uncompressed += max(0, int(info.file_size))
+                    if total_uncompressed > max_uncompressed:
+                        return {"error": "Archive uncompressed size exceeds 500MB safety limit."}
+        else:
+            with tarfile.open(real_path, 'r:*') as tf:
+                total_uncompressed = 0
+                for member in tf.getmembers():
+                    norm_name = member.name.replace("\\", "/")
+                    if norm_name.startswith("/") or ".." in norm_name.split("/"):
+                        return {"error": f"Unsafe archive entry path: {member.name}"}
+                    if member.issym() or member.islnk() or member.ischr() or member.isblk() or member.isfifo() or member.isdev():
+                        return {"error": f"Special or link entries are not allowed in archive: {member.name}"}
+                    total_uncompressed += max(0, int(member.size))
+                    if total_uncompressed > max_uncompressed:
+                        return {"error": "Archive uncompressed size exceeds 500MB safety limit."}
+
         svc.deploy_type = 'UPLOAD'
-        svc.repository_url = Path(file_path).resolve().as_uri()
+        svc.repository_url = Path(real_path).as_uri()
         svc.save(update_fields=['deploy_type', 'repository_url', 'updated_at'])
 
         new_deploy = Deployment.objects.create(
             service=svc,
             status=Deployment.Status.QUEUED,
-            commit_hash=f"mcp-upload-{os.path.basename(file_path)[:15]}",
-            commit_message=f"MCP Local Archive Deploy: {os.path.basename(file_path)}"
+            commit_hash=f"mcp-upload-{os.path.basename(real_path)[:15]}",
+            commit_message=f"MCP Local Archive Deploy: {os.path.basename(real_path)}"
         )
         provider_id = getattr(svc, "provider_id", "local")
         smart_deploy_task.delay(str(new_deploy.id), str(provider_id), skip_review=True)
@@ -548,13 +691,14 @@ def search_services(query: str, status: str | None = None, user_id: str | None =
     try:
         from django.db.models import Q
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return [{"error": "Authentication required: caller identity missing."}]
         services = Service.objects.filter(
             Q(name__icontains=query) | Q(slug__icontains=query) | Q(repository_url__icontains=query)
         )
         if status:
             services = services.filter(status=status.upper())
-        if user:
-            services = services.filter(get_team_q_filter(user))
+        services = services.filter(get_team_q_filter(user))
 
         results = []
         for svc in services[:50]:
@@ -576,8 +720,10 @@ def get_service_details(service_id: str, user_id: str | None = None, user_email:
     """Get full service detail: config, resources, HA mode, domains, and recent deployments."""
     try:
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return {"error": "Authentication required: caller identity missing."}
         svc = Service.objects.get(id=service_id)
-        if user and not user_can_read(user, svc):
+        if not user_can_read(user, svc):
             return {"error": "Permission denied: You do not have read access to this service."}
 
         recent = []
@@ -625,8 +771,10 @@ def list_service_deployments(service_id: str, limit: int = 10, user_id: str | No
     """List deployment history for a service, newest first."""
     try:
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return [{"error": "Authentication required: caller identity missing."}]
         svc = Service.objects.get(id=service_id)
-        if user and not user_can_read(user, svc):
+        if not user_can_read(user, svc):
             return [{"error": "Permission denied: You do not have read access to this service."}]
 
         limit = max(1, min(int(limit), 50))
@@ -653,17 +801,16 @@ def list_service_deployments(service_id: str, limit: int = 10, user_id: str | No
 
 
 def cancel_deployment(deployment_id: str, user_id: str | None = None, user_email: str | None = None) -> dict[str, Any]:
-    """Cancel a QUEUED, REVIEW, BUILDING, AWAITING_APPROVAL, or STAGED deployment (team admin only)."""
+    """Cancel a QUEUED, REVIEW, BUILDING, AWAITING_APPROVAL, or STAGED deployment."""
     try:
         from django.utils import timezone
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return {"error": "Authentication required: caller identity missing."}
         deploy = Deployment.objects.get(id=deployment_id)
-        if user:
-            if not deploy.service:
-                return {"error": "Deployment has no service; cannot check permissions."}
-            assert_can_write(user, deploy.service, action='cancel deployment')
-            if not user_is_team_admin(user, deploy.service):
-                return {"error": "Only team admins can cancel deployments."}
+        if not deploy.service:
+            return {"error": "Deployment has no service; cannot check permissions."}
+        assert_can_write(user, deploy.service, action='cancel deployment')
 
         if deploy.status not in (
             Deployment.Status.QUEUED,
@@ -703,20 +850,28 @@ def cancel_deployment(deployment_id: str, user_id: str | None = None, user_email
 
 
 def retry_deployment(deployment_id: str, user_id: str | None = None, user_email: str | None = None) -> dict[str, Any]:
-    """Re-queue a FAILED or CANCELLED deployment (team admin only)."""
+    """Re-queue a FAILED or CANCELLED deployment."""
     try:
         from django.utils import timezone
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return {"error": "Authentication required: caller identity missing."}
         deploy = Deployment.objects.get(id=deployment_id)
-        if user:
-            if not deploy.service:
-                return {"error": "Deployment has no service; cannot check permissions."}
-            assert_can_write(user, deploy.service, action='retry deployment')
-            if not user_is_team_admin(user, deploy.service):
-                return {"error": "Only team admins can retry deployments."}
+        if not deploy.service:
+            return {"error": "Deployment has no service; cannot check permissions."}
+        assert_can_write(user, deploy.service, action='retry deployment')
 
         if deploy.status not in (Deployment.Status.FAILED, Deployment.Status.CANCELLED):
             return {"error": f"Cannot retry deployment in {deploy.status} status. Only FAILED or CANCELLED deployments can be retried."}
+
+        if getattr(deploy.service, "require_deploy_approval", False):
+            deploy.status = Deployment.Status.AWAITING_APPROVAL
+            deploy.build_logs = (
+                f"{deploy.build_logs or ''}"
+                f"\n[MCP] Retry awaiting approval at {timezone.now().isoformat()}.\n"
+            )
+            deploy.save(update_fields=['status', 'build_logs', 'updated_at'])
+            return {"status": "awaiting_approval", "deployment_id": str(deploy.id)}
 
         deploy.status = Deployment.Status.QUEUED
         deploy.build_logs = (
@@ -737,6 +892,8 @@ def get_failed_deployments(limit: int = 10, user_id: str | None = None, user_ema
     """List recent failed deployments across services with a log excerpt for triage."""
     try:
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return [{"error": "Authentication required: caller identity missing."}]
         failed_statuses = [
             Deployment.Status.FAILED,
             Deployment.Status.BUILD_FAILED,
@@ -744,17 +901,22 @@ def get_failed_deployments(limit: int = 10, user_id: str | None = None, user_ema
             Deployment.Status.MIGRATION_FAILED,
             Deployment.Status.HEALTH_CHECK_FAILED,
         ]
-        deploys = Deployment.objects.filter(status__in=failed_statuses).order_by('-created_at')
-        if user:
-            deploys = deploys.filter(service__in=Service.objects.filter(get_team_q_filter(user)))
+        deploys = Deployment.objects.filter(
+            status__in=failed_statuses,
+            service__in=Service.objects.filter(get_team_q_filter(user)),
+        ).order_by('-created_at')
 
         limit = max(1, min(int(limit), 50))
+        from apps.deployments.utils.log_scrub import mask_secrets_in_text
         results = []
         for deploy in deploys[:limit]:
             if user and deploy.service and not user_can_read(user, deploy.service):
                 continue
             logs = getattr(deploy, "build_logs", "") or getattr(deploy, "runtime_logs", "") or ""
-            excerpt_lines = [ln for ln in logs.splitlines() if ln.strip()][-3:]
+            scrubbed_logs = mask_secrets_in_text(logs) or ""
+            excerpt_lines = [ln for ln in scrubbed_logs.splitlines() if ln.strip()][-3:]
+            raw_diag = getattr(deploy, "ai_diagnosis", "") or ""
+            scrubbed_diag = mask_secrets_in_text(raw_diag) or ""
             results.append({
                 "deployment_id": str(deploy.id),
                 "service_id": str(deploy.service.id) if deploy.service else None,
@@ -762,7 +924,7 @@ def get_failed_deployments(limit: int = 10, user_id: str | None = None, user_ema
                 "status": deploy.status,
                 "commit_hash": getattr(deploy, "commit_hash", ""),
                 "created_at": str(deploy.created_at),
-                "ai_diagnosis": (getattr(deploy, "ai_diagnosis", "") or "")[:500] or None,
+                "ai_diagnosis": scrubbed_diag[:500] or None,
                 "log_excerpt": "\n".join(excerpt_lines)[-1500:],
             })
         return results
@@ -774,11 +936,13 @@ def list_all_addons(status: str | None = None, user_id: str | None = None, user_
     """List all addons across services, optionally filtered by status."""
     try:
         user = _resolve_user(user_id, user_email)
-        addons = Addon.objects.select_related("service").all()
+        if not user:
+            return [{"error": "Authentication required: caller identity missing."}]
+        addons = Addon.objects.select_related("service").filter(
+            service__in=Service.objects.filter(get_team_q_filter(user))
+        )
         if status:
             addons = addons.filter(status=status.upper())
-        if user:
-            addons = addons.filter(service__in=Service.objects.filter(get_team_q_filter(user)))
 
         results = []
         for addon in addons[:100]:
@@ -805,8 +969,10 @@ def get_addon_details(addon_id: str, user_id: str | None = None, user_email: str
     try:
         from urllib.parse import urlparse
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return {"error": "Authentication required: caller identity missing."}
         addon = Addon.objects.select_related("service").get(id=addon_id)
-        if user and addon.service and not user_can_read(user, addon.service):
+        if not addon.service or not user_can_read(user, addon.service):
             return {"error": "Permission denied: You do not have read access to this addon's service."}
 
         masked_url, scheme, host, port, database, has_password = None, None, None, None, None, False
@@ -823,8 +989,8 @@ def get_addon_details(addon_id: str, user_id: str | None = None, user_email: str
                 if parsed.port:
                     netloc += f":{parsed.port}"
                 if parsed.username or has_password:
-                    user = parsed.username or ""
-                    netloc = f"{user}:********@{netloc}"
+                    parsed_user = parsed.username or ""
+                    netloc = f"{parsed_user}:********@{netloc}"
                 masked_url = parsed._replace(netloc=netloc).geturl()
             except Exception:
                 masked_url = None
@@ -858,8 +1024,10 @@ def get_service_domains(service_id: str, user_id: str | None = None, user_email:
     try:
         from apps.domains.models.domain import Domain
         user = _resolve_user(user_id, user_email)
+        if not user:
+            return {"error": "Authentication required: caller identity missing."}
         svc = Service.objects.get(id=service_id)
-        if user and not user_can_read(user, svc):
+        if not user_can_read(user, svc):
             return {"error": "Permission denied: You do not have read access to this service."}
 
         managed = []

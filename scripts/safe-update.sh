@@ -21,16 +21,39 @@ BACKUP_DIR="$INSTALL_DIR/.update-backups"
 CLEAN_LOG="/var/log/smsly-clean.log"
 MIN_DISK_MB=5120
 
-# Load .env so POSTGRES_USER / POSTGRES_DB reflect the real deployment.
-# Without this the backup/restore below would target the wrong database or user
-# if the deployment overrides the defaults.
+# Load .env safely so POSTGRES_USER / POSTGRES_DB reflect the real deployment.
 if [ -f "$INSTALL_DIR/.env" ]; then
-    set -a
-    . "$INSTALL_DIR/.env"
-    set +a
+    if ! declare -F env_load_file_safe >/dev/null 2>&1 && [ -f "$INSTALL_DIR/lib/env.sh" ]; then
+        # shellcheck disable=SC1091
+        source "$INSTALL_DIR/lib/env.sh"
+    fi
+    if declare -F env_load_file_safe >/dev/null 2>&1; then
+        env_load_file_safe "$INSTALL_DIR/.env"
+    else
+        while IFS= read -r _env_line || [ -n "$_env_line" ]; do
+            _env_line="${_env_line%$'\r'}"
+            [[ -z "$_env_line" || "$_env_line" =~ ^[[:space:]]*# ]] && continue
+            [[ "$_env_line" == export[[:space:]]* ]] && _env_line="${_env_line#export }"
+            [[ "$_env_line" == *=* ]] || continue
+            _env_key="${_env_line%%=*}"
+            _env_key="${_env_key#"${_env_key%%[![:space:]]*}"}"
+            _env_key="${_env_key%"${_env_key##*[![:space:]]}"}"
+            [[ "$_env_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+            _env_val="${_env_line#*=}"
+            if [[ "$_env_val" == \"*\" && "$_env_val" == *\" && ${#_env_val} -ge 2 ]]; then
+                _env_val="${_env_val:1:${#_env_val}-2}"
+            elif [[ "$_env_val" == \'*\' && "$_env_val" == *\' && ${#_env_val} -ge 2 ]]; then
+                _env_val="${_env_val:1:${#_env_val}-2}"
+            fi
+            export "$_env_key=$_env_val"
+        done < "$INSTALL_DIR/.env"
+        unset _env_line _env_key _env_val
+    fi
 fi
 POSTGRES_USER="${POSTGRES_USER:-smsly_admin}"
 POSTGRES_DB="${POSTGRES_DB:-smsly_hosting}"
+COMPOSE_PROFILES="${COMPOSE_PROFILES:-local-ha,medium,full}"
+export COMPOSE_PROFILES
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
 _log()  { printf "[%s] %s\n" "$(date +%H:%M:%S)" "$*" >> "$CLEAN_LOG"; }
@@ -56,7 +79,7 @@ safe_update_preflight() {
     if ! docker compose -f "$COMPOSE_FILE" rm -f ; then
         _warn "docker compose rm failed (project may not exist yet)"
     fi
-    
+
     # Remove stopped conflicting containers to prevent compose recreating them
     prune_stopped_conflicting() {
         local pattern="$1"
@@ -75,13 +98,17 @@ safe_update_preflight() {
         done
         [ "$removed" -gt 0 ] && _ok "Removed $removed stopped container(s) matching '$pattern'"
     }
-    
+
     prune_stopped_conflicting "smsly-hosting"
     prune_stopped_conflicting "smsly-"
 
-    for cf in "$COMPOSE_FILE" "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml"; do
+    for cf in "$COMPOSE_FILE"; do
         [ -f "$cf" ] || { _fail "Missing: $cf"; return 1; }
     done
+    if [ "${MODE_AGENT_LITE:-false}" != "true" ] && [ "${MODE_NODE:-false}" != "true" ] && [[ "${COMPOSE_FILE:-}" != */docker-compose.agent-lite.yml ]] && [[ "${COMPOSE_FILE:-}" != */docker-compose.node.yml ]]; then
+        local obs_cf="$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml"
+        [ -f "$obs_cf" ] || { _fail "Missing: $obs_cf"; return 1; }
+    fi
     _ok "Compose files: present"
 
     cd "$INSTALL_DIR"
@@ -93,7 +120,23 @@ safe_update_preflight() {
 # ══════════════════════════════════════════════════════════════════════════════
 safe_update_snapshot() {
     _step "Snapshot + DB Backup"
+    cd "$INSTALL_DIR" || { _fail "Cannot cd to $INSTALL_DIR"; return 1; }
+    if [ -f "$SNAPSHOT_FILE" ]; then
+        local _snap_mtime="" _now="" _snap_age=""
+        _snap_mtime=$(stat -c %Y "$SNAPSHOT_FILE" 2>/dev/null || stat -f %m "$SNAPSHOT_FILE" 2>/dev/null || echo 0)
+        _now=$(date +%s)
+        _snap_age=$((_now - _snap_mtime))
+        if [ "$_snap_age" -lt 3600 ] && grep -q '^PREV_HASH=' "$SNAPSHOT_FILE"; then
+            export SNAPSHOT_FILE BACKUP_DIR
+            _ok "Preserving existing fresh snapshot (${_snap_age}s old)"
+            return 0
+        fi
+    fi
+    local _prev_umask
+    _prev_umask=$(umask)
+    umask 077
     mkdir -p "$BACKUP_DIR"
+    chmod 700 "$BACKUP_DIR" || true
     export SNAPSHOT_FILE BACKUP_DIR
 
     local prev_hash
@@ -102,11 +145,11 @@ safe_update_snapshot() {
     else
         prev_hash=$(git rev-parse HEAD  || echo "unknown")
     fi
-    local prev_branch; prev_branch=$(git rev-parse --abbrev-ref HEAD  || echo "main")
+    local prev_branch; prev_branch=$(git rev-parse --abbrev-ref HEAD  || echo "master")
     local backup_file="$BACKUP_DIR/pre-update-$(date +%Y%m%d-%H%M%S).sql"
 
     _progress "Backing up database (timeout: 120s)..."
-    if timeout -k 5 120 docker exec smsly-postgres-primary pg_dump --clean --if-exists -U "$POSTGRES_USER" "$POSTGRES_DB" > "$backup_file" ; then
+    if timeout -k 5 120 docker exec -e PGPASSWORD="${POSTGRES_PASSWORD:-}" smsly-postgres-primary pg_dump --clean --if-exists -U "$POSTGRES_USER" "$POSTGRES_DB" > "$backup_file" ; then
         _ok "DB backup: $(du -h "$backup_file" | cut -f1)"
     else
         _warn "DB backup failed — continuing without safety net"
@@ -129,9 +172,13 @@ safe_update_snapshot() {
     fi
 
     # Redis RDB snapshot (non-fatal — container may not be running)
-    if timeout -k 5 10 docker exec smsly-hosting-redis-1 redis-cli SAVE ; then
+    local _redis_ctr="smsly-redis-primary"
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$_redis_ctr"; then
+        _redis_ctr="smsly-hosting-redis-1"
+    fi
+    if timeout -k 5 10 docker exec -e REDISCLI_AUTH="${REDIS_PASSWORD:-}" "$_redis_ctr" redis-cli SAVE ; then
         _ok "Redis RDB saved"
-        timeout 10 docker cp smsly-hosting-redis-1:/data/dump.rdb "$BACKUP_DIR/pre-update-redis.rdb" || echo -e "${YELLOW}    ⚠ Redis dump copy failed${NC}"
+        timeout 10 docker cp "${_redis_ctr}:/data/dump.rdb" "$BACKUP_DIR/pre-update-redis.rdb" || echo -e "${YELLOW}    ⚠ Redis dump copy failed${NC}"
     else
         _warn "Redis backup skipped (container may not be running)"
     fi
@@ -157,6 +204,7 @@ PREV_BRANCH=$prev_branch
 TIMESTAMP=$(date -Iseconds)
 BACKUP_FILE=$backup_file
 SNAPEOF
+    umask "$_prev_umask"
     _ok "Snapshot: $prev_hash"
     return 0
 }
@@ -165,21 +213,61 @@ SNAPEOF
 safe_update_post_verify() {
     _step "Post-Deploy Health Check"
     local failed=0
-    local core=(smsly-postgres-primary smsly-redis-primary smsly-hosting-rabbitmq-1
-                smsly-hosting-backend-1 smsly-hosting-frontend-1 smsly-hosting-caddy-1
-                smsly-hosting-celery-1 smsly-hosting-celery-beat-1
-                smsly-hosting-socket-proxy-1 smsly-hosting-registry-1
-                smsly-hosting-pgcat-1)
+    local tier0_failed=0
+    local is_agent_lite=false is_node_mode=false
+    if [ "${MODE_AGENT_LITE:-false}" = "true" ] || [ "${NODE_TYPE:-}" = "agent-lite" ] || [ "${MODE:-}" = "agent" ] || [[ "${COMPOSE_FILE:-}" == */docker-compose.agent-lite.yml ]]; then
+        is_agent_lite=true
+    elif [ "${MODE_NODE:-false}" = "true" ] || [ "${NODE_TYPE:-}" = "node" ] || [ "${MODE:-}" = "node" ] || [[ "${COMPOSE_FILE:-}" == */docker-compose.node.yml ]]; then
+        is_node_mode=true
+    fi
+    local db_ha_mode="${DB_HA_ENABLED:-local-ha}"
+
+    local tier0=()
+    local core=()
+    if [ "$is_agent_lite" = "true" ]; then
+        tier0=(smsly-hosting-redis-1 smsly-hosting-backend-1 smsly-hosting-traefik-1)
+        core=(smsly-hosting-redis-1 smsly-hosting-rabbitmq-1 smsly-hosting-backend-1
+              smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1 smsly-hosting-traefik-1)
+    elif [ "$is_node_mode" = "true" ]; then
+        tier0=(smsly-postgres-primary smsly-hosting-redis-1 smsly-hosting-backend-1 smsly-hosting-traefik-1)
+        core=(smsly-postgres-primary smsly-hosting-redis-1 smsly-hosting-rabbitmq-1
+              smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-celery-beat-1
+              smsly-hosting-socket-proxy-1 smsly-hosting-traefik-1)
+    else
+        local db_ctrs=()
+        case "$db_ha_mode" in
+            patroni)  db_ctrs=(smsly-patroni-1 smsly-haproxy) ;;
+            external) db_ctrs=() ;;
+            *)        db_ctrs=(smsly-postgres-primary) ;;
+        esac
+        tier0=("${db_ctrs[@]}" smsly-redis-primary smsly-hosting-pgcat-1
+               smsly-hosting-backend-1 smsly-hosting-frontend-1 smsly-hosting-caddy-1)
+        core=("${db_ctrs[@]}" smsly-redis-primary smsly-hosting-rabbitmq-1
+              smsly-hosting-backend-1 smsly-hosting-frontend-1 smsly-hosting-caddy-1
+              smsly-hosting-celery-1 smsly-hosting-celery-beat-1
+              smsly-hosting-socket-proxy-1 smsly-hosting-registry-1
+              smsly-hosting-pgcat-1)
+    fi
     local observability=(smsly-loki smsly-prometheus smsly-grafana smsly-promtail
                          smsly-docker-labels)
 
     for ctr in "${core[@]}"; do
-        docker inspect "$ctr" --format='{{.State.Running}}'  | grep -q true && \
-            _ok "$ctr" || { _fail "$ctr NOT running"; failed=$((failed + 1)); }
+        if docker inspect "$ctr" --format='{{.State.Running}}' | grep -q true; then
+            _ok "$ctr"
+        else
+            _fail "$ctr NOT running"
+            failed=$((failed + 1))
+            for t0 in "${tier0[@]}"; do
+                if [ "$ctr" = "$t0" ]; then
+                    tier0_failed=$((tier0_failed + 1))
+                    break
+                fi
+            done
+        fi
     done
 
     local obs_file="$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml"
-    if [ -f "$obs_file" ]; then
+    if [ "$is_agent_lite" != "true" ] && [ "$is_node_mode" != "true" ] && [ -f "$obs_file" ]; then
         for ctr in "${observability[@]}"; do
             docker inspect "$ctr" --format='{{.State.Running}}'  | grep -q true && \
                 _ok "$ctr" || { _warn "$ctr not running (observability stack may not be deployed)"; }
@@ -202,10 +290,13 @@ safe_update_post_verify() {
     done
     [ "$traefik_ok" = "true" ] || { _warn "Traefik: not responding"; failed=$((failed + 1)); }
 
-    if [ "$failed" -eq 0 ]; then
+    if [ "$tier0_failed" -gt 0 ]; then
+        _fail "$tier0_failed tier-0 critical service(s) down — failing verification"
+        return 1
+    elif [ "$failed" -eq 0 ]; then
         _ok "All core health checks passed"
     elif [ "$failed" -le 2 ]; then
-        _warn "$failed core health check(s) failed — tolerable"
+        _warn "$failed non-tier-0 core health check(s) failed — tolerable"
     else
         _warn "$failed core health check(s) failed"
     fi
@@ -257,7 +348,7 @@ safe_update_rollback() {
 
     # Clear stale lock from the failed original install.sh
     rm -f /tmp/smsly-install.lock  || true
-    
+
     # Instant rollback: restore images from snapshot instead of rebuilding
     _step "Restoring Docker Images"
     for img in smsly-hosting-backend smsly-hosting-frontend smsly-hosting-celery; do
@@ -265,26 +356,47 @@ safe_update_rollback() {
             docker tag "$img:rollback-safe" "$img:latest"  && _ok "Restored $img:latest" || _warn "Failed to restore $img:latest"
         fi
     done
-    
+
+    local _avail_svcs=""
+    _avail_svcs="$(docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null || true)"
+
     # Ensure the database is up before restoring into it.
-    docker compose -f "$COMPOSE_FILE" up -d --wait --no-deps db \
-        || _warn "Could not ensure postgres-primary is running"
+    if printf '%s\n' "$_avail_svcs" | grep -qx "db"; then
+        docker compose -f "$COMPOSE_FILE" up -d --wait --no-deps db \
+            || _warn "Could not ensure postgres-primary is running"
+    fi
 
     # Stop any app containers left from the failed attempt so the --clean dump
     # does not drop objects while they are connected (avoids partial restore).
-    docker compose -f "$COMPOSE_FILE" stop --timeout 30 backend frontend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
+    local _stop_svcs=()
+    for _s in backend frontend celery celery-worker celery-deploy celery-fast celery-beat pgcat; do
+        if printf '%s\n' "$_avail_svcs" | grep -qx "$_s"; then
+            _stop_svcs+=("$_s")
+        fi
+    done
+    if [ "${#_stop_svcs[@]}" -gt 0 ]; then
+        docker compose -f "$COMPOSE_FILE" stop --timeout 30 "${_stop_svcs[@]}" 2>/dev/null || true
+    fi
 
     # Restore DB BEFORE bringing app containers up, so the --clean dump does not
     # drop objects while backend/celery are connected (transient errors and can
     # leave behind new-version tables from a partial migration).
     if [ -n "${BACKUP_FILE:-}" ] && [ -f "$BACKUP_FILE" ]; then
         _warn "Restoring database from backup..."
-        timeout -k 5 600 docker exec -i smsly-postgres-primary psql -U "$POSTGRES_USER" "$POSTGRES_DB" < "$BACKUP_FILE"  && \
+        timeout -k 5 600 docker exec -i -e PGPASSWORD="${POSTGRES_PASSWORD:-}" smsly-postgres-primary psql -U "$POSTGRES_USER" "$POSTGRES_DB" < "$BACKUP_FILE"  && \
             _ok "DB restored" || _warn "DB restore failed"
     fi
 
     # Restart core services with the restored images (DB is now consistent).
-    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --wait --no-deps backend frontend celery celery-deploy celery-fast celery-beat $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}"  && echo "pgcat")  || _warn "Docker compose up had issues during rollback"
+    local _up_svcs=()
+    for _s in backend frontend celery celery-worker celery-deploy celery-fast celery-beat pgcat; do
+        if printf '%s\n' "$_avail_svcs" | grep -qx "$_s"; then
+            _up_svcs+=("$_s")
+        fi
+    done
+    if [ "${#_up_svcs[@]}" -gt 0 ]; then
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate --wait --no-deps "${_up_svcs[@]}" || _warn "Docker compose up had issues during rollback"
+    fi
 
     # Fix perms
     [ -d /opt/smsly-hosting/prometheus-targets ] && {
@@ -305,8 +417,8 @@ safe_update_cleanup() {
         docker stop "$c_id" || echo -e "${YELLOW}    ⚠ Failed to stop backup container $c_id${NC}"
         docker rm "$c_id"  && count=$((count + 1))
     done
-    # Also cleanup any leftover stopped smsly- containers that compose may try to revive
-    for c_id in $(docker ps -a -q --filter "name=smsly-" --filter "status=exited"  || true); do
+    # Remove only explicitly ephemeral exited containers (preserve sleeping tiers and stopped addons)
+    for c_id in $(docker ps -a -q --filter "label=com.smsly.ephemeral=true" --filter "status=exited"  || true); do
         docker rm "$c_id"  && count=$((count + 1))
     done
     if [ "$count" -gt 0 ]; then
@@ -314,7 +426,7 @@ safe_update_cleanup() {
     else
         _ok "No stale containers to clean"
     fi
-    
+
     # Clean up the rollback tags so old images can be pruned
     _step "Cleaning Up Image Snapshots"
     for img in smsly-hosting-backend smsly-hosting-frontend smsly-hosting-celery; do
@@ -322,7 +434,7 @@ safe_update_cleanup() {
             docker rmi "$img:rollback-safe"  && _ok "Removed tag $img:rollback-safe" || true
         fi
     done
-    
+
     return 0
 }
 
@@ -330,8 +442,8 @@ safe_update_cleanup() {
 # Standalone mode (bash scripts/safe-update.sh)
 # ══════════════════════════════════════════════════════════════════════════════
 if [ "$SAFE_UPDATE_SOURCED" = "false" ]; then
-    safe_update_snapshot
     safe_update_preflight || exit 1
+    safe_update_snapshot
     bash "$INSTALL_DIR/install.sh" --update >> "$CLEAN_LOG"  || { _warn "Update failed — rolling back"; safe_update_rollback; exit 1; }
     sleep 30
     safe_update_post_verify || { _warn "Post-verify failed — rolling back"; safe_update_rollback; exit 1; }

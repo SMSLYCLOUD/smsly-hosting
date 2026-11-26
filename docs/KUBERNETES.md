@@ -1,9 +1,10 @@
 # Kubernetes Deployment Guide
 
 > [!NOTE]
-> **Version**: 1.1.0
-> **Last Updated**: 2026-06-16
+> **Version**: 1.2.0
+> **Last Updated**: 2026-11-25
 > **Changelog**:
+> - v1.2.0: Added StatefulSets for PostgreSQL, Redis, and RabbitMQ; `collectstatic` initContainer; configurable `persistence.accessMode`; writable `/home/smsly` & `/app/backups` `emptyDir`s; `Recreate` strategy for `celery-beat`; worker `terminationGracePeriodSeconds: 360`; tightened `NetworkPolicy` (scoped ingress to backend/frontend, RFC1918+CGNAT egress exceptions); hardened Prometheus probes/resources; fixed `existingSecret` & `redis.auth.enabled=false` chart validators.
 > - v1.1.0: Documented the 2026-06 chart security additions (`securityContext`, `NetworkPolicy`, `PodDisruptionBudget`, per-component `ServiceAccount`, change-me sentinels).
 > - v1.0.1: Linked actual Helm chart directory.
 > - v1.0.0: Initial K8s orchestration guide.
@@ -16,7 +17,7 @@ SMSLY (Grid) can orchestrate deployments onto existing Kubernetes clusters. "Gri
 
 ## Helm Chart
 The SMSLY control plane can be installed directly into your K8s cluster using our Helm chart.
-You can find the charts in [charts/smsly-hosting/](file:///c:/Users/osaretin/Documents/SMSLY/SMSLY_CORE/smsly-hosting/charts/smsly-hosting/).
+You can find the charts in [charts/smsly-hosting/](../charts/smsly-hosting/).
 
 ## Architecture
 When deploying services to Kubernetes, SMSLY uses the `kubernetes` Python client to generate Deployments, Services, and Ingresses dynamically.
@@ -52,23 +53,26 @@ spec:
 
 - **Default-deny** for both Ingress and Egress (`<release>-default-deny`).
 - **Allow intra-namespace** traffic for the release namespace, plus DNS egress to any namespace (UDP/TCP 53).
+- **Scoped Ingress controller access**: `ingress-nginx` and `traefik` namespaces may reach only `backend:8000` and `frontend:3000`.
+- **Hardened Egress**: public HTTPS (`443`) egress excludes RFC1918 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), CGNAT (`100.64.0.0/10`), and link-local/IMDS (`169.254.0.0/16`).
 
-External ingress is granted by the `Ingress` resource, not the `NetworkPolicy`.
+### Stateful Backing Services (PostgreSQL, Redis, RabbitMQ)
 
-### `PodDisruptionBudget` (file: `templates/pdb.yaml`)
+`templates/postgresql.yaml`, `templates/redis.yaml`, and `templates/rabbitmq.yaml` provision non-root `StatefulSet` + `Service` resources gated on `.Values.postgresql.enabled`, `.Values.redis.enabled`, and `.Values.rabbitmq.enabled`. Use `persistence.accessMode` (default `ReadWriteOnce`) to adapt PVCs to your StorageClass (`ReadWriteMany` when scaling `backend` across nodes with shared media).
 
-`pdb.<component>.enabled: true` by default for `backend`, `frontend`, and `celery`, with `minAvailable: 1`. The chart loops over `.Values.pdb` so adding a new component is a one-line `values.yaml` change.
+### Backend & Celery Runtime Wiring
 
-### Per-component `ServiceAccount` (file: `templates/serviceaccount.yaml`)
-
-Renders one `ServiceAccount` per component (currently `backend`, `frontend`, `celery`) with `automountServiceAccountToken: false`. Workloads that genuinely need the API get their own per-component token mounted explicitly.
+- `backend-deployment.yaml` runs `wait-for-db`, `wait-for-redis`, `migrate`, and `collectstatic` initContainers (populating the `/app/staticfiles` `emptyDir`) and mounts writable `emptyDir`s for `/home/smsly` and `/app/backups` under `readOnlyRootFilesystem: true`.
+- `REDIS_PASSWORD`, `GATEWAY_SECRET`, `EDGE_JWT_SECRET`, and `CADDY_ASK_SECRET` are wired into both `secret-env.yaml` and the backend/migration pods.
+- `celery-beat` uses `strategy.type: Recreate` (preventing duplicate beat schedulers during rollouts), and Celery workers set `terminationGracePeriodSeconds: 360`.
 
 ### Change-me sentinels (file: `templates/_validators.tpl`)
 
 `include "smsly.validateValues"` is called at the top of every workload template. It `fail`s the render if any of these are still placeholder values:
 
-- `secrets.secretKey`, `secrets.dbPassword`, `secrets.redisPassword` — refuses `change-me`, `change-me-in-prod`, `latest`, `""`.
-- `backend.image.tag`, `frontend.image.tag` — refuses `latest` and `""`.
+- `secrets.secretKey`, `secrets.dbPassword`, `secrets.fieldEncryptionKey`, `secrets.githubWebhookSecret` (when `secrets.existingSecret` is empty) — refuses `change-me`, `change-me-in-prod`, `latest`, `""`.
+- `secrets.redisPassword` — required when `redis.auth.enabled: true` (and `secrets.existingSecret` is empty); `redis.auth.enabled: false` and `secrets.existingSecret` both validate cleanly.
+- `backend.image.tag`, `frontend.image.tag`, `celery.image.tag`, `postgresql.image.tag`, `redis.image` — refuses `latest` and `""`.
 
 The result: a production install cannot be booted with a placeholder secret or a `:latest` image tag; the chart will refuse to render.
 

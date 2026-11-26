@@ -30,12 +30,19 @@ class MeshNetworkTest(TestCase):
 
         WireGuardService._deploy_local(config, "wg0")
 
-        # Check that the first docker run uses the safe interface and base64 config
+        # Check that the first docker run uses the safe interface, pinned alpine, and atomic base64 write
         b64_config = base64.b64encode(config.encode()).decode()
-        expected_cmd = f"mkdir -p /etc/wireguard && echo '{b64_config}' | base64 -d > /etc/wireguard/wg0.conf && chmod 600 /etc/wireguard/wg0.conf"
+        inner_cmd = (
+            f"umask 077 && mkdir -p /etc/wireguard && "
+            f"tmp=$(mktemp /etc/wireguard/wg0.conf.tmp.XXXXXX) && "
+            f"printf %s {shlex.quote(b64_config)} | base64 -d > \"$tmp\" && "
+            f"chmod 600 \"$tmp\" && "
+            f"mv \"$tmp\" /etc/wireguard/wg0.conf"
+        )
+        expected_cmd = f"timeout 30 sh -c {shlex.quote(inner_cmd)}"
 
         mock_client.containers.run.assert_any_call(
-            "alpine",
+            "alpine:3.20",
             command=["sh", "-c", expected_cmd],
             remove=True,
             environment={"DOCKER_HOST": "tcp://socket-proxy:2375"},
@@ -302,7 +309,7 @@ class MeshNetworkTest(TestCase):
         self.assertTrue(ok)
         self.assertEqual(mock_ssh.exec_command.call_count, 2)
         persist_cmd = mock_ssh.exec_command.call_args_list[1].args[0]
-        self.assertIn("! grep -q '^\\[Interface\\]' /etc/wireguard/wg0.conf", persist_cmd)
+        self.assertIn("! $SUDO grep -q '^\\[Interface\\]' /etc/wireguard/wg0.conf", persist_cmd)
 
 
 

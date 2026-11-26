@@ -498,11 +498,13 @@ def detach_cli_alias_remote(addon, server) -> None:
             user=server.ssh_user, port=server.ssh_port,
             key_content=server.ssh_key, wg_address=server.wg_address,
         )
+        import shlex as _shlex
         ssh.connect()
         try:
+            q_container = _shlex.quote(container)
             out, _, _ = ssh.exec_command(
                 f"docker inspect -f '{{{{json .NetworkSettings.Networks}}}}' "
-                f"{container} 2>/dev/null",
+                f"{q_container} 2>/dev/null",
                 timeout=30, raise_on_error=False)
             import json as _json
             try:
@@ -514,13 +516,14 @@ def detach_cli_alias_remote(addon, server) -> None:
                 if host not in aliases:
                     continue
                 kept = [a for a in aliases if a != host]
+                q_net = _shlex.quote(str(net))
                 ssh.exec_command(
-                    f"docker network disconnect {net} {container} 2>/dev/null",
+                    f"docker network disconnect {q_net} {q_container} 2>/dev/null",
                     timeout=30, raise_on_error=False)
                 if kept:
-                    alias_args = " ".join(f"--alias {a}" for a in kept)
+                    alias_args = " ".join(f"--alias {_shlex.quote(str(a))}" for a in kept)
                     ssh.exec_command(
-                        f"docker network connect {alias_args} {net} {container} 2>/dev/null",
+                        f"docker network connect {alias_args} {q_net} {q_container} 2>/dev/null",
                         timeout=30, raise_on_error=False)
                 logger.info("Detached remote CLI alias %s (%s)", host, net)
         finally:
@@ -634,13 +637,15 @@ def push_cli_files(container_name: str, addon_type: str, stored: dict) -> None:
             wanted = {}
         merged = {**existing, **wanted}
         files = {**files, path: json.dumps(merged, indent=2) + "\n"}
+    import shlex as _shlex
     for path, content in files.items():
         parent = path.rsplit("/", 1)[0]
         code, err = _docker("exec", container_name, "mkdir", "-p", parent)
         if code != 0:
             raise RuntimeError(f"mkdir {parent} failed: {err}")
+        q_path = _shlex.quote(path)
         code, err = _docker("exec", "-i", container_name,
-                            "sh", "-c", f"cat > {path} && chmod 600 {path}",
+                            "sh", "-c", f"cat > {q_path} && chmod 600 {q_path}",
                             input_bytes=content.encode("utf-8"))
         if code != 0:
             raise RuntimeError(f"write {path} failed: {err}")

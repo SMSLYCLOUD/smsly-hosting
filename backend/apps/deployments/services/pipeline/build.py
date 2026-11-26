@@ -359,42 +359,11 @@ def _mesh_registry_host() -> str:
 
 
 def _registry_cache_settings(image_name, build_args):
-    """Registry-backed BuildKit cache settings for an image build.
-
-    Returns ``(cache_from, build_args)``. ``cache_from`` points at the
-    previous image only when the name is registry-qualified (bare
-    names make BuildKit resolve docker.io and fail with
-    insufficient_scope) AND the ref actually exists — a dangling
-    ``--cache-from`` for a never-pushed tag kills the Solve on the
-    first cache op (instant ~7s failure, same fileOp hash across
-    repos). Existence is probed via ``docker manifest inspect``
-    (login already happened upstream); any probe failure drops the
-    cache ref and the build proceeds uncached (slower, never fatal).
-    In that case ``BUILDKIT_INLINE_CACHE=1`` is also defaulted in so
-    the pushed image carries layer metadata to rebuild from — without
-    it ``cache_from`` is dead weight and every redeploy recompiles
-    all layers once the local BuildKit cache is pruned. An explicit
-    caller value always wins (setdefault).
-    """
+    """Registry-backed BuildKit cache settings for an image build."""
     name = image_name or ""
     registry_host = name.split("/")[0] if "/" in name else ""
     use_cache = bool(registry_host) and ("." in registry_host or ":" in registry_host)
     if not use_cache:
-        return [], build_args
-    try:
-        import subprocess as _sp
-        probe = _sp.run(
-            ["docker", "manifest", "inspect", name],
-            capture_output=True, text=True, timeout=30,
-        )
-        if probe.returncode != 0:
-            logger.debug(
-                "cache_from skipped: registry ref %s not present (%s)",
-                name, (probe.stderr or "").strip()[:120],
-            )
-            return [], build_args
-    except Exception as exc:
-        logger.debug("cache_from probe failed for %s: %s", name, exc)
         return [], build_args
     merged = dict(build_args or {})
     merged.setdefault("BUILDKIT_INLINE_CACHE", "1")
@@ -670,8 +639,8 @@ class BuildMixin:
             f"Building with Docker Compose ({self.service.compose_file})...\n"
         )
 
-        # Project name = service name (so containers are namespaced)
-        live_project_name = self.service.name.lower().replace(' ', '-')
+        # Project name = namespaced service identifier (never bare platform names)
+        live_project_name = f"svc-{self.service.slug or self.service.name.lower().replace(' ', '-')}-{str(self.service.id)[:8]}"
         project_name = live_project_name
         if getattr(self, "staged_only", False):
             project_name = f"{live_project_name}-staging-{str(self.deployment.id)[:8]}"
@@ -743,9 +712,11 @@ class BuildMixin:
         from apps.core.crypto_daemon import apply_cryptd_runtime_env, needs_host_gateway
         cryptd_overlay: dict[str, str] = {}
         cryptd_probe_keys = (
-            'DATABASE_URL', 'DB_URL', 'SQLALCHEMY_DATABASE_URL', 'SQLALCHEMY_DATABASE_URI',
+            'DATABASE_URL', 'DB_URL', 'POSTGRESQL_URL', 'PG_URL', 'POSTGRES_URL',
+            'SQLALCHEMY_DATABASE_URL', 'SQLALCHEMY_DATABASE_URI',
             'DB_HOST', 'DB_PORT', 'POSTGRES_HOST', 'POSTGRES_PORT',
-            'REDIS_URL', 'CELERY_BROKER_URL', 'CELERY_RESULT_BACKEND', 'CACHE_URL',
+            'REDIS_URL', 'REDIS_URI', 'RATE_LIMIT_REDIS_URL', 'SESSION_REDIS_URL',
+            'CELERY_BROKER_URL', 'CELERY_RESULT_BACKEND', 'CACHE_URL',
         )
         cryptd_in = {k: str(env[k]) for k in cryptd_probe_keys if k in env}
         before_cryptd = dict(cryptd_in)
@@ -849,6 +820,11 @@ class BuildMixin:
             if len(output) > 5000:
                 output = output[-5000:] + '\n...(truncated)'
             append_log(self.deployment, output)
+            try:
+                from apps.deployments.services.mesh_dns import sync_dns_now
+                sync_dns_now()
+            except Exception:
+                pass
         except subprocess.CalledProcessError as e:
             full_err = redact_values(
                 (e.stdout or '') + (e.stderr or ''), self.secret_values
@@ -882,13 +858,17 @@ class BuildMixin:
         """Resolve root directory."""
         if not self.source_dir:
             raise BuildError("Source directory is not available for build context")
+        real_source = os.path.realpath(self.source_dir)
         root_dir = (self.service.root_directory or "/").strip()
         if root_dir in ("", "/", ".", "./"):
-            return self.source_dir
+            return real_source
 
-        candidate = os.path.abspath(os.path.join(self.source_dir, root_dir.lstrip("/\\")))
-        if not candidate.startswith(os.path.abspath(self.source_dir)):
-            raise BuildError("root_directory must be inside the repo")
+        candidate = os.path.realpath(os.path.join(real_source, root_dir.lstrip("/\\")))
+        try:
+            if os.path.commonpath([real_source, candidate]) != real_source:
+                raise BuildError("root_directory must be inside the repo")
+        except ValueError as exc:
+            raise BuildError("root_directory must be inside the repo") from exc
         if not os.path.isdir(candidate):
             raise BuildError(f"Directory not found: {root_dir}")
         return candidate
@@ -897,16 +877,24 @@ class BuildMixin:
 
     def _find_dockerfile(self, context_dir: str) -> str | None:
         """Locate Dockerfile in context or subdirs."""
+        real_context = os.path.realpath(context_dir)
         # Direct check
         direct = os.path.join(context_dir, "Dockerfile")
-        if os.path.isfile(direct):
-            return direct
+        if os.path.isfile(direct) and not os.path.islink(direct):
+            real_direct = os.path.realpath(direct)
+            if os.path.commonpath([real_context, real_direct]) == real_context:
+                return real_direct
 
         # Shallow scan
         for entry in os.listdir(context_dir):
-            candidate = os.path.join(context_dir, entry, "Dockerfile")
-            if os.path.isdir(os.path.join(context_dir, entry)) and os.path.isfile(candidate):
-                return candidate
+            subdir = os.path.join(context_dir, entry)
+            if os.path.islink(subdir) or not os.path.isdir(subdir):
+                continue
+            candidate = os.path.join(subdir, "Dockerfile")
+            if os.path.isfile(candidate) and not os.path.islink(candidate):
+                real_candidate = os.path.realpath(candidate)
+                if os.path.commonpath([real_context, real_candidate]) == real_context:
+                    return real_candidate
         return None
 
 
@@ -1016,30 +1004,39 @@ class BuildMixin:
         #   3. None — Dockerfile anonymous-install fallback path
         build_secrets: dict[str, str] = {}
         try:
-            from apps.deployments.utils import get_github_token_for_repo
-            # Determine which shared repo the Dockerfile needs access to.
-            # Defaults to smsly-shared; overridable via service env var.
-            shared_repo = env_map.get(
-                "SMSLY_SHARED_REPO", "SMSLYCLOUD/smsly-shared"
-            )
             service_owner = getattr(self.service, "owner", None)
-            gh_token = get_github_token_for_repo(service_owner, shared_repo)
-            if gh_token:
-                build_secrets["github_token"] = gh_token
-                # Also inject as GITHUB_TOKEN so RUN commands that reference
-                # ${GITHUB_TOKEN} without a Dockerfile ARG declaration work.
-                build_secrets["GITHUB_TOKEN"] = gh_token
-                append_log(
-                    self.deployment,
-                    "GitHub token resolved via App/OAuth — "
-                    "injected as build-arg for private repo access.\n",
+            is_platform_or_super = (
+                getattr(self.service, "managed_by", "") in ("ECOSYSTEM", "PLATFORM")
+                or bool(service_owner and getattr(service_owner, "is_superuser", False))
+            )
+            if is_platform_or_super:
+                from apps.deployments.utils import get_github_token_for_repo
+                # Determine which shared repo the Dockerfile needs access to.
+                # Defaults to smsly-shared; overridable via service env var.
+                shared_repo = env_map.get(
+                    "SMSLY_SHARED_REPO", "SMSLYCLOUD/smsly-shared"
                 )
-            else:
-                append_log(
-                    self.deployment,
-                    "⚠ No GitHub token available — private pip installs may fail. "
-                    "Configure GITHUB_APP_ID/GITHUB_APP_PRIVATE_KEY or connect GitHub.\n",
+                gh_token = get_github_token_for_repo(
+                    service_owner,
+                    shared_repo,
+                    allow_unscoped=getattr(self.service, "managed_by", "") in ("ECOSYSTEM", "PLATFORM"),
                 )
+                if gh_token:
+                    build_secrets["github_token"] = gh_token
+                    # Also inject as GITHUB_TOKEN so RUN commands that reference
+                    # ${GITHUB_TOKEN} without a Dockerfile ARG declaration work.
+                    build_secrets["GITHUB_TOKEN"] = gh_token
+                    append_log(
+                        self.deployment,
+                        "GitHub token resolved via App/OAuth — "
+                        "injected as build-arg for private repo access.\n",
+                    )
+                else:
+                    append_log(
+                        self.deployment,
+                        "⚠ No GitHub token available — private pip installs may fail. "
+                        "Configure GITHUB_APP_ID/GITHUB_APP_PRIVATE_KEY or connect GitHub.\n",
+                    )
         except Exception as _exc:
             logger.warning(
                 "Failed to resolve GitHub token for build secrets: %s", _exc
@@ -1120,6 +1117,22 @@ class BuildMixin:
         image_name = self.image_name or ""
         cache_from, build_args_dict = _registry_cache_settings(
             image_name, build_args_dict)
+        if cache_from:
+            try:
+                import subprocess as _sp
+                probe = _sp.run(
+                    ["docker", "manifest", "inspect", image_name],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if probe.returncode != 0:
+                    logger.debug(
+                        "cache_from skipped: registry ref %s not present (%s)",
+                        image_name, (probe.stderr or "").strip()[:120],
+                    )
+                    cache_from = []
+            except Exception as exc:
+                logger.debug("cache_from probe failed for %s: %s", image_name, exc)
+                cache_from = []
 
         self._build_with_docker_engine(
             context_dir=context_dir,
@@ -1439,6 +1452,11 @@ class BuildMixin:
             # Enforce .dockerignore to prevent .git poisoning of shared cache
             try:
                 di = os.path.join(context_dir, ".dockerignore")
+                if os.path.islink(di):
+                    raise BuildError(".dockerignore cannot be a symlink")
+                real_context = os.path.realpath(context_dir)
+                if os.path.commonpath([real_context, os.path.realpath(di)]) != real_context:
+                    raise BuildError(".dockerignore escapes build context")
                 if not os.path.isfile(di):
                     with open(di, "w", encoding="utf-8") as f:
                         f.write(".git\n.gitignore\n.env\n*.log\n")
@@ -1448,6 +1466,8 @@ class BuildMixin:
                     if ".git" not in txt:
                         with open(di, "a", encoding="utf-8") as f:
                             f.write("\n.git\n")
+            except BuildError:
+                raise
             except Exception:
                 pass
             tar_buffer = io.BytesIO()
@@ -1682,6 +1702,8 @@ class BuildMixin:
         Currently handles: Node.js 18 -> 20 (for Next.js compatibility).
         """
         try:
+            if os.path.islink(dockerfile_path):
+                raise BuildError("Dockerfile cannot be a symlink")
             with open(dockerfile_path, encoding="utf-8") as f:
                 content = f.read()
 

@@ -26,7 +26,8 @@ SCAN_DIRS = ("lib", "scripts")
 SCAN_TOP = ("install.sh",)
 # Mode-entry files contain top-level flow code; still scan them — the
 # rule applies everywhere `set -u` is in effect.
-BARE_LOCAL_RE = re.compile(r"^[ \t]*local\s+([A-Za-z_][A-Za-z0-9_]*(\s+[A-Za-z_][A-Za-z0-9_]*)+)[ \t]*$")
+LOCAL_LINE_RE = re.compile(r"^[ \t]*local\s+(.+)$")
+IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _shell_files():
@@ -49,22 +50,111 @@ def _rel(path):
     return os.path.relpath(path, REPO_ROOT).replace(os.sep, "/")
 
 
-def _bare_local_vars(line):
-    """Return var names from a bare multi-var `local a b` line.
+def _split_local_tokens(rest):
+    """Split `local` arguments at top-level whitespace, ignoring comments/quotes/$()."""
+    tokens = []
+    buf = []
+    in_single = False
+    in_double = False
+    in_backtick = False
+    paren_depth = 0
+    escaped = False
+    i = 0
+    n = len(rest)
 
-    Only multi-name declarations are flagged: those are the ones where a
-    human most often leaves one name conditionally assigned (the
-    2026-09-12 installer abort). A single bare `local x` is safe as long
-    as it is assigned before any read — verified by review, not by this
-    test. Lines containing `=` are never flagged.
+    while i < n:
+        ch = rest[i]
+        if escaped:
+            buf.append(ch)
+            escaped = False
+            i += 1
+            continue
+        if in_single:
+            if ch == "'":
+                in_single = False
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == "\\":
+            escaped = True
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == "`" and not in_double:
+            in_backtick = not in_backtick
+            buf.append(ch)
+            i += 1
+            continue
+        if in_backtick:
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == '"' and paren_depth == 0:
+            in_double = not in_double
+            buf.append(ch)
+            i += 1
+            continue
+        if not in_double and paren_depth == 0 and ch == "(":
+            paren_depth += 1
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == "$" and i + 1 < n and rest[i + 1] == "(":
+            paren_depth += 1
+            buf.append("$(")
+            i += 2
+            continue
+        if paren_depth > 0:
+            if ch == "(":
+                paren_depth += 1
+            elif ch == ")":
+                paren_depth -= 1
+            buf.append(ch)
+            i += 1
+            continue
+        if not in_double:
+            if ch in (";", "&", "|"):
+                break
+            if ch == "#" and not buf:
+                break
+            if ch in (" ", "\t"):
+                if buf:
+                    tokens.append("".join(buf))
+                    buf = []
+                i += 1
+                continue
+        buf.append(ch)
+        i += 1
+
+    if buf:
+        tokens.append("".join(buf))
+    return tokens
+
+
+def _bare_local_vars(line):
+    """Return uninitialized var names from a multi-var `local` declaration.
+
+    Flags both fully bare (`local a b`) and mixed (`local a="" b c=""`)
+    multi-name `local` lines: those are the ones where a variable most often
+    ends up conditionally assigned and fatal under `set -u`. Single bare
+    `local x` is left to review.
     """
-    match = BARE_LOCAL_RE.match(line.split("#", 1)[0])
+    match = LOCAL_LINE_RE.match(line)
     if not match:
         return []
-    names = match.group(1).split()
-    if len(names) < 2 or any("=" in token for token in names):
+    tokens = _split_local_tokens(match.group(1))
+    # Skip leading `local` options (e.g. -r, -i, -a, -A, -x) and `--`.
+    idx = 0
+    while idx < len(tokens) and tokens[idx].startswith("-"):
+        tok = tokens[idx]
+        idx += 1
+        if tok == "--":
+            break
+    var_tokens = tokens[idx:]
+    if len(var_tokens) < 2:
         return []
-    return names
+    bare = [tok for tok in var_tokens if IDENT_RE.match(tok)]
+    return bare
 
 
 class TestNounsetSafeLocals(unittest.TestCase):

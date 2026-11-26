@@ -366,15 +366,23 @@ export default function CanvasPage() {
                 }));
 
             autoLayout(canvasNodes, canvasEdges);
-            setNodes(canvasNodes);
+            if (dragNode.current === null) {
+                setNodes(prev => {
+                    if (prev.length === 0) return canvasNodes;
+                    const posById = new Map(prev.map(n => [n.id, { x: n.x, y: n.y }]));
+                    return canvasNodes.map(n => {
+                        const existing = posById.get(n.id);
+                        return existing ? { ...n, x: existing.x, y: existing.y } : n;
+                    });
+                });
+            }
             setEdges(canvasEdges);
         } catch (error) {
             console.error('Failed to load canvas data:', error);
         } finally {
             setLoading(false);
         }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [params?.id]);
 
     useEffect(() => { loadData(); }, [loadData]);
 

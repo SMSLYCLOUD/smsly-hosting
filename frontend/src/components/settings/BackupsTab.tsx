@@ -10,6 +10,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import api, { servicesApi } from '@/lib/api';
 import { backupsApi } from '@/lib/api';
+import { safeAssignUrl } from '@/lib/paths';
 import { getWsUrl } from '@/lib/websocket';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
@@ -106,10 +107,12 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [deploymentLogs, setDeploymentLogs] = useState<string>('');
     const [isLiveDeploying, setIsLiveDeploying] = useState(false);
     const wsRef = useRef<WebSocket | null>(null);
+    const wsTargetIdRef = useRef<string | null>(null);
     const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
 
     // Backup progress WebSocket
     const progressWsRef = useRef<WebSocket | null>(null);
+    const progressTargetIdRef = useRef<string | null>(null);
     const [backupProgress, setBackupProgress] = useState<{
         stage: string; percent: number; message: string;
         bytes_transferred?: number; total_bytes?: number;
@@ -288,12 +291,12 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
             const res = await api.post('/backups/restore-from-cloud/', { ...cloudRestoreForm, service_id: serviceId });
             toast({ title: "Restore Started", description: `Restoring from cloud backup.` });
             
-            // Connect WebSocket for real-time updates and monitor status
+            // Connect backup-progress WebSocket for real-time restore updates
             if (res.data?.backup_id) {
                 setRestoringId(res.data.backup_id);
                 setRestoreStatus('RESTORING');
                 monitorDeploymentAfterRestore(res.data.backup_id);
-                connectWebSocket(res.data.backup_id);
+                connectBackupProgressWebSocket(res.data.backup_id);
             } else {
                 loadBackups();
             }
@@ -355,8 +358,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
             // Start monitoring deployment status
             monitorDeploymentAfterRestore(id);
 
-            // Connect WebSocket for real-time updates
-            connectWebSocket(id);
+            // Connect backup-progress WebSocket for real-time restore updates
             connectBackupProgressWebSocket(id);
 
         } catch (err: any) {
@@ -451,7 +453,6 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                 setRestoringId(snapOverrideBackupId);
                 setRestoreStatus('RESTORING');
                 connectBackupProgressWebSocket(snapOverrideBackupId);
-                connectWebSocket(snapOverrideBackupId);
                 monitorDeploymentAfterRestore(snapOverrideBackupId);
             }
             toast({ title: "Restore Started", description: "Proceeding without safety snapshot." });
@@ -479,6 +480,9 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                     const deployment = service.latest_deployment;
                     
                     if (deployment.status === 'BUILDING' || deployment.status === 'DEPLOYING') {
+                        if (deployment.id) {
+                            connectWebSocket(deployment.id);
+                        }
                         deploymentStatusRef.current = 'DEPLOYING';
                         setDeploymentStatus('DEPLOYING');
                         setDeploymentProgress(calculateProgress(deployment.status));
@@ -540,7 +544,18 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     };
 
     const connectWebSocket = (deploymentId: string) => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) return;
+        if (
+            wsTargetIdRef.current === deploymentId &&
+            (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING)
+        ) {
+            return;
+        }
+
+        if (wsRef.current) {
+            try { wsRef.current.close(); } catch { /* ignore */ }
+            wsRef.current = null;
+        }
+        wsTargetIdRef.current = deploymentId;
 
         // Auth for the build-logs WebSocket is provided by the
         // HttpOnly auth cookie that the browser attaches to the
@@ -554,12 +569,21 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
 
         try {
             const ws = new WebSocket(wsUrl);
+            wsRef.current = ws;
 
             ws.onopen = () => {
+                if (wsRef.current !== ws || wsTargetIdRef.current !== deploymentId) {
+                    try { ws.close(); } catch { /* ignore */ }
+                    return;
+                }
                 // Connection established — server will start streaming build logs.
             };
 
             ws.onmessage = (event) => {
+                if (wsRef.current !== ws || wsTargetIdRef.current !== deploymentId) {
+                    try { ws.close(); } catch { /* ignore */ }
+                    return;
+                }
                 try {
                     const data = JSON.parse(event.data);
                     if (data.type === 'build_log') {
@@ -576,20 +600,25 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
             };
 
             ws.onclose = () => {
+                if (wsRef.current !== ws) return;
+                wsRef.current = null;
                 // Don't reconnect automatically, let the polling handle it
             };
 
             ws.onerror = () => {
+                if (wsRef.current !== ws) {
+                    try { ws.close(); } catch { /* ignore */ }
+                    return;
+                }
                 ws.close();
             };
-
-            wsRef.current = ws;
         } catch (error) {
             console.error('WebSocket connection failed:', error);
         }
     };
 
     const cleanupWebSocket = () => {
+        wsTargetIdRef.current = null;
         if (wsRef.current) {
             wsRef.current.close();
             wsRef.current = null;
@@ -601,20 +630,40 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     };
 
     const connectBackupProgressWebSocket = (backupId: string) => {
-        if (progressWsRef.current?.readyState === WebSocket.OPEN) return;
+        if (
+            progressTargetIdRef.current === backupId &&
+            (progressWsRef.current?.readyState === WebSocket.OPEN || progressWsRef.current?.readyState === WebSocket.CONNECTING)
+        ) {
+            return;
+        }
+
+        if (progressWsRef.current) {
+            try { progressWsRef.current.close(); } catch { /* ignore */ }
+            progressWsRef.current = null;
+        }
+        progressTargetIdRef.current = backupId;
 
         const wsUrl = getWsUrl(`/ws/backup-progress/${backupId}/`);
 
         try {
             const ws = new WebSocket(wsUrl);
+            progressWsRef.current = ws;
             setProgressLog([]);
             setBackupProgress({ stage: 'connecting', percent: 0, message: 'Connecting...' });
 
             ws.onopen = () => {
+                if (progressWsRef.current !== ws || progressTargetIdRef.current !== backupId) {
+                    try { ws.close(); } catch { /* ignore */ }
+                    return;
+                }
                 setBackupProgress({ stage: 'connected', percent: 0, message: 'Waiting for progress...' });
             };
 
             ws.onmessage = (event) => {
+                if (progressWsRef.current !== ws || progressTargetIdRef.current !== backupId) {
+                    try { ws.close(); } catch { /* ignore */ }
+                    return;
+                }
                 try {
                     const data = JSON.parse(event.data);
                     if (data.type === 'backup_progress') {
@@ -635,20 +684,24 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
             };
 
             ws.onerror = () => {
+                if (progressWsRef.current !== ws) {
+                    try { ws.close(); } catch { /* ignore */ }
+                    return;
+                }
                 ws.close();
             };
 
             ws.onclose = () => {
+                if (progressWsRef.current !== ws) return;
                 progressWsRef.current = null;
             };
-
-            progressWsRef.current = ws;
         } catch (error) {
             console.error('Backup progress WebSocket failed:', error);
         }
     };
 
     const disconnectBackupProgressWebSocket = () => {
+        progressTargetIdRef.current = null;
         if (progressWsRef.current) {
             progressWsRef.current.close();
             progressWsRef.current = null;
@@ -659,6 +712,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
         // Cleanup on unmount
         return () => {
             cleanupWebSocket();
+            disconnectBackupProgressWebSocket();
             if (deployPollRef.current) {
                 clearInterval(deployPollRef.current);
                 deployPollRef.current = null;
@@ -736,7 +790,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                 setRestoringId(res.data.backup_id);
                 setRestoreStatus('RESTORING');
                 monitorDeploymentAfterRestore(res.data.backup_id);
-                connectWebSocket(res.data.backup_id);
+                connectBackupProgressWebSocket(res.data.backup_id);
             }
         } catch (err: any) {
             toast({ title: "Upload Restore Failed", description: err?.response?.data?.error || 'Failed to process uploaded backup.', variant: "destructive" });
@@ -1057,9 +1111,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                                 <Button variant="ghost" size="sm" onClick={async () => {
                                                     try {
                                                         const res = await api.get(`/backups/${backup.id}/download-url/`);
-                                                        if (res.data?.url) {
-                                                            window.location.href = res.data.url;
-                                                        } else {
+                                                        if (!res.data?.url || !safeAssignUrl(res.data.url)) {
                                                             toast({ title: "Download failed", description: "Could not generate signed download link.", variant: "destructive" });
                                                         }
                                                     } catch (err) {

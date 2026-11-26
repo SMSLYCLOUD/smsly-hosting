@@ -7,21 +7,22 @@ RedisCache (plain redis:// URL) when Sentinel is not configured.
 """
 from urllib.parse import urlparse
 
-from django.core.cache.backends.redis import RedisCache as BaseRedisCache
+from django.core.cache.backends.redis import RedisCache as BaseRedisCache, RedisCacheClient
 
 
-class SentinelRedisCache(BaseRedisCache):
-    def _connect(self):
+class SentinelRedisCacheClient(RedisCacheClient):
+    """Django 5 RedisCacheClient that routes connections via Redis Sentinel."""
+
+    def get_client(self, key=None, *, write=False):
         from config.redis_sentinel import (
             SENTINEL_ENABLED,
             get_master_connection,
         )
         from django.conf import settings
 
-        password = getattr(settings, 'REDIS_PASSWORD', None)
-        url = getattr(settings, 'REDIS_CACHE_URL', None)
-
         if SENTINEL_ENABLED:
+            password = getattr(settings, 'REDIS_PASSWORD', None)
+            url = getattr(settings, 'REDIS_CACHE_URL', None)
             db = 0
             if url:
                 parsed = urlparse(url)
@@ -29,11 +30,10 @@ class SentinelRedisCache(BaseRedisCache):
             conn = get_master_connection(password=password, db=db)
             if conn is not None:
                 return conn
+        return super().get_client(key, write=write)
 
-        import redis
-        if url:
-            return redis.from_url(url, **self._options)
 
-        raise ConnectionError(
-            "REDIS_CACHE_URL not configured and Sentinel unavailable"
-        )
+class SentinelRedisCache(BaseRedisCache):
+    def __init__(self, server, params):
+        super().__init__(server, params)
+        self._class = SentinelRedisCacheClient

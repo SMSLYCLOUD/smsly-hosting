@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { servicesApi, EnvVar } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import {
   Plus,
@@ -370,54 +371,56 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
       {/* Redeploy Banner */}
       {hasChanges && (
-        <div className="sticky top-0 z-50 animate-in slide-in-from-top-2 fade-in">
-          <div className="flex items-center justify-between p-4 bg-gradient-to-r from-red-600/95 to-rose-600/95 backdrop-blur rounded-xl border border-red-500/30 shadow-lg shadow-red-500/20">
-            <div className="flex items-center gap-3">
-              <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
+        <div className="sticky top-[calc(var(--navbar-height,3.5rem)+3.5rem)] md:top-[calc(var(--navbar-height,8.25rem)+3.5rem)] z-20 animate-in slide-in-from-top-2 fade-in">
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-gradient-to-r from-red-600/95 to-rose-600/95 backdrop-blur rounded-xl border border-red-500/30 shadow-lg shadow-red-500/20">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-2 h-2 rounded-full bg-white animate-pulse shrink-0" />
               <p className="text-sm font-medium text-white">
                 ⚠ Variables changed — redeploy to apply
               </p>
             </div>
-            <Button
-              onClick={handleRedeploy}
-              disabled={deploying}
-              className="bg-white text-red-700 hover:bg-white/90 font-semibold shadow-sm"
-              size="sm"
-            >
-              {deploying ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Rocket className="w-4 h-4 mr-2" />
-              )}
-              {deploying ? "Deploying..." : "Redeploy Now"}
-            </Button>
-            <Button
-              onClick={handleApplyNow}
-              disabled={deploying}
-              className="bg-white/20 text-white hover:bg-white/30 font-semibold shadow-sm"
-              size="sm"
-              title="Recreate the container from the same image with fresh variables — no rebuild"
-            >
-              {deploying ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Zap className="w-4 h-4 mr-2" />
-              )}
-              {deploying ? "Applying..." : "Apply now"}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                onClick={handleRedeploy}
+                disabled={deploying}
+                className="bg-white text-red-700 hover:bg-white/90 font-semibold shadow-sm"
+                size="sm"
+              >
+                {deploying ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Rocket className="w-4 h-4 mr-2" />
+                )}
+                {deploying ? "Deploying..." : "Redeploy Now"}
+              </Button>
+              <Button
+                onClick={handleApplyNow}
+                disabled={deploying}
+                className="bg-white/20 text-white hover:bg-white/30 font-semibold shadow-sm"
+                size="sm"
+                title="Recreate the container from the same image with fresh variables — no rebuild"
+              >
+                {deploying ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Zap className="w-4 h-4 mr-2" />
+                )}
+                {deploying ? "Applying..." : "Apply now"}
+              </Button>
+            </div>
           </div>
         </div>
       )}
 
-      <Card className="p-6 border-border shadow-md">
-        <div className="flex items-center justify-between mb-6">
+      <Card className="p-4 sm:p-6 border-border shadow-md">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
           <div>
             <h3 className="font-bold text-lg">Environment Variables</h3>
             <p className="text-sm text-muted-foreground">
               Configured for the build and runtime environments.
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={() => {
               if (!showBulk || bulkMode !== "import") {
                 setBulkMode("import");
@@ -441,7 +444,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
         {/* Bulk Editor Panel */}
         {showBulk && (
           <div className="mb-6 bg-muted/30 p-4 rounded-lg border border-dashed border-primary/40 animate-in slide-in-from-top-2 fade-in">
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-start justify-between gap-3 mb-3">
               <div>
                 <h4 className="font-semibold text-sm">{bulkMode === "import" ? "Bulk Import" : "Bulk Export"} (.env format)</h4>
                 <p className="text-xs text-muted-foreground">
@@ -453,20 +456,25 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8"
+                aria-label="Close bulk editor"
+                className="h-8 w-8 shrink-0"
                 onClick={() => setShowBulk(false)}
               >
                 <X className="w-4 h-4" />
               </Button>
             </div>
+            <Label htmlFor="env-bulk-textarea" className="sr-only">
+              {bulkMode === "import" ? "Bulk import environment variables" : "Bulk export environment variables"}
+            </Label>
             <textarea
+              id="env-bulk-textarea"
               value={bulkText}
               onChange={(e) => bulkMode === "import" && setBulkText(e.target.value)}
               readOnly={bulkMode === "export"}
               placeholder={`SECRET_KEY=my-super-secret-key\nDEBUG=False\nALLOWED_HOSTS=example.com,localhost\n# Comments are ignored`}
               className={`w-full h-48 font-mono text-sm p-3 rounded-md border bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-y ${bulkMode === "export" ? "opacity-90" : ""}`}
             />
-            <div className="flex items-center justify-between mt-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 mt-3">
               <p className="text-xs text-muted-foreground">
                 {bulkMode === "import"
                   ? (bulkText.trim()
@@ -481,7 +489,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                     : "Waiting for input...")
                   : `${bulkText.trim().split('\n').filter(l => l.trim()).length} variables exported`}
               </p>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 {bulkMode === "export" && (
                   <Button variant="outline" onClick={handleDownloadEnv} disabled={!bulkText.trim()}>
                     <Download className="w-4 h-4 mr-2" />
@@ -507,9 +515,13 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
         )}
 
         {/* Add New Variable Form */}
-        <div className="flex gap-4 mb-8 bg-muted/30 p-4 rounded-lg border border-border">
-          <div className="flex-1">
+        <div className="flex flex-col sm:flex-row sm:items-end gap-3 mb-8 bg-muted/30 p-4 rounded-lg border border-border">
+          <div className="flex-1 min-w-0 space-y-1.5">
+            <Label htmlFor="env-new-key" className="text-xs font-medium text-muted-foreground">
+              Key
+            </Label>
             <Input
+              id="env-new-key"
               placeholder="KEY_NAME"
               className="font-mono uppercase"
               value={newKey}
@@ -520,8 +532,12 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
               }
             />
           </div>
-          <div className="flex-1">
+          <div className="flex-1 min-w-0 space-y-1.5">
+            <Label htmlFor="env-new-value" className="text-xs font-medium text-muted-foreground">
+              Value
+            </Label>
             <Input
+              id="env-new-value"
               placeholder="Value"
               type={newIsSecret ? "password" : "text"}
               value={newValue}
@@ -529,10 +545,12 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
               onKeyDown={(e) => e.key === "Enter" && handleAdd()}
             />
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <Button
               variant={newIsSecret ? "default" : "outline"}
               size="icon"
+              aria-label={newIsSecret ? "Mark as non-secret" : "Mark as secret"}
+              aria-pressed={newIsSecret}
               onClick={() => setNewIsSecret(!newIsSecret)}
               title="Toggle Secret"
             >
@@ -540,7 +558,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                 className={`w-4 h-4 ${newIsSecret ? "text-primary-foreground" : "text-muted-foreground"}`}
               />
             </Button>
-            <Button onClick={handleAdd}>
+            <Button onClick={handleAdd} className="flex-1 sm:flex-initial">
               <Plus className="w-4 h-4 mr-2" /> Add
             </Button>
           </div>
@@ -556,10 +574,10 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
             vars.map((v) => (
               <div
                 key={v.id}
-                className={`flex items-center gap-4 p-3 bg-card border rounded-lg group transition-colors ${v.is_locked ? "border-amber-500/40 bg-amber-500/5" : ""} ${v.value?.startsWith("CHANGE_ME") ? "border-red-500/50 bg-red-500/5" : "border-border hover:border-primary/50"}`}
+                className={`flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 p-3 bg-card border rounded-lg group transition-colors ${v.is_locked ? "border-amber-500/40 bg-amber-500/5" : ""} ${v.value?.startsWith("CHANGE_ME") ? "border-red-500/50 bg-red-500/5" : "border-border hover:border-primary/50"}`}
               >
                 <div
-                  className={`flex-1 font-mono font-bold text-sm min-w-[120px] ${v.value?.startsWith("CHANGE_ME") ? "text-red-500" : "text-primary"}`}
+                  className={`min-w-0 sm:flex-1 font-mono font-bold text-sm break-all ${v.value?.startsWith("CHANGE_ME") ? "text-red-500" : "text-primary"}`}
                 >
                   {v.key}
                   {v.is_locked && (
@@ -581,13 +599,17 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                 </div>
 
                 {/* Value: display or edit mode */}
-                <div className="flex-[2] font-mono text-sm relative">
+                <div className="min-w-0 sm:flex-[2] font-mono text-sm relative">
                   {editingId === v.id ? (
                     <div className="flex items-center gap-2">
+                      <Label htmlFor={`env-edit-${v.id}`} className="sr-only">
+                        Value for {v.key}
+                      </Label>
                       <Input
+                        id={`env-edit-${v.id}`}
                         value={editValue}
                         onChange={(e) => setEditValue(e.target.value)}
-                        className="font-mono text-sm h-8"
+                        className="font-mono text-sm h-8 min-w-0"
                         autoFocus
                         onKeyDown={(e) => {
                           if (e.key === "Enter") handleSaveEdit(v);
@@ -597,7 +619,8 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-8 w-8 text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10"
+                        aria-label={`Save ${v.key}`}
+                        className="h-8 w-8 shrink-0 text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10"
                         onClick={() => handleSaveEdit(v)}
                         disabled={saving}
                       >
@@ -610,7 +633,8 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-8 w-8 text-muted-foreground"
+                        aria-label={`Cancel editing ${v.key}`}
+                        className="h-8 w-8 shrink-0 text-muted-foreground"
                         onClick={cancelEdit}
                       >
                         <X className="w-4 h-4" />
@@ -629,67 +653,71 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                   )}
                 </div>
 
-                {/* Lock Toggle — always visible */}
-                {editingId !== v.id && v.source !== 'ADDON' && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={`h-8 w-8 ${v.is_locked ? "text-amber-500 hover:text-amber-400" : "text-muted-foreground hover:text-amber-500"}`}
-                    onClick={() => handleToggleLock(v)}
-                    title={v.is_locked ? "Unlock (allow auto-injection override)" : "Lock (prevent auto-injection override)"}
-                  >
-                    {v.is_locked ? <Lock className="w-4 h-4" /> : <LockOpen className="w-4 h-4" />}
-                  </Button>
-                )}
-
-                {/* Other Actions — hover only */}
+                {/* Actions */}
                 {editingId !== v.id && (
-                  <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                    {/* Edit Button */}
+                  <div className="flex items-center gap-1 self-end sm:self-auto shrink-0">
                     {v.source !== 'ADDON' && (
-                        <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-primary"
-                        onClick={() => void startEdit(v)}
-                        disabled={loadingEditId === v.id}
-                        title="Edit value"
-                        >
-                        {loadingEditId === v.id ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Pencil className="w-4 h-4" />
-                        )}
-                        </Button>
-                    )}
-
-                    {/* Show/Hide Secret */}
-                    {isMaskedVar(v) && (
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-8 w-8"
-                        onClick={() => void toggleVisibility(v)}
+                        aria-label={v.is_locked ? `Unlock ${v.key}` : `Lock ${v.key}`}
+                        className={`h-8 w-8 ${v.is_locked ? "text-amber-500 hover:text-amber-400" : "text-muted-foreground hover:text-amber-500"}`}
+                        onClick={() => handleToggleLock(v)}
+                        title={v.is_locked ? "Unlock (allow auto-injection override)" : "Lock (prevent auto-injection override)"}
                       >
-                        {visibleValues[v.id] ? (
-                          <EyeOff className="w-4 h-4" />
-                        ) : (
-                          <Eye className="w-4 h-4" />
-                        )}
+                        {v.is_locked ? <Lock className="w-4 h-4" /> : <LockOpen className="w-4 h-4" />}
                       </Button>
                     )}
+                    <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity">
+                      {/* Edit Button */}
+                      {v.source !== 'ADDON' && (
+                          <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Edit ${v.key}`}
+                          className="h-8 w-8 text-muted-foreground hover:text-primary"
+                          onClick={() => void startEdit(v)}
+                          disabled={loadingEditId === v.id}
+                          title="Edit value"
+                          >
+                          {loadingEditId === v.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Pencil className="w-4 h-4" />
+                          )}
+                          </Button>
+                      )}
 
-                    {/* Delete */}
-                    {v.source !== 'ADDON' && (
+                      {/* Show/Hide Secret */}
+                      {isMaskedVar(v) && (
                         <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
-                        onClick={() => handleDelete(v.id)}
+                          variant="ghost"
+                          size="icon"
+                          aria-label={visibleValues[v.id] ? `Hide ${v.key}` : `Reveal ${v.key}`}
+                          className="h-8 w-8"
+                          onClick={() => void toggleVisibility(v)}
                         >
-                        <Trash2 className="w-4 h-4" />
+                          {visibleValues[v.id] ? (
+                            <EyeOff className="w-4 h-4" />
+                          ) : (
+                            <Eye className="w-4 h-4" />
+                          )}
                         </Button>
-                    )}
+                      )}
+
+                      {/* Delete */}
+                      {v.source !== 'ADDON' && (
+                          <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Delete ${v.key}`}
+                          className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                          onClick={() => handleDelete(v.id)}
+                          >
+                          <Trash2 className="w-4 h-4" />
+                          </Button>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

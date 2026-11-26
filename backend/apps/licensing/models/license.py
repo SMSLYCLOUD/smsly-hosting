@@ -58,6 +58,9 @@ class PlatformLicense(models.Model):
     class Meta:
         verbose_name = 'Platform License'
 
+    def __str__(self):
+        return f"Platform License ({self.get_tier_display()})"
+
     @classmethod
     def load(cls):
         obj, _ = cls.objects.get_or_create(pk=1)

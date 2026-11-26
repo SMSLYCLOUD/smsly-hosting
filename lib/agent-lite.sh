@@ -4,7 +4,24 @@ apply_agent_lite_env_overrides() {
 
     [ "$MODE_AGENT_LITE" = "true" ] || return 0
 
-    # --- Self-Healing: Recovery from existing .env if env vars are missing ---
+    # --- Self-Healing: Recovery from .agent_lite_seed and existing .env ---
+    local _seed_var=""
+    for _seed_var in \
+        MASTER_IP MASTER_MESH_IP MASTER_DB_USER MASTER_DB_PASSWORD \
+        MASTER_MQ_PASSWORD MASTER_REDIS_PASSWORD MASTER_GATEWAY_SECRET \
+        MASTER_BACKUP_ENCRYPTION_KEY MASTER_BACKUP_REQUIRE_ENCRYPTION \
+        MASTER_GITHUB_WEBHOOK_SECRET MASTER_AUTOSCALER_API_TOKEN \
+        MASTER_FRP_AUTH_TOKEN MASTER_PGCAT_ADMIN_PASSWORD \
+        MASTER_EDGE_JWT_SECRET MASTER_CADDY_ASK_SECRET \
+        SMSLY_NODE_ID SMSLY_NODE_QUEUE; do
+        if [ -z "${!_seed_var:-}" ] && [ -f "$seed_file" ]; then
+            local _seed_val=""
+            _seed_val="$(env_get_value "$seed_file" "$_seed_var" || true)"
+            if [ -n "$_seed_val" ]; then
+                printf -v "$_seed_var" '%s' "$_seed_val"
+            fi
+        fi
+    done
     if [ -z "${MASTER_IP:-}" ] && [ -f "$env_file" ]; then
         MASTER_IP="$(env_get_value "$env_file" "MASTER_IP")"
     fi
@@ -93,6 +110,8 @@ MASTER_GITHUB_WEBHOOK_SECRET="${MASTER_GITHUB_WEBHOOK_SECRET:-}"
 MASTER_AUTOSCALER_API_TOKEN="${MASTER_AUTOSCALER_API_TOKEN:-}"
 MASTER_FRP_AUTH_TOKEN="${MASTER_FRP_AUTH_TOKEN:-}"
 MASTER_PGCAT_ADMIN_PASSWORD="${MASTER_PGCAT_ADMIN_PASSWORD:-}"
+MASTER_EDGE_JWT_SECRET="${MASTER_EDGE_JWT_SECRET:-}"
+MASTER_CADDY_ASK_SECRET="${MASTER_CADDY_ASK_SECRET:-}"
 SMSLY_NODE_ID="$SMSLY_NODE_ID"
 SMSLY_NODE_QUEUE="$SMSLY_NODE_QUEUE"
 EOF
@@ -151,6 +170,8 @@ EOF
         "|AUTOSCALER_API_TOKEN:master's autoscaler-service bearer token"
         "|FRP_AUTH_TOKEN:master's FRP tunnel relay authentication token"
         "|PGCAT_ADMIN_PASSWORD:master's PgCat administration password"
+        "|EDGE_JWT_SECRET:master's Edge JWT signing secret for Traefik forward-auth"
+        "|CADDY_ASK_SECRET:master's Caddy on_demand_tls ask secret"
     )
     local _entry
     for _entry in "${_master_secrets_to_sync[@]}"; do
@@ -159,12 +180,15 @@ EOF
         # on ":". (Previously only the first of six secrets synced.)
         local _tmp="${_entry#|}"
         local _key="${_tmp%%:*}"
-        # Read the master secret from the master's .env file.
-        # MASTER_ENV_<KEY> env vars are NOT exported by the provisioner;
-        # secrets are written to a temporary file and read via env_get_value.
+        # Read from MASTER_ENV_FILE first, falling back to MASTER_<KEY>
+        # (including values recovered from .agent_lite_seed).
         local _master_val=""
-        if [ -f "$MASTER_ENV_FILE" ]; then
+        if [ -n "${MASTER_ENV_FILE:-}" ] && [ -f "$MASTER_ENV_FILE" ]; then
             _master_val="$(env_get_value "$MASTER_ENV_FILE" "$_key"  || true)"
+        fi
+        if [ -z "$_master_val" ]; then
+            local _master_var="MASTER_${_key}"
+            _master_val="${!_master_var:-}"
         fi
         if [ -n "$_master_val" ]; then
             env_set_value "$env_file" "$_key" "$_master_val"

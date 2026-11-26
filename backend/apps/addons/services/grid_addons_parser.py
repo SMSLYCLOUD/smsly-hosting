@@ -237,6 +237,19 @@ def _parse_bundles(raw: Any, source_path: str) -> list[BundleDecl]:
             bundle_cfg.get("services", {}), bundle_name, source_path
         )
         backup = bundle_cfg.get("backup", {}) or {}
+        if not isinstance(backup, dict):
+            raise ValueError(
+                f"'backup' in bundle '{bundle_name}' must be a mapping in {source_path}"
+            )
+        import re as _re
+        for script_key in ("backup_script", "restore_script"):
+            if script_key in backup and backup[script_key] is not None:
+                raw_script = str(backup[script_key]).strip()
+                if ".." in raw_script or not _re.fullmatch(r"^/[A-Za-z0-9/_.-]+$", raw_script):
+                    raise ValueError(
+                        f"Invalid {script_key} '{raw_script}' in bundle '{bundle_name}' ({source_path}): "
+                        "must be an absolute path without '..' matching ^/[A-Za-z0-9/_.-]+$."
+                    )
 
         result.append(BundleDecl(
             name=str(bundle_name),

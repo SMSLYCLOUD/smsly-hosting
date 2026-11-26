@@ -6,6 +6,9 @@ global:
   imageRegistry: ""
   imagePullSecrets: []
 
+persistence:
+  accessMode: ReadWriteOnce
+
 backend:
   image:
     repository: smsly/backend
@@ -31,7 +34,7 @@ backend:
     allowedHosts: ""
     csrfTrustedOrigins: ""
     corsAllowedOrigins: ""
-    internalApiUrl: "http://smsly-hosting-backend:8000"
+    internalApiUrl: ""
   serviceAccount:
     create: true
   resources:
@@ -48,7 +51,7 @@ backend:
     cpuTargetAverageUtilization: 70
     memoryTargetAverageUtilization: 75
   healthcheck:
-    path: "/health"
+    path: "/health/live"
     initialDelaySeconds: 30
     periodSeconds: 15
     timeoutSeconds: 5
@@ -118,7 +121,7 @@ celery:
       replicaCount: 1
   beat:
     enabled: true
-    schedule: "celery -A config beat -l info"
+    schedule: "celery -A config beat -l info -S redbeat.RedBeatScheduler"
   resources:
     limits:
       cpu: 1000m
@@ -147,7 +150,6 @@ redis:
   image: redis:7-alpine
   auth:
     enabled: false
-    password: ""
   master:
     persistence:
       size: 8Gi
@@ -167,7 +169,6 @@ postgresql:
   auth:
     database: smsly_hosting
     username: smsly_admin
-    password: "change-me"
   primary:
     persistence:
       size: 50Gi
@@ -178,6 +179,37 @@ postgresql:
     requests:
       cpu: 200m
       memory: 512Mi
+
+rabbitmq:
+  enabled: true
+  image: rabbitmq:3-management-alpine
+  persistence:
+    size: 8Gi
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+externalDatabase:
+  enabled: false
+  host: ""
+  port: 5432
+  database: "smsly_hosting"
+  username: "smsly_admin"
+
+externalRedis:
+  enabled: false
+  host: ""
+  port: 6379
+
+externalRabbitmq:
+  enabled: false
+  host: ""
+  port: 5672
+  username: "smsly_user"
 
 ingress:
   enabled: true
@@ -276,6 +308,10 @@ secrets:
   # GitHub webhooks. Must match the secret configured in the GitHub App /
   # webhook settings, otherwise webhook delivery will be rejected.
   githubWebhookSecret: ""
+  gatewaySecret: ""
+  edgeJwtSecret: ""
+  caddyAskSecret: ""
+  rabbitmqPassword: ""
 
 networkPolicy:
   enabled: true

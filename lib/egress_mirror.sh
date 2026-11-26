@@ -147,9 +147,22 @@ ensure_egress_mirror() {
     # nothing listens (UFW DROPs it: silent blackhole). Builds run on
     # docker0, so scoping loses nothing.
     _docker_steer_src="$(_docker0_gateway | cut -d. -f1-2).0.0/16"
-    if ! iptables -t nat -C PREROUTING -s "$_docker_steer_src" -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
-        iptables -t nat -A PREROUTING -s "$_docker_steer_src" -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || \
+    # Exclude link-local metadata, loopback, CGNAT, and RFC1918 destinations from the
+    # PREROUTING steer so container-to-container / metadata / mesh HTTP is never hijacked.
+    local _bypass_cidrs="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10"
+    for _cidr in $_bypass_cidrs; do
+        if ! iptables -t nat -C PREROUTING -s "$_docker_steer_src" -d "$_cidr" -p tcp --dport 80 -j RETURN >/dev/null 2>&1; then
+            iptables -t nat -I PREROUTING 1 -s "$_docker_steer_src" -d "$_cidr" -p tcp --dport 80 -j RETURN 2>/dev/null || \
+                _egress_warn "PREROUTING local bypass failed for $_cidr"
+        fi
+    done
+    if ! iptables -t nat -C PREROUTING -s "$_docker_steer_src" ! -d 169.254.0.0/16 -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
+        iptables -t nat -A PREROUTING -s "$_docker_steer_src" ! -d 169.254.0.0/16 -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || \
             _egress_warn "PREROUTING rule install failed"
+    fi
+    # Converge: remove legacy PREROUTING steers without the 169.254.0.0/16 exclusion.
+    if iptables -t nat -C PREROUTING -s "$_docker_steer_src" -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
+        iptables -t nat -D PREROUTING -s "$_docker_steer_src" -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || true
     fi
     # Converge: remove the legacy unscoped steer if present (it hijacked
     # :80 from EVERY bridge, including mesh and project networks).
@@ -169,12 +182,38 @@ ensure_egress_mirror() {
     # passing through (2026-10-05: node :8081 always nginx-502 while
     # container-path traffic was fine). RETURNs are inserted ahead of
     # the REDIRECT above; internet egress still steers.
-    for _cidr in 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+    for _cidr in $_bypass_cidrs; do
         if ! iptables -t nat -C OUTPUT -d "$_cidr" -p tcp --dport 80 -j RETURN >/dev/null 2>&1; then
             iptables -t nat -I OUTPUT 2 -d "$_cidr" -p tcp --dport 80 -j RETURN 2>/dev/null || \
                 _egress_warn "OUTPUT local bypass failed for $_cidr"
         fi
     done
+
+    # Kernel-level SSRF defense: block nginx ($_nginx_user) from reaching
+    # loopback, RFC1918, link-local/metadata, CGNAT, or 0.0.0.0/8 destinations
+    # even via DNS rebinding. Permit UDP/TCP :53 to local systemd-resolved
+    # (127.0.0.53) first so dl-cdn DNS resolution keeps working.
+    # Insert at top of OUTPUT (ahead of UFW chains) so UFW's broad OUTPUT
+    # rules never short-circuit past the SSRF DROPs.
+    if ! iptables -C OUTPUT -m owner --uid-owner "$_nginx_user" -d 127.0.0.53/32 -p udp --dport 53 -j ACCEPT >/dev/null 2>&1; then
+        iptables -I OUTPUT 1 -m owner --uid-owner "$_nginx_user" -d 127.0.0.53/32 -p udp --dport 53 -j ACCEPT 2>/dev/null || true
+    fi
+    if ! iptables -C OUTPUT -m owner --uid-owner "$_nginx_user" -d 127.0.0.53/32 -p tcp --dport 53 -j ACCEPT >/dev/null 2>&1; then
+        iptables -I OUTPUT 2 -m owner --uid-owner "$_nginx_user" -d 127.0.0.53/32 -p tcp --dport 53 -j ACCEPT 2>/dev/null || true
+    fi
+    for _ssrf_cidr in 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 0.0.0.0/8; do
+        if ! iptables -C OUTPUT -m owner --uid-owner "$_nginx_user" -d "$_ssrf_cidr" -j DROP >/dev/null 2>&1; then
+            iptables -I OUTPUT 3 -m owner --uid-owner "$_nginx_user" -d "$_ssrf_cidr" -j DROP 2>/dev/null || \
+                _egress_warn "OUTPUT SSRF filter drop failed for $_ssrf_cidr"
+        fi
+    done
+    if command -v ip6tables >/dev/null 2>&1; then
+        for _ssrf_v6 in ::1/128 fc00::/7 fe80::/10; do
+            if ! ip6tables -C OUTPUT -m owner --uid-owner "$_nginx_user" -d "$_ssrf_v6" -j DROP >/dev/null 2>&1; then
+                ip6tables -I OUTPUT 1 -m owner --uid-owner "$_nginx_user" -d "$_ssrf_v6" -j DROP 2>/dev/null || true
+            fi
+        done
+    fi
 
     # 4. End-to-end proof through the shim (host path). A container-path
     # proof runs separately before unblocking app builds.

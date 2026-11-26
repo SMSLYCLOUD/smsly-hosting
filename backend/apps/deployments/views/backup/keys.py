@@ -46,6 +46,11 @@ class KeyManagementMixin:
                 {'error': 'Both "key_id" and "key_material" are required.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if len(key_material.encode('utf-8')) > 4096:
+            return Response(
+                {'error': 'key_material must not exceed 4096 bytes.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             result = BackupService.import_backup_key(
                 key_id=key_id,

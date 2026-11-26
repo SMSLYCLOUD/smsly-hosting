@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { clearAuthCookies } from '@/lib/auth-cookies';
+import { canRedirectToLogin, isProtectedPath } from '@/lib/paths';
 
 // Use dynamic origin detection - works in browser and during SSR
 const getApiUrl = () => {
@@ -9,11 +10,20 @@ const getApiUrl = () => {
   return process.env.NEXT_PUBLIC_API_URL || '/api/v1';
 };
 
+const sanitizeDownloadFilename = (path: string): string => {
+    const base = path.split(/[/\\]/).pop() || '';
+    const cleaned = base
+        .replace(/[\x00-\x1f\x7f/\\?%*:|"<>]/g, '_')
+        .replace(/^\.+/, '')
+        .trim();
+    return cleaned || 'file';
+};
+
 export const downloadBlob = (data: Blob | ArrayBuffer, path: string) => {
     const url = window.URL.createObjectURL(new Blob([data]));
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', path.split('/').pop() || 'file');
+    link.setAttribute('download', sanitizeDownloadFilename(path));
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -54,6 +64,9 @@ export const api = axios.create({
   baseURL: getApiUrl(),
   withCredentials: true,
   timeout: 30000,
+  headers: {
+    'X-Requested-With': 'XMLHttpRequest',
+  },
 });
 
 function isServerProxyUrl(url?: string): boolean {
@@ -132,6 +145,8 @@ const PROXY_BYPASS_PREFIXES = [
   '/transfers/',
   '/system/',
   '/teams/',
+  '/organizations/',
+  '/edge/',
   '/licensing/',
   '/ai/',
   '/cloud/',
@@ -310,17 +325,16 @@ api.interceptors.response.use(
     }
 
     if (error.response?.status === 401 && !error.isRemoteResponse && typeof window !== 'undefined') {
-      // Call backend logout to clear the HttpOnly __Host-auth_token cookie
-      // via Set-Cookie: Max-Age=0.  Without this the cookie survives in the
-      // browser, the middleware sees it on /login and redirects back to
-      // /dashboard, creating an infinite loop.
-      //
-      // Do NOT redirect here — the auth-provider is the authority on auth
-      // state and handles redirect.  Handling it in both places causes
-      // double-fire (two logout calls, two redirects) and log spam from
-      // revalidation polling.
-      fetch('/api/v1/auth/logout/', { method: 'POST', credentials: 'include' }).catch(() => {});
-      clearAuthCookies();
+      // Only clear local auth state and redirect when the session check
+      // (/auth/user/) itself returns 401. Arbitrary endpoint 401s (e.g.
+      // unconfigured integrations or permission-gated actions) must NOT call
+      // destructive POST /api/v1/auth/logout/ or wipe cookies.
+      if (/\/auth\/user\/?$/.test(requestUrl)) {
+        clearAuthCookies();
+        if (isProtectedPath(window.location.pathname) && canRedirectToLogin()) {
+          window.location.replace('/login');
+        }
+      }
     }
     return Promise.reject(error);
   }
@@ -580,6 +594,7 @@ export interface Project {
   icon_emoji: string;
   color: string;
   is_default: boolean;
+  team?: string | null;
   services_count: number;
   latest_deploy_status?: string | null;
   latest_deploy_at?: string | null;
@@ -1205,7 +1220,7 @@ export const templatesApi = {
 export const githubApi = {
   repos: async (params?: Record<string, unknown>): Promise<{ name: string; full_name: string; private: boolean }[]> => {
     const response = await api.get('/integrations/github/repos/', { params });
-    return Array.isArray(response.data) ? response.data : response.data?.results || [];
+    return response.data?.repos || response.data?.results || (Array.isArray(response.data) ? response.data : []);
   },
   branches: async (repo: string): Promise<{ name: string; commit?: { sha: string } }[]> => {
     const response = await api.get('/integrations/github/branches/', { params: { repo } });
@@ -1224,7 +1239,7 @@ export const githubApi = {
 export const gitlabApi = {
   repos: async (params?: Record<string, unknown>): Promise<{ name: string; path_with_namespace: string; visibility: string }[]> => {
     const response = await api.get('/integrations/gitlab/repos/', { params });
-    return Array.isArray(response.data) ? response.data : response.data?.results || [];
+    return response.data?.repos || response.data?.results || (Array.isArray(response.data) ? response.data : []);
   },
   branches: async (repo: string): Promise<{ name: string; commit?: { id: string } }[]> => {
     const response = await api.get('/integrations/gitlab/branches/', { params: { repo } });
@@ -1239,7 +1254,7 @@ export const gitlabApi = {
 export const bitbucketApi = {
   repos: async (params?: Record<string, unknown>): Promise<{ name: string; full_name: string; is_private: boolean }[]> => {
     const response = await api.get('/integrations/bitbucket/repos/', { params });
-    return Array.isArray(response.data) ? response.data : response.data?.results || [];
+    return response.data?.repos || response.data?.results || (Array.isArray(response.data) ? response.data : []);
   },
   branches: async (repo: string): Promise<{ name: string; target?: { hash: string } }[]> => {
     const response = await api.get('/integrations/bitbucket/branches/', { params: { repo } });
@@ -1524,10 +1539,10 @@ export interface PreviewEnvironment {
 
 export const previewApi = {
   /** Create a preview environment for a service */
-  create: async (serviceId: string, branch: string, prNumber?: number): Promise<PreviewEnvironment> => {
-    const res = await api.post(`/services/${serviceId}/create-preview/`, {
-      branch,
-      ...(prNumber ? { pr_number: prNumber } : {}),
+  create: async (serviceId: string, branchName: string, commitSha: string): Promise<PreviewEnvironment> => {
+    const res = await api.post(`/services/${serviceId}/previews/`, {
+      branch_name: branchName,
+      commit_sha: commitSha,
     });
     return res.data;
   },
@@ -2101,7 +2116,7 @@ export const billingApi = {
 
   getInvoices: async (): Promise<Invoice[]> => {
     const res = await api.get('/billing/invoices/');
-    return Array.isArray(res.data) ? res.data : res.data.results || [];
+    return res.data?.invoices || res.data?.results || (Array.isArray(res.data) ? res.data : []);
   },
 
   getUsage: async (): Promise<UsageSummary> => {
@@ -2356,8 +2371,6 @@ export const clustersApi = {
 };
 
 export const addonsApi = {
-  togglePublicBucket: async (id: string) => { const response = await api.post(`/addons/${id}/toggle_bucket_public/`); return response.data; },
-
     list: async (): Promise<Addon[]> => {
         const res = await api.get('/addons/');
         const data = res.data;
@@ -2540,8 +2553,22 @@ export const projectsApi = {
   moveService: async (projectId: string, serviceId: string): Promise<void> => {
     await api.post(`/projects/${projectId}/move-service/`, { service_id: serviceId });
   },
-  removeService: async (projectId: string, serviceId: string): Promise<void> => {
-    await api.post(`/projects/${projectId}/remove-service/`, { service_id: serviceId });
+  removeService: async (projectId: string, serviceId: string, replacementProjectId?: string): Promise<void> => {
+    let targetProjectId = replacementProjectId;
+    if (!targetProjectId) {
+      const projects = await projectsApi.list();
+      const fallback =
+        projects.find((p) => p.is_default && p.id !== projectId) ||
+        projects.find((p) => p.id !== projectId);
+      if (!fallback) {
+        throw new Error('No replacement project available to move service into');
+      }
+      targetProjectId = fallback.id;
+    }
+    await api.post(`/projects/${projectId}/remove-service/`, {
+      service_id: serviceId,
+      replacement_project_id: targetProjectId,
+    });
   },
   syncEnvs: async (id: string): Promise<{ synced: number; message?: string }> => {
     const response = await api.post(`/projects/${id}/sync-envs/`);
@@ -2805,9 +2832,28 @@ export interface InfraTier {
   services: string[];
 }
 
+export interface EdgeMintTokenOptions {
+  scope?: string;
+  ttl?: number;
+  serviceId?: string;
+  aud?: string;
+}
+
 export const edgeApi = {
-  mintToken: async (scope: string = 'service', ttl: number = 900): Promise<{ token: string; scope: string; expires_in: number }> => {
-    const { data } = await api.post('/edge/token/', { scope, ttl });
+  mintToken: async (
+    options: EdgeMintTokenOptions = {},
+  ): Promise<{ token: string; scope: string; expires_in: number; aud?: string }> => {
+    const { scope = 'service', ttl = 900, serviceId, aud } = options;
+    const normalizedScope = String(scope || 'service').trim().toLowerCase();
+    const trimmedServiceId = serviceId ? String(serviceId).trim() : '';
+    const trimmedAud = aud ? String(aud).trim() : '';
+    if (normalizedScope !== 'admin' && !trimmedServiceId && !trimmedAud) {
+      throw new Error('serviceId or aud is required for non-admin edge tokens.');
+    }
+    const payload: Record<string, unknown> = { scope: normalizedScope, ttl };
+    if (trimmedServiceId) payload.service_id = trimmedServiceId;
+    if (trimmedAud) payload.aud = trimmedAud;
+    const { data } = await api.post('/edge/token/', payload);
     return data;
   },
 };
@@ -2972,7 +3018,6 @@ export const domainsApi = {
   }),
   create: (data: Partial<Domain>): Promise<Domain> => api.post('/domains/', data).then(r => r.data),
   detail: (id: string): Promise<Domain> => api.get(`/domains/${id}/`).then(r => r.data),
-  update: (id: string, data: Partial<Domain>): Promise<Domain> => api.put(`/domains/${id}/`, data).then(r => r.data),
   delete: (id: string): Promise<void> => api.delete(`/domains/${id}/`).then(() => undefined),
 };
 
@@ -3188,6 +3233,17 @@ export const databaseReplicasApi = {
 
 
 
+export interface PendingOrganizationInvite {
+  id: string;
+  organization: string;
+  organization_id: string;
+  organization_name: string;
+  organization_slug: string;
+  role: string;
+  invited_at: string;
+  expires_at: string | null;
+}
+
 export const organizationsApi = {
   list: async () => {
     const response = await api.get('/organizations/');
@@ -3207,6 +3263,22 @@ export const organizationsApi = {
   },
   invite: async (id: string, email: string, role: string) => {
     const response = await api.post(`/organizations/${id}/invite/`, { email, role });
+    return response.data;
+  },
+  pendingInvites: async (): Promise<PendingOrganizationInvite[]> => {
+    const response = await api.get('/organizations/pending-invites/');
+    return Array.isArray(response.data) ? response.data : (response.data?.results || []);
+  },
+  acceptInvite: async (orgId: string) => {
+    const response = await api.post(`/organizations/${encodeURIComponent(orgId)}/accept-invite/`);
+    return response.data;
+  },
+  removeMember: async (orgId: string, userId: number | string) => {
+    const response = await api.post(`/organizations/${encodeURIComponent(orgId)}/remove_member/`, { user_id: userId });
+    return response.data;
+  },
+  changeRole: async (orgId: string, userId: number | string, role: 'ADMIN' | 'MEMBER') => {
+    const response = await api.post(`/organizations/${encodeURIComponent(orgId)}/change-role/`, { user_id: userId, role });
     return response.data;
   },
   getSSO: async () => {
@@ -3246,7 +3318,29 @@ export const notificationsApi = {
   }
 };
 
-export const aiAdminApi = { getProviders: async () => { const response = await api.get('/ai/providers/'); return response.data; }, updateProvider: async (provider: string, data: Record<string, unknown>) => { const response = await api.post('/ai/providers/update/', { provider, ...data }); return response.data; } };
+export const aiAdminApi = {
+  getProviders: async () => {
+    const response = await api.get('/ai/providers/');
+    return response.data;
+  },
+  updateProvider: async (provider: string, data: Record<string, unknown>) => {
+    const raw = String(provider || '').trim().toLowerCase();
+    const prefix = raw === 'anthropic' ? 'claude' : raw;
+    const payload: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data || {})) {
+      if (value === undefined) continue;
+      if (key === 'api_key' || key === 'model' || key === 'base_url') {
+        if (prefix) payload[`${prefix}_${key}`] = value;
+      } else if (key.startsWith('anthropic_')) {
+        payload[`claude_${key.slice('anthropic_'.length)}`] = value;
+      } else {
+        payload[key] = value;
+      }
+    }
+    const response = await api.post('/ai/providers/update/', payload);
+    return response.data;
+  },
+};
 
 export const registryCredentialsApi = {
   list: async () => {

@@ -26,7 +26,7 @@ class TestRemoteOrchestratorErrors4(TestCase):
         self.server.delete()
         self.user.delete()
 
-    @patch("apps.deployments.services.remote_orchestrator.requests.request")
+    @patch("apps.deployments.services.remote_orchestrator.client.requests.request")
     def test_sync_service_reports_auth_missing(self, mock_request):
         self.server.api_token = ""
         self.server.gateway_secret = ""

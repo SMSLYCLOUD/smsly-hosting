@@ -126,8 +126,13 @@ class DeploymentsConfig(AppConfig):
         connection_created.connect(_on_first_db_connection)
 
         # Startup proxy sync is opt-in because AppConfig.ready() must not
-        # perform database/proxy side effects during management commands.
-        if not getattr(settings, 'IS_TESTING', False) and _is_serving_process():
+        # perform database/proxy side effects during management commands, and
+        # gunicorn master preloading defers thread spawn to post_fork().
+        if (
+            not getattr(settings, 'IS_TESTING', False)
+            and os.environ.get("SMSLY_DEFER_POST_FORK") != "1"
+            and _is_serving_process()
+        ):
             try:
                 from .services.startup import schedule_startup_caddy_sync
                 schedule_startup_caddy_sync()

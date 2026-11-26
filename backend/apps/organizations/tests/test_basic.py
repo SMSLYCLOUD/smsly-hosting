@@ -8,7 +8,7 @@ User = get_user_model()
 
 class OrganizationTests(TestCase):
     def setUp(self):
-        self.user = User.objects.create_user(email="owner@example.com", password="pass")
+        self.user = User.objects.create_user(username="org-owner", email="owner@example.com", password="pass")
 
     def test_create_organization(self):
         org = Organization.objects.create(
@@ -35,7 +35,7 @@ class OrganizationTests(TestCase):
 
 class OrganizationMembershipTests(TestCase):
     def setUp(self):
-        self.user = User.objects.create_user(email="member@example.com", password="pass")
+        self.user = User.objects.create_user(username="org-member", email="member@example.com", password="pass")
         self.org = Organization.objects.create(
             name="Test Org",
             slug="test-org",

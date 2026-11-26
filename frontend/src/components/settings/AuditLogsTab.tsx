@@ -12,10 +12,9 @@ interface AuditLogEntry {
   action: string;
   actor: string;
   target?: string;
-  detail?: string;
-  ip_address?: string;
+  metadata?: Record<string, unknown> | null;
   timestamp: string;
-  user?: string | null;
+  user?: string | number | null;
   project?: string | null;
 }
 
@@ -96,6 +95,10 @@ export function AuditLogsTab() {
             <div className="space-y-2 max-h-[500px] overflow-y-auto">
               {filtered.map((log) => {
                 const Icon = ACTION_ICONS[log.action] || Shield;
+                const ipAddress = typeof log.metadata?.ip_address === 'string' ? log.metadata.ip_address : null;
+                const metaEntries = log.metadata
+                  ? Object.entries(log.metadata).filter(([k]) => k !== 'ip_address')
+                  : [];
                 return (
                   <div
                     key={log.id}
@@ -107,16 +110,16 @@ export function AuditLogsTab() {
                         <Badge variant="outline" className="text-xs">
                           {log.action}
                         </Badge>
-                        <span className="text-sm font-medium">{log.actor}</span>
+                        <span className="text-sm font-medium">{log.actor || (log.user ? `User ${log.user}` : 'System')}</span>
                         {log.target && (
                           <span className="text-sm text-muted-foreground">
                             → {log.target}
                           </span>
                         )}
                       </div>
-                      {log.detail && (
-                        <p className="text-xs text-muted-foreground mt-1 truncate">
-                          {log.detail}
+                      {metaEntries.length > 0 && (
+                        <p className="text-xs text-muted-foreground mt-1 truncate font-mono">
+                          {JSON.stringify(Object.fromEntries(metaEntries))}
                         </p>
                       )}
                     </div>
@@ -124,9 +127,9 @@ export function AuditLogsTab() {
                       <div className="text-xs text-muted-foreground">
                         {new Date(log.timestamp).toLocaleString()}
                       </div>
-                      {log.ip_address && (
+                      {ipAddress && (
                         <div className="text-[10px] text-muted-foreground font-mono">
-                          {log.ip_address}
+                          {ipAddress}
                         </div>
                       )}
                     </div>

@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from ...models.core import Deployment, Service
 from ...serializers import DeploymentSerializer, ServiceSerializer
 from .helpers import (
+    _assert_server_write_access,
     _extract_page_results_and_next,
     _fetch_remote_json_with_fallback,
     _normalize_remote_api_path,
@@ -20,6 +21,19 @@ from .helpers import (
 logger = logging.getLogger(__name__)
 
 
+def _scope_lite_agent_services(request, qs):
+    user = getattr(request, "user", None)
+    if not (user is not None and getattr(user, "is_superuser", False)):
+        from apps.teams.permissions import get_team_q_filter
+        qs = qs.filter(get_team_q_filter(user, request=request)).distinct()
+    auth_obj = getattr(request, "auth", None)
+    if auth_obj is not None and hasattr(auth_obj, "project_scope"):
+        proj_scope = auth_obj.project_scope()
+        if proj_scope is not None:
+            qs = qs.filter(project_id__in=proj_scope)
+    return qs
+
+
 class ResourcesMixin:
 
     @action(detail=True, methods=["get"])
@@ -27,11 +41,14 @@ class ResourcesMixin:
         server = self.get_object()
 
         if server.is_lite_agent:
-            qs = Service.objects.filter(
-                server=server,
-            ).exclude(
-                status=Service.Status.DELETED,
-            ).select_related('project').prefetch_related('env_vars').order_by('-updated_at')
+            qs = _scope_lite_agent_services(
+                request,
+                Service.objects.filter(
+                    server=server,
+                ).exclude(
+                    status=Service.Status.DELETED,
+                ).select_related('project').prefetch_related('env_vars').order_by('-updated_at'),
+            )
             serializer = ServiceSerializer(qs, many=True, context={'request': request})
             return Response({'results': serializer.data, 'count': len(serializer.data)})
 
@@ -51,9 +68,18 @@ class ResourcesMixin:
         server = self.get_object()
 
         if server.is_lite_agent:
-            qs = Deployment.objects.filter(
-                service__server=server,
-            ).select_related('service').order_by('-created_at')[:50]
+            qs = Deployment.objects.filter(service__server=server).select_related('service')
+            if not getattr(request.user, "is_superuser", False):
+                from apps.teams.permissions import get_team_q_filter
+                qs = qs.filter(
+                    get_team_q_filter(request.user, prefix='service__', request=request)
+                ).distinct()
+            auth_obj = getattr(request, "auth", None)
+            if auth_obj is not None and hasattr(auth_obj, "project_scope"):
+                proj_scope = auth_obj.project_scope()
+                if proj_scope is not None:
+                    qs = qs.filter(service__project_id__in=proj_scope)
+            qs = qs.order_by('-created_at')[:50]
             serializer = DeploymentSerializer(qs, many=True)
             return Response({'results': serializer.data, 'count': len(serializer.data)})
 
@@ -73,11 +99,14 @@ class ResourcesMixin:
         server = self.get_object()
 
         if server.is_lite_agent:
-            services_qs = Service.objects.filter(
-                server=server,
-            ).exclude(
-                status=Service.Status.DELETED,
-            ).only('id', 'name', 'public_domain', 'custom_domains', 'domain_verified', 'verification_token')
+            services_qs = _scope_lite_agent_services(
+                request,
+                Service.objects.filter(
+                    server=server,
+                ).exclude(
+                    status=Service.Status.DELETED,
+                ).only('id', 'name', 'public_domain', 'custom_domains', 'domain_verified', 'verification_token'),
+            )
 
             domains = []
             for svc in services_qs:
@@ -146,6 +175,9 @@ class ResourcesMixin:
         server = self.get_object()
 
         if request.method == "POST":
+            denied = _assert_server_write_access(request, server)
+            if denied is not None:
+                return denied
             registry_ids = request.data.get("registry_ids", [])
             if not isinstance(registry_ids, list):
                 return Response(

@@ -11,6 +11,8 @@ from django.utils import timezone
 
 from apps.deployments.models import Deployment
 
+from .state import stamp_deployment_artifact_metadata
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -26,11 +28,14 @@ def _handle_failure(_task: Any, deployment: Deployment | None, error_msg: str, r
     if deployment:
         deployment.refresh_from_db()
         if deployment.status != 'CANCELLED':
+            stamp_deployment_artifact_metadata(
+                deployment, getattr(deployment, 'service', None)
+            )
             deployment.status = 'FAILED'
             deployment.finished_at = timezone.now()
 
             with suppress(Exception):
-                from .tasks_commit_status import update_commit_status
+                from apps.deployments.tasks.cicd.tasks_commit_status import update_commit_status
                 update_commit_status.delay(
                     str(deployment.id), 'failure', f'{reason}: {error_msg}'[:140]
                 )

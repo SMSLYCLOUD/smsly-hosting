@@ -2,7 +2,6 @@ import logging
 import re
 
 logger = logging.getLogger(__name__)
-import logging
 
 from celery import shared_task
 from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
@@ -12,8 +11,33 @@ from apps.deployments.models import (  # type: ignore[attr-defined]
     Deployment,
 )
 
-_HIDDEN_UNICODE_CHARS = re.compile(r'[​‌‍]')
-_INJECTION_PATTERNS: list[re.Pattern[str]] = []
+_INJECTION_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"ignore\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions?|prompts?)", re.I),
+    re.compile(r"disregard\s+(?:all\s+)?(?:previous|prior|above)", re.I),
+    re.compile(r"forget\s+(?:everything|all|previous)", re.I),
+    re.compile(r"you\s+are\s+now\s+(?:a|an|the)\s+\w+", re.I),
+    re.compile(r"act\s+as\s+(?:a|an|the)\s+\w+", re.I),
+    re.compile(r"from\s+now\s+on\s+you", re.I),
+    re.compile(r"respond\s+with\s+only", re.I),
+    re.compile(r"output\s*:\s*['\"]?\{", re.I),
+    re.compile(r"<\|im_start\|>", re.I),
+    re.compile(r"<\|im_end\|>", re.I),
+    re.compile(r"<\|system\|>", re.I),
+    re.compile(r"\[INST\]", re.I),
+    re.compile(r"\[\/INST\]", re.I),
+    re.compile(r"<<SYS>>", re.I),
+    re.compile(r"<</SYS>>", re.I),
+    re.compile(r"<system>", re.I),
+    re.compile(r"</system>", re.I),
+]
+
+_HIDDEN_UNICODE_CHARS = re.compile(
+    "["
+    "\u200b\u200c\u200d\u2060"  # zero-width
+    "\u202a\u202b\u202c\u202d\u202e"  # bidi overrides
+    "\ufeff"  # BOM
+    "]"
+)
 
 
 def _sanitize_for_llm(logs: str) -> str:

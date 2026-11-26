@@ -107,7 +107,8 @@ class RollbackProtectedTagsTests(TestCase):
         self._make_dep("e" * 40, Deployment.Status.QUEUED, 1)
 
         protected = _rollback_protected_tags(retain=2)
-        repo = "smsly/retention-svc"
+        from apps.deployments.services.registry_credentials import project_image_namespace
+        repo = f"{project_image_namespace(self.service)}/retention-svc"
         self.assertIn((repo, "c" * 7), protected)
         self.assertIn((repo, "b" * 7), protected)
         self.assertNotIn((repo, "a" * 7), protected)
@@ -187,7 +188,7 @@ class BuildImageRefreshHookTests(SimpleTestCase):
 
         service = MagicMock()
         service.name = "hook-svc"
-        service.repository_url = ""
+        service.repository_url = "https://github.com/example/hook-svc"
         service.branch = "main"
         service.buildpack = "DOCKER"
         service.root_directory = "./"

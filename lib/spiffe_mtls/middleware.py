@@ -6,11 +6,29 @@ Supports L7 authorization policies for service-to-service access control.
 """
 
 import os
+import re
 import ssl
 import logging
 from typing import Callable, Optional, Set
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_spiffe_from_xfcc(xfcc_value: str) -> Optional[str]:
+    """Extract the SPIFFE URI from an Envoy X-Forwarded-Client-Cert header."""
+    if not xfcc_value:
+        return None
+    for hop in xfcc_value.split(","):
+        for part in hop.split(";"):
+            part = part.strip()
+            if part.lower().startswith("uri="):
+                val = part[4:].strip().strip('"')
+                if val.startswith("spiffe://"):
+                    return val
+    match = re.search(r'(?:^|[;,\s])URI="?([^";,\s]+)"?', xfcc_value, re.IGNORECASE)
+    if match and match.group(1).startswith("spiffe://"):
+        return match.group(1)
+    return None
 
 
 class SpiffeMiddleware:
@@ -43,6 +61,7 @@ class SpiffeMiddleware:
         exempt_paths: Optional[Set[str]] = None,
         fail_closed: bool = True,
         policy_check_fn: Optional[Callable] = None,
+        trust_proxy_headers: bool = False,
     ):
         self.app = app
         self.trust_domain = trust_domain or os.getenv(
@@ -52,6 +71,14 @@ class SpiffeMiddleware:
         self.exempt_paths = exempt_paths or {"/health", "/ready", "/metrics", "/"}
         self.fail_closed = fail_closed
         self.policy_check_fn = policy_check_fn
+        self.trust_proxy_headers = trust_proxy_headers
+
+    @staticmethod
+    def _is_loopback(client) -> bool:
+        if not client:
+            return False
+        host = client[0] if isinstance(client, (tuple, list)) else str(client)
+        return host in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
     async def __call__(self, scope, receive, send):
         if scope["type"] not in ("http", "websocket"):
@@ -61,24 +88,31 @@ class SpiffeMiddleware:
         if path in self.exempt_paths:
             return await self.app(scope, receive, send)
 
-        # Check for SPIFFE ID in headers (set by Traefik or reverse proxy)
-        headers = dict(scope.get("headers", []))
         spiffe_id = None
 
-        # Try multiple header names
-        for header_name in [b"x-spiffe-id", b"x-forwarded-spiffe-id"]:
-            if header_name in headers:
-                spiffe_id = headers[header_name].decode("utf-8")
-                break
-
-        # Also check SSL context if available
-        if not spiffe_id and "extensions" in scope:
+        # Prefer cryptographic peer certificate SAN when available.
+        if "extensions" in scope:
             ssl_context = scope.get("extensions", {}).get("ssl", {})
             if ssl_context:
-                # Extract SPIFFE ID from client certificate SAN
                 peer_cert = ssl_context.get("peer_cert_DERs", [])
                 if peer_cert:
                     spiffe_id = self._extract_spiffe_id_from_cert(peer_cert[0])
+
+        # Prefer X-Forwarded-Client-Cert (Envoy SANITIZE_SET) on loopback;
+        # only trust raw X-SPIFFE-ID / X-Forwarded-Spiffe-Id when
+        # trust_proxy_headers is explicitly enabled.
+        is_loopback = self._is_loopback(scope.get("client"))
+        if not spiffe_id and (is_loopback or self.trust_proxy_headers):
+            headers = dict(scope.get("headers", []))
+            if b"x-forwarded-client-cert" in headers:
+                spiffe_id = _extract_spiffe_from_xfcc(
+                    headers[b"x-forwarded-client-cert"].decode("utf-8", errors="ignore")
+                )
+            if not spiffe_id and self.trust_proxy_headers:
+                for header_name in [b"x-spiffe-id", b"x-forwarded-spiffe-id"]:
+                    if header_name in headers:
+                        spiffe_id = headers[header_name].decode("utf-8", errors="ignore")
+                        break
 
         if not spiffe_id:
             if self.fail_closed:
@@ -185,6 +219,7 @@ class DjangoSpiffeMiddleware:
         self._exempt_paths = None
         self._fail_closed = None
         self._policy_check_enabled = None
+        self._trust_proxy_headers = None
 
     def _init_settings(self):
         """Lazy-load Django settings once."""
@@ -195,6 +230,7 @@ class DjangoSpiffeMiddleware:
         self._exempt_paths = getattr(settings, "SPIFFE_EXEMPT_PATHS", {"/health/", "/ready/", "/metrics/"})
         self._fail_closed = getattr(settings, "SPIFFE_FAIL_CLOSED", True)
         self._policy_check_enabled = getattr(settings, "SPIFFE_MTLS_POLICY_CHECK", False)
+        self._trust_proxy_headers = getattr(settings, "SPIFFE_TRUST_PROXY_HEADERS", False)
 
     def __call__(self, request):
         self._init_settings()
@@ -203,11 +239,21 @@ class DjangoSpiffeMiddleware:
         if request.path in self._exempt_paths:
             return self.get_response(request)
 
-        # Check for SPIFFE ID in headers
-        spiffe_id = (
-            request.META.get("HTTP_X_SPIFFE_ID")
-            or request.META.get("HTTP_X_FORWARDED_SPIFFE_ID")
-        )
+        # Extract SPIFFE URI from X-Forwarded-Client-Cert on loopback (local
+        # Envoy sidecar) or when SPIFFE_TRUST_PROXY_HEADERS is explicitly
+        # enabled; only trust raw X-SPIFFE-ID headers when trust_proxy_headers=True.
+        spiffe_id = None
+        remote_addr = (request.META.get("REMOTE_ADDR") or "").strip()
+        is_loopback = remote_addr in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+        if is_loopback or self._trust_proxy_headers:
+            xfcc = request.META.get("HTTP_X_FORWARDED_CLIENT_CERT")
+            if xfcc:
+                spiffe_id = _extract_spiffe_from_xfcc(xfcc)
+            if not spiffe_id and self._trust_proxy_headers:
+                spiffe_id = (
+                    request.META.get("HTTP_X_SPIFFE_ID")
+                    or request.META.get("HTTP_X_FORWARDED_SPIFFE_ID")
+                )
 
         if not spiffe_id:
             if self._fail_closed:
@@ -263,9 +309,11 @@ class DjangoSpiffeMiddleware:
             # Resolve target service from the request
             target_service = self._resolve_target_service(request)
             if not target_service:
-                # Can't resolve target — allow (handled by other middleware)
-                logger.debug("mTLS policy: no target service resolved, allowing")
-                return True
+                logger.warning(
+                    "mTLS policy: no target service resolved (fail_closed=%s)",
+                    self._fail_closed,
+                )
+                return not self._fail_closed
 
             # Get policies for this target service, ordered by priority
             policies = MtlsAuthorizationPolicy.objects.filter(
@@ -297,50 +345,67 @@ class DjangoSpiffeMiddleware:
             return True
         except Exception as e:
             logger.error("mTLS policy check error: %s", e)
-            # Fail open on errors to avoid breaking the platform
-            return True
+            return not self._fail_closed
 
     def _resolve_target_service(self, request):
         """
         Resolve the target Service from the incoming request.
 
         Strategy:
-        1. Check X-Target-Service header (set by Envoy sidecar or reverse proxy)
-        2. Match request Host header against service domains
-        3. Return None if unresolvable (allow other middleware to handle)
+        1. Resolve from SERVICE_NAME env var or settings.SPIFFE_SERVICE_NAME
+        2. Match request Host header against service/custom domains
+        3. Fall back to X-Target-Service header only when trust_proxy_headers=True
+        4. Return None if unresolvable
         """
+        from django.conf import settings
         from apps.deployments.models import Service
 
-        # Strategy 1: Explicit header
-        target_name = request.META.get("HTTP_X_TARGET_SERVICE")
-        if target_name:
-            try:
-                return Service.objects.get(name=target_name)
-            except Service.DoesNotExist:
-                return None
-
-        # Strategy 2: Domain matching
-        host = request.get_host().split(":")[0]  # strip port
-        try:
-            service = Service.objects.filter(
-                public_domain__iexact=host,
-                status="RUNNING",
-            ).first()
+        # Strategy 1: Local service identity from environment / Django settings
+        service_name = (
+            os.getenv("SERVICE_NAME")
+            or getattr(settings, "SPIFFE_SERVICE_NAME", None)
+            or ""
+        ).strip()
+        if service_name:
+            service = Service.objects.filter(name=service_name).first()
             if service:
                 return service
-        except Exception:
-            pass
 
-        # Strategy 3: Custom domain matching
+        # Strategy 2: Domain matching from Host header
         try:
-            from apps.domains.models import CustomDomain
-            domain_obj = CustomDomain.objects.filter(
-                domain__iexact=host,
-                verified=True,
-            ).select_related("service").first()
-            if domain_obj:
-                return domain_obj.service
+            host = request.get_host().split(":")[0]  # strip port
         except Exception:
-            pass
+            host = ""
+        if host:
+            try:
+                service = Service.objects.filter(
+                    public_domain__iexact=host,
+                    status="RUNNING",
+                ).first()
+                if service:
+                    return service
+            except Exception:
+                pass
+
+            # Custom domain matching
+            try:
+                from apps.domains.models import Domain
+                domain_obj = Domain.objects.filter(
+                    domain_name__iexact=host,
+                    verified=True,
+                ).select_related("service").first()
+                if domain_obj:
+                    return domain_obj.service
+            except Exception:
+                pass
+
+        # Strategy 3: Explicit header fallback (only when proxy headers are trusted)
+        if self._trust_proxy_headers:
+            target_name = (request.META.get("HTTP_X_TARGET_SERVICE") or "").strip()
+            if target_name:
+                try:
+                    return Service.objects.get(name=target_name)
+                except Service.DoesNotExist:
+                    return None
 
         return None

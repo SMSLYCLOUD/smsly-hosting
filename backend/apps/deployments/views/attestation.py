@@ -18,6 +18,7 @@ of the gateway_secret associated with the claimed wg_address.
 import hashlib
 import hmac as hmac_mod
 import logging
+import re
 import secrets
 import time
 
@@ -42,6 +43,36 @@ CHALLENGE_CACHE_PREFIX = "attest_challenge_"
 CHALLENGE_CACHE_MAX_ENTRIES = 100
 # Cache key for the challenge count counter
 CHALLENGE_COUNT_CACHE_KEY = "attest_challenge_count"
+# Per-target outstanding challenge limit within CHALLENGE_TTL
+CHALLENGE_PER_TARGET_MAX = 5
+CHALLENGE_TARGET_COUNT_PREFIX = "attest_challenge_target:"
+_SAFE_TARGET_WG_RE = re.compile(r"^[A-Za-z0-9.:_-]{1,64}$")
+
+
+def _incr_bounded_counter(key: str, ttl: int) -> None:
+    """Increment a TTL-bounded cache counter without extending TTL forever."""
+    try:
+        cache.add(key, 0, timeout=ttl)
+        cache.incr(key)
+    except Exception:
+        try:
+            current = int(cache.get(key) or 0)
+            cache.set(key, current + 1, timeout=ttl)
+        except Exception:
+            pass
+
+
+def _decr_bounded_counter(key: str) -> None:
+    """Decrement a cache counter safely without dropping below zero."""
+    try:
+        current = cache.get(key)
+        if current is None or int(current) <= 0:
+            return
+        new_val = cache.decr(key)
+        if new_val is not None and int(new_val) < 0:
+            cache.set(key, 0, timeout=CHALLENGE_TTL)
+    except Exception:
+        pass
 
 
 @api_view(["POST"])
@@ -53,37 +84,49 @@ def attestation_challenge(request):
     The verifier should send this to the target server to prove identity.
     Returns a random nonce that must be signed with the target's gateway_secret.
     """
-    target_wg_address = request.data.get("target_wg_address", "").strip()
+    target_wg_address = str(request.data.get("target_wg_address", "") or "").strip()
     if not target_wg_address:
         return Response(
             {"error": "target_wg_address is required"},
             status=status.HTTP_400_BAD_REQUEST,
         )
+    if not _SAFE_TARGET_WG_RE.match(target_wg_address):
+        return Response(
+            {"error": "Invalid target_wg_address format"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Enforce global CHALLENGE_CACHE_MAX_ENTRIES cap
+    try:
+        _count = cache.get(CHALLENGE_COUNT_CACHE_KEY) or 0
+        if int(_count) >= CHALLENGE_CACHE_MAX_ENTRIES:
+            return Response(
+                {"error": "Challenge cache is full (issuance busy, retry later)."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+    except Exception:
+        pass
+
+    # Enforce per-target challenge flood limit
+    target_count_key = f"{CHALLENGE_TARGET_COUNT_PREFIX}{target_wg_address}"
+    try:
+        _target_count = cache.get(target_count_key) or 0
+        if int(_target_count) >= CHALLENGE_PER_TARGET_MAX:
+            return Response(
+                {"error": "Too many pending attestation challenges for this target."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+    except Exception:
+        pass
 
     nonce = secrets.token_hex(32)
     expires_at = int(time.time()) + CHALLENGE_TTL
     cache_key = f"{CHALLENGE_CACHE_PREFIX}{nonce}"
 
-    # Enforce CHALLENGE_CACHE_MAX_ENTRIES: atomic counter with TTL so a
-    # scanner cannot mint unbounded nonces (cache backend has no scan).
-    try:
-        _count = cache.get(CHALLENGE_COUNT_CACHE_KEY) or 0
-        if int(_count) >= CHALLENGE_CACHE_MAX_ENTRIES:
-            return Response(
-                {"error": "Challenge issuance busy, retry later."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-    except Exception:
-        pass
-    # Store the nonce -> wg_address mapping
+    # Store the nonce -> wg_address mapping and bump global + per-target counters
     cache.set(cache_key, target_wg_address, timeout=CHALLENGE_TTL)
-    try:
-        try:
-            cache.incr(CHALLENGE_COUNT_CACHE_KEY)
-        except ValueError:
-            cache.set(CHALLENGE_COUNT_CACHE_KEY, 1, timeout=CHALLENGE_TTL)
-    except Exception:
-        pass
+    _incr_bounded_counter(CHALLENGE_COUNT_CACHE_KEY, CHALLENGE_TTL)
+    _incr_bounded_counter(target_count_key, CHALLENGE_TTL)
 
     logger.info("Issued attestation challenge for %s (nonce: %s...)", target_wg_address, nonce[:16])
 
@@ -108,6 +151,28 @@ def attestation_verify(request):
     This endpoint checks the signature against the stored gateway_secret
     for the wg_address associated with the nonce.
     """
+    peer_wg = (
+        request.META.get("HTTP_X_SMSLY_REMOTE_SYNC_PEER_WG")
+        or request.headers.get("X-SMSLY-Remote-Sync-Peer-WG")
+        or ""
+    ).strip()
+    if not peer_wg:
+        return Response(
+            {"error": "Missing X-SMSLY-Remote-Sync-Peer-WG peer identity header"},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    from ..models import ManagedServer
+    try:
+        known_server = ManagedServer.objects.filter(wg_address=peer_wg).exists()
+    except Exception:
+        known_server = False
+    if not known_server:
+        return Response(
+            {"error": "Unknown peer WireGuard address"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     nonce = request.data.get("challenge", "").strip()
     signature = request.data.get("signature", "").strip()
     sender_wg = request.data.get("sender_wg_address", "").strip()
@@ -116,6 +181,12 @@ def attestation_verify(request):
         return Response(
             {"error": "challenge, signature, and sender_wg_address are required"},
             status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if peer_wg != sender_wg:
+        return Response(
+            {"error": "X-SMSLY-Remote-Sync-Peer-WG does not match sender_wg_address"},
+            status=status.HTTP_403_FORBIDDEN,
         )
 
     # Look up the nonce
@@ -178,13 +249,8 @@ def attestation_verify(request):
 
     # Invalidate the nonce (single use) and release issuance quota
     cache.delete(cache_key)
-    try:
-        try:
-            cache.decr(CHALLENGE_COUNT_CACHE_KEY)
-        except ValueError:
-            pass
-    except Exception:
-        pass
+    _decr_bounded_counter(CHALLENGE_COUNT_CACHE_KEY)
+    _decr_bounded_counter(f"{CHALLENGE_TARGET_COUNT_PREFIX}{expected_wg}")
 
     logger.info("Attestation verified for %s", sender_wg)
     return Response({

@@ -48,12 +48,10 @@ def user_requires_2fa(user) -> bool:
 
         return bool(user_has_device(user, confirmed=True))
     except Exception as exc:
-        # Never fail OPEN on infrastructure errors here — but also
-        # never lock everyone out: log loudly and report "no device"
-        # so login keeps working; the missing-device error will show
-        # up in monitoring instead of silently disabling 2FA gating.
-        logger.error("2FA device check failed for %s: %s", user, exc)
-        return False
+        # Fail CLOSED on unexpected DB/OTP errors so 2FA gating is never
+        # silently bypassed during an outage or misconfiguration.
+        logger.error("2FA device check failed for %s (failing closed): %s", user, exc)
+        return True
 
 
 def admin_2fa_enrollment_required(user) -> bool:

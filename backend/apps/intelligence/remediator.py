@@ -204,7 +204,9 @@ class RemediationEngine:
                 if action == 'NOTIFY_AND_DIAGNOSE':
                     last_deploy = service.deployments.filter(status='FAILED').first()
                     if last_deploy and last_deploy.build_logs:
-                        prompt = f"Diagnose this build failure for {service.name}:\n\n{last_deploy.build_logs[-5000:]}"
+                        from apps.deployments.utils.log_scrub import mask_secrets_in_text
+                        safe_logs = mask_secrets_in_text(last_deploy.build_logs[-5000:])
+                        prompt = f"Diagnose this build failure for {service.name}:\n\n{safe_logs}"
                         try:
                             response, provider = _cached_ask(prompt)
                             last_deploy.ai_diagnosis = f"[{provider}] {response}"

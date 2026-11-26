@@ -212,10 +212,15 @@ class NixpacksBuilder:
 
         # Cooperative wake: builds consume apt-cacher/verdaccio over docker
         # DNS — if the buildcache tier sleeps, every apt-get/npm fetch
-        # fails. Wake it first (warn-only; proceeds even if napd is away).
+        # fails. Wake it first (warn-only; proceeds even if napd is away),
+        # but respect lite/medium RAM tiers so builds don't OOM small VPSes.
         try:
-            from apps.deployments.services.tiers import ensure_tier_awake
-            ensure_tier_awake("buildcache", timeout=180)
+            from apps.deployments.services.tiers import (
+                ensure_tier_awake,
+                tier_allowed_on_host,
+            )
+            if tier_allowed_on_host("buildcache"):
+                ensure_tier_awake("buildcache", timeout=180)
         except Exception:
             pass
 

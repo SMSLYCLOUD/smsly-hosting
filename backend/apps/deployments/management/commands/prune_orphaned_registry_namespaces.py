@@ -132,20 +132,26 @@ class Command(BaseCommand):
 
     @staticmethod
     def _get_json(url: str, auth) -> dict:
-        # Internal registry with a private CA: the daemon trusts it via
-        # installed certs, but this container may not — same posture as
-        # the check_registry --insecure diagnostic path.
-        resp = requests.get(url, auth=auth, verify=False, timeout=15)
+        from apps.deployments.services.tls_verify import audit_verify, should_verify
+
+        verify = should_verify(url)
+        audit_verify(url, verify)
+        resp = requests.get(url, auth=auth, verify=verify, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         return data if isinstance(data, dict) else {}
 
     @staticmethod
     def _tag_digest(base: str, auth, repo: str, tag: str) -> str:
+        from apps.deployments.services.tls_verify import audit_verify, should_verify
+
+        url = f"{base}/v2/{repo}/manifests/{tag}"
+        verify = should_verify(url)
+        audit_verify(url, verify)
         resp = requests.get(
-            f"{base}/v2/{repo}/manifests/{tag}",
+            url,
             auth=auth,
-            verify=False,
+            verify=verify,
             timeout=15,
             headers={"Accept": "application/vnd.docker.distribution.manifest.v2+json"},
         )
@@ -157,5 +163,9 @@ class Command(BaseCommand):
 
     @staticmethod
     def _delete(url: str, auth) -> None:
-        resp = requests.delete(url, auth=auth, verify=False, timeout=30)
+        from apps.deployments.services.tls_verify import audit_verify, should_verify
+
+        verify = should_verify(url)
+        audit_verify(url, verify)
+        resp = requests.delete(url, auth=auth, verify=verify, timeout=30)
         resp.raise_for_status()

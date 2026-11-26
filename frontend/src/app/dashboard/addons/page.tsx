@@ -29,12 +29,12 @@ export default function AddonsPage() {
                     description="Manage your databases, caches, and storage."
                     icon={<Database className="h-8 w-8 text-primary" />}
                     actions={
-                        <Link href="/dashboard/addons/new">
-                            <Button>
+                        <Button asChild>
+                            <Link href="/dashboard/addons/new">
                                 <Plus className="w-4 h-4 mr-2" />
                                 New Addon
-                            </Button>
-                        </Link>
+                            </Link>
+                        </Button>
                     }
                 />
 
@@ -45,9 +45,9 @@ export default function AddonsPage() {
                         <Database className="w-12 h-12 mx-auto text-muted-foreground mb-4 opacity-50" />
                         <h3 className="text-lg font-medium">No Addons Yet</h3>
                         <p className="text-muted-foreground mb-6">Provision a database or cache for your applications.</p>
-                        <Link href="/dashboard/addons/new">
-                            <Button variant="outline">Create First Addon</Button>
-                        </Link>
+                        <Button variant="outline" asChild>
+                            <Link href="/dashboard/addons/new">Create First Addon</Link>
+                        </Button>
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

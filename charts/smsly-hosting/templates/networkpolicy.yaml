@@ -26,19 +26,127 @@ spec:
     - from:
         - namespaceSelector:
             matchLabels:
-              name: {{ .Release.Namespace }}
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
         - podSelector: {}
   egress:
     - to:
         - namespaceSelector:
             matchLabels:
-              name: {{ .Release.Namespace }}
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
         - podSelector: {}
     - to:
         - namespaceSelector: {}
+        - ipBlock:
+            cidr: 169.254.20.10/32
       ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
           port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+    {{- if and .Values.externalDatabase .Values.externalDatabase.enabled }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: {{ default 5432 .Values.externalDatabase.port }}
+    {{- end }}
+    {{- if and .Values.externalRedis .Values.externalRedis.enabled }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: {{ default 6379 .Values.externalRedis.port }}
+    {{- end }}
+    {{- if and .Values.externalRabbitmq .Values.externalRabbitmq.enabled }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: {{ default 5672 .Values.externalRabbitmq.port }}
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "smsly.fullname" . }}-allow-ingress-backend
+  labels:
+    {{- include "smsly.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "smsly-hosting.name" . }}-backend
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values:
+                  - ingress-nginx
+                  - traefik
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - protocol: TCP
+          port: {{ .Values.backend.service.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "smsly.fullname" . }}-allow-ingress-frontend
+  labels:
+    {{- include "smsly.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "smsly-hosting.name" . }}-frontend
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values:
+                  - ingress-nginx
+                  - traefik
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - protocol: TCP
+          port: {{ .Values.frontend.service.port }}
 {{- end }}

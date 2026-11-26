@@ -32,7 +32,7 @@ def write_tls_allow_list(domains: list[str]) -> str | None:
         seen: set[str] = set()
         for raw in domains or []:
             d = str(raw or "").strip().lower().rstrip(".")
-            if not d or d in seen:
+            if not d or d.startswith(("(", ":")) or ":" in d or "(" in d or ")" in d or d in seen:
                 continue
             seen.add(d)
             cleaned.append(d)
@@ -108,7 +108,13 @@ def _generate_selfsigned_cert(cert_path: str, key_path: str, ip_address: str):
             serialization.NoEncryption(),
         ))
     os.chmod(cert_path, 0o644)
-    os.chmod(key_path, 0o644)
+    os.chmod(key_path, 0o640)
+    try:
+        caddy_gid = int(os.environ.get("CADDY_GID", "1000"))
+        if hasattr(os, "chown"):
+            os.chown(key_path, os.getuid(), caddy_gid)
+    except (OSError, PermissionError, ValueError):
+        pass
     logger.info("Generated self-signed cert for IP: %s", ip_address)
 
 

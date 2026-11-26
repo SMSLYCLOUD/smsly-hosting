@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Activity, Cpu, HardDrive, Network, AlertCircle, RefreshCcw, Server, Database } from 'lucide-react';
 import { servicesApi, addonsApi, type Service, type Addon } from '@/lib/api';
+import { DashboardShell } from '@/components/layout/DashboardShell';
 import { useRouter } from 'next/navigation';
 
 interface ServiceHealth {
@@ -96,7 +97,10 @@ export default function MonitoringPage() {
     useEffect(() => {
         setLoading(true);
         fetchData();
-        const interval = setInterval(fetchData, 30000);
+        const interval = setInterval(() => {
+            if (typeof document !== 'undefined' && document.hidden) return;
+            fetchData();
+        }, 30000);
         return () => clearInterval(interval);
     }, [fetchData]);
 
@@ -107,6 +111,7 @@ export default function MonitoringPage() {
     const highCpu = healthList.filter((h) => h.cpu >= 85).length;
 
     return (
+        <DashboardShell>
         <div className="container mx-auto py-8 space-y-6">
             <div className="flex flex-wrap items-end justify-between gap-3">
                 <div>
@@ -266,5 +271,6 @@ export default function MonitoringPage() {
                 </p>
             )}
         </div>
+        </DashboardShell>
     );
 }

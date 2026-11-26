@@ -9,9 +9,10 @@ type IDisposable = { dispose: () => void };
 interface XtermConsoleProps {
   wsUrl: string;
   wsToken?: string | null;
+  ariaLabel?: string;
 }
 
-export default function XtermConsole({ wsUrl, wsToken }: XtermConsoleProps) {
+export default function XtermConsole({ wsUrl, wsToken, ariaLabel = 'Interactive terminal console' }: XtermConsoleProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const term = useRef<{ dispose: () => void } | null>(null);
   const ws = useRef<WebSocket | null>(null);
@@ -226,11 +227,14 @@ export default function XtermConsole({ wsUrl, wsToken }: XtermConsoleProps) {
           if (event.reason) {
             t.writeln(`\x1b[31m[reason] ${event.reason}\x1b[0m`);
           }
-          // Auth failures (4001/4002/4003) never succeed on retry with
-          // the same token — reconnecting just burns 15 backoff cycles.
-          // Tell the user to refresh (fresh token exchange) instead.
-          if (event.code === 4001 || event.code === 4002 || event.code === 4003) {
-            t.writeln('\x1b[31m[authentication failed — refresh the page to retry]\x1b[0m');
+          // Auth / not-found failures (4001/4002/4003/4404) never succeed on retry
+          // with the same token — reconnecting just burns 15 backoff cycles.
+          if (event.code === 4001 || event.code === 4002 || event.code === 4003 || event.code === 4404) {
+            t.writeln(
+              event.code === 4404
+                ? '\x1b[31m[target session or container not found]\x1b[0m'
+                : '\x1b[31m[authentication failed — refresh the page to retry]\x1b[0m',
+            );
             return;
           }
           if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
@@ -305,6 +309,8 @@ export default function XtermConsole({ wsUrl, wsToken }: XtermConsoleProps) {
   return (
     <div
       ref={terminalRef}
+      role="region"
+      aria-label={ariaLabel}
       className="h-full w-full overflow-hidden rounded-lg bg-zinc-950 p-2"
     />
   );

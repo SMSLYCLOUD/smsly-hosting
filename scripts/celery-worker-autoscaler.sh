@@ -43,7 +43,7 @@ BURST_WORKERS=(celery-fast celery-deploy)
 MANAGED_WORKERS=()
 _resolve_managed_workers() {
     local available=""
-    available="$(docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null || true)"
+    available="$(timeout 15 docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null || true)"
     local svc=""
     for svc in "${BURST_WORKERS[@]}"; do
         if printf '%s\n' "$available" | grep -qx "$svc"; then
@@ -56,8 +56,32 @@ _resolve_managed_workers() {
 
 # ── Load config from .env ────────────────────────────────────────────────────
 _load_env() {
-    # shellcheck disable=SC1090
-    [ -f "$ENV_FILE" ] && set -a && . "$ENV_FILE" && set +a
+    if [ -f "$ENV_FILE" ]; then
+        local _line="" _key="" _val=""
+        while IFS= read -r _line || [ -n "$_line" ]; do
+            case "$_line" in
+                ""|\#*) continue ;;
+            esac
+            _line="${_line#export }"
+            case "$_line" in
+                *=*)
+                    _key="${_line%%=*}"
+                    _val="${_line#*=}"
+                    _key="${_key#"${_key%%[![:space:]]*}"}"
+                    _key="${_key%"${_key##*[![:space:]]}"}"
+                    case "$_key" in
+                        [A-Za-z_][A-Za-z0-9_]*)
+                            case "$_val" in
+                                \"*\") _val="${_val#\"}"; _val="${_val%\"}" ;;
+                                \'*\') _val="${_val#\'}"; _val="${_val%\'}" ;;
+                            esac
+                            export "${_key}=${_val}"
+                            ;;
+                    esac
+                    ;;
+            esac
+        done < "$ENV_FILE"
+    fi
     case "${COMPOSE_FILE:-}" in
         "") COMPOSE_FILE="${INSTALL_DIR}/docker-compose.prod.yml" ;;
         /*) ;;
@@ -77,7 +101,7 @@ _log() {
 # `smsly-hosting-rabbitmq-1`), so `docker exec rabbitmq` never resolves.
 # Always go through _rabbitmq_container() (compose ps -q).
 _rabbitmq_container() {
-    docker compose -f "$COMPOSE_FILE" ps -q rabbitmq 2>/dev/null | head -n 1
+    timeout 15 docker compose -f "$COMPOSE_FILE" ps -q rabbitmq 2>/dev/null | head -n 1
 }
 # Sums depth across ALL platform queues. Grepping only '^celery' missed the
 # 'deploy' and 'fast' queues where most heavy work lands (see config/celery.py
@@ -130,12 +154,12 @@ _get_burst_unacked() {
 # ── Worker state tracking ────────────────────────────────────────────────────
 _worker_running() {
     local svc="$1"
-    docker compose -f "$COMPOSE_FILE" ps "$svc" 2>/dev/null | grep -q "Up"
+    timeout 15 docker compose -f "$COMPOSE_FILE" ps "$svc" 2>/dev/null | grep -q "Up"
 }
 
 _scale_up() {
     _log INFO "Scaling UP: starting ${MANAGED_WORKERS[*]}"
-    docker compose -f "$COMPOSE_FILE" up -d --no-deps "${MANAGED_WORKERS[@]}" 2>&1 | while read -r line; do
+    timeout 120 docker compose -f "$COMPOSE_FILE" up -d --no-deps "${MANAGED_WORKERS[@]}" 2>&1 | while read -r line; do
         _log INFO "  $line"
     done
 }
@@ -144,7 +168,7 @@ _scale_down() {
     # `stop` (not rm): containers keep their state for a ~2s resume, and a
     # later full `up` (update/refresh flows) restarts them fail-open.
     _log INFO "Scaling DOWN: stopping ${MANAGED_WORKERS[*]}"
-    docker compose -f "$COMPOSE_FILE" stop --timeout 15 "${MANAGED_WORKERS[@]}" 2>&1 | while read -r line; do
+    timeout 60 docker compose -f "$COMPOSE_FILE" stop --timeout 15 "${MANAGED_WORKERS[@]}" 2>&1 | while read -r line; do
         _log INFO "  $line"
     done
 }

@@ -40,22 +40,20 @@ class InviteMemberSmtpFailureTests(TestCase):
         self.client.force_authenticate(user=self.admin)
         self.url = f"/api/v1/teams/{self.team.id}/invite_member/"
 
-    def test_smtp_failure_returns_502_with_mail_error(self):
+    def test_smtp_failure_does_not_leak_mail_error(self):
         with patch(
             "apps.teams.views.send_mail",
             side_effect=SMTPException("SMTP 451 relay not permitted"),
-        ):
+        ), self.captureOnCommitCallbacks(execute=True):
             resp = self.client.post(
                 self.url,
                 data={"email": self.invitee.email, "role": "MEMBER"},
                 format="json",
             )
-        self.assertEqual(resp.status_code, http_status.HTTP_502_BAD_GATEWAY)
-        self.assertIn("mail_error", resp.data)
-        self.assertIn("SMTP 451", resp.data["mail_error"])
-        self.assertEqual(resp.data["mail_error"], "SMTP 451 relay not permitted")
-        # The membership was created before the email attempt —
-        # the admin can retry once SMTP is healthy.
+        self.assertEqual(resp.status_code, http_status.HTTP_200_OK)
+        self.assertEqual(resp.data["status"], "invited")
+        self.assertNotIn("mail_error", resp.data)
+        self.assertNotIn("relay not permitted", str(resp.data))
         self.assertTrue(
             TeamMember.objects.filter(
                 team=self.team, user=self.invitee,
@@ -63,7 +61,8 @@ class InviteMemberSmtpFailureTests(TestCase):
         )
 
     def test_smtp_success_returns_200(self):
-        with patch("apps.teams.views.send_mail") as send_mail_mock:
+        with patch("apps.teams.views.send_mail") as send_mail_mock, \
+                self.captureOnCommitCallbacks(execute=True):
             resp = self.client.post(
                 self.url,
                 data={"email": self.invitee.email, "role": "MEMBER"},

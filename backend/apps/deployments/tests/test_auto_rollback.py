@@ -167,7 +167,7 @@ class AutoRollbackEngineTests(TestCase):
     # Patches target the SOURCE module — see class docstring.
 
     @patch('apps.core.tasks.alerts.notify_auto_rollback')
-    @patch('apps.deployments.tasks_deploy.enqueue_smart_deploy_task')
+    @patch('apps.deployments.tasks.deployment.tasks_deploy.enqueue_smart_deploy_task')
     def test_successful_trigger_creates_rollback(
         self, mock_enqueue, mock_notify,
     ):
@@ -198,7 +198,7 @@ class AutoRollbackEngineTests(TestCase):
         self.assertIn(str(rollback.id), kwargs['reason'])
 
     @patch('apps.core.tasks.alerts.notify_auto_rollback')
-    @patch('apps.deployments.tasks_deploy.enqueue_smart_deploy_task')
+    @patch('apps.deployments.tasks.deployment.tasks_deploy.enqueue_smart_deploy_task')
     def test_successful_trigger_sets_heartbeat_and_registry(
         self, mock_enqueue, mock_notify,
     ):
@@ -222,7 +222,7 @@ class AutoRollbackEngineTests(TestCase):
         self.assertIn(result.rollback_id, registry)
 
     @patch('apps.core.tasks.alerts.notify_auto_rollback')
-    @patch('apps.deployments.tasks_deploy.enqueue_smart_deploy_task')
+    @patch('apps.deployments.tasks.deployment.tasks_deploy.enqueue_smart_deploy_task')
     def test_successful_trigger_writes_audit_log(
         self, mock_enqueue, mock_notify,
     ):
@@ -254,7 +254,7 @@ class AutoRollbackEngineTests(TestCase):
     # ── rollback_from semantic ──────────────────────────────────
 
     @patch('apps.core.tasks.alerts.notify_auto_rollback')
-    @patch('apps.deployments.tasks_deploy.enqueue_smart_deploy_task')
+    @patch('apps.deployments.tasks.deployment.tasks_deploy.enqueue_smart_deploy_task')
     def test_rollback_from_is_none_when_failed_deployment_omitted(
         self, mock_enqueue, mock_notify,
     ):
@@ -273,9 +273,9 @@ class AutoRollbackEngineTests(TestCase):
 
     # ── no active provider ──────────────────────────────────────
 
-    @patch('apps.deployments.tasks.deploy.helpers._resolve_provider_for_service')
+    @patch('apps.deployments.tasks.deployment.tasks_deploy._resolve_provider_for_service')
     @patch('apps.core.tasks.alerts.notify_auto_rollback')
-    @patch('apps.deployments.tasks_deploy.enqueue_smart_deploy_task')
+    @patch('apps.deployments.tasks.deployment.tasks_deploy.enqueue_smart_deploy_task')
     def test_no_active_provider_rollback_queued(
         self, mock_enqueue, mock_notify, mock_resolve,
     ):
@@ -291,7 +291,7 @@ class AutoRollbackEngineTests(TestCase):
     # ── heartbeat helpers ───────────────────────────────────────
 
     @patch('apps.core.tasks.alerts.notify_auto_rollback')
-    @patch('apps.deployments.tasks_deploy.enqueue_smart_deploy_task')
+    @patch('apps.deployments.tasks.deployment.tasks_deploy.enqueue_smart_deploy_task')
     def test_clear_rollback_heartbeat_removes_from_registry(
         self, mock_enqueue, mock_notify,
     ):
@@ -313,7 +313,7 @@ class AutoRollbackEngineTests(TestCase):
         self.assertNotIn(result.rollback_id, registry)
 
     @patch('apps.core.tasks.alerts.notify_auto_rollback')
-    @patch('apps.deployments.tasks_deploy.enqueue_smart_deploy_task')
+    @patch('apps.deployments.tasks.deployment.tasks_deploy.enqueue_smart_deploy_task')
     def test_clear_rollback_heartbeat_accepts_uuid(
         self, mock_enqueue, mock_notify,
     ):
@@ -332,7 +332,7 @@ class AutoRollbackEngineTests(TestCase):
         self.assertNotIn(result.rollback_id, registry)
 
     @patch('apps.core.tasks.alerts.notify_auto_rollback')
-    @patch('apps.deployments.tasks_deploy.enqueue_smart_deploy_task')
+    @patch('apps.deployments.tasks.deployment.tasks_deploy.enqueue_smart_deploy_task')
     def test_get_stuck_rollback_heartbeats(
         self, mock_enqueue, mock_notify,
     ):
@@ -373,8 +373,15 @@ class AutoRollbackEngineTests(TestCase):
 
     @patch('apps.core.tasks.alerts.notify_auto_rollback')
     def test_monitor_alerts_and_audits_and_clears(self, mock_notify):
-        # Plant a stuck heartbeat directly.
-        hb_key = AutoRollbackEngine._heartbeat_key('fake-rollback-id')
+        # Plant a stuck heartbeat for an active QUEUED rollback row.
+        rollback = Deployment.objects.create(
+            service=self.service,
+            status=Deployment.Status.QUEUED,
+            commit_hash='deadbee',
+            is_rollback=True,
+        )
+        rid = str(rollback.id)
+        hb_key = AutoRollbackEngine._heartbeat_key(rid)
         cache.set(
             hb_key,
             {
@@ -388,7 +395,7 @@ class AutoRollbackEngineTests(TestCase):
             },
             timeout=300,
         )
-        registry = {'fake-rollback-id'}
+        registry = {rid}
         cache.set('rollback-heartbeat-registry', registry, timeout=86400)
 
         result = monitor_stuck_rollback_heartbeats()
@@ -409,6 +416,32 @@ class AutoRollbackEngineTests(TestCase):
         )
 
         # Heartbeat + registry entry were cleared so we don't re-alert.
+        self.assertIsNone(cache.get(hb_key))
+        self.assertNotIn(
+            rid,
+            cache.get('rollback-heartbeat-registry') or set(),
+        )
+
+    def test_monitor_prunes_non_uuid_rollback_id(self):
+        hb_key = AutoRollbackEngine._heartbeat_key('fake-rollback-id')
+        cache.set(
+            hb_key,
+            {
+                'service_id': str(self.service.id),
+                'service_name': self.service.name,
+                'trigger': 'test_trigger',
+                'target_commit': 'deadbee',
+                'queued_at': (
+                    timezone.now() - timezone.timedelta(hours=1)
+                ).isoformat(),
+            },
+            timeout=300,
+        )
+        cache.set('rollback-heartbeat-registry', {'fake-rollback-id'}, timeout=86400)
+
+        result = monitor_stuck_rollback_heartbeats()
+
+        self.assertEqual(result['stuck_count'], 0)
         self.assertIsNone(cache.get(hb_key))
         self.assertNotIn(
             'fake-rollback-id',

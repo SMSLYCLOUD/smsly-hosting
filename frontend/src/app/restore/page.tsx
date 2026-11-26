@@ -238,12 +238,12 @@ export default function RestorePage() {
                             <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
                             Refresh
                         </Button>
-                        <Link href="/backups">
-                            <Button variant="outline">
+                        <Button variant="outline" asChild>
+                            <Link href="/backups">
                                 <Archive className="mr-2 h-4 w-4" />
                                 Server Backups
-                            </Button>
-                        </Link>
+                            </Link>
+                        </Button>
                     </div>
                 </div>
 
@@ -344,11 +344,11 @@ export default function RestorePage() {
                                                     </Link>
                                                 )}
                                                 {!sb.latestBackup && (
-                                                    <Link href={`/services/${sb.serviceId}`}>
-                                                        <Button variant="ghost" size="sm">
+                                                    <Button variant="ghost" size="sm" asChild>
+                                                        <Link href={`/services/${sb.serviceId}`}>
                                                             View Service
-                                                        </Button>
-                                                    </Link>
+                                                        </Link>
+                                                    </Button>
                                                 )}
                                             </TableCell>
                                         </TableRow>
@@ -359,11 +359,11 @@ export default function RestorePage() {
                                                 <div className="flex flex-col items-center gap-2">
                                                     <Archive className="h-8 w-8 text-muted-foreground/50" />
                                                     <p>No services found.</p>
-                                                    <Link href="/new">
-                                                        <Button variant="outline" size="sm">
+                                                    <Button variant="outline" size="sm" asChild>
+                                                        <Link href="/new">
                                                             Create a Service
-                                                        </Button>
-                                                    </Link>
+                                                        </Link>
+                                                    </Button>
                                                 </div>
                                             </TableCell>
                                         </TableRow>

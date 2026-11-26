@@ -137,8 +137,8 @@ def _safe_dast_target(url: str, *, allow_private_for_test: bool = False) -> str 
     if allow_private_for_test:
         return raw.rstrip("/")
     try:
-        from apps.core.validators import validate_webhook_url
-        validate_webhook_url(raw, allow_http=True)
+        from apps.core.validators import validate_ssrf
+        validate_ssrf(raw, fail_closed_dns=True)
     except Exception:
         return None
     return raw.rstrip("/")
@@ -362,7 +362,7 @@ def _container_matches_service(ctr, service) -> bool:
 
 def _sync_reverse_proxy_routes() -> None:
     try:
-        from apps.deployments.services.proxy import _regenerate_caddyfile
+        from apps.deployments.tasks.deploy.caddy import _regenerate_caddyfile
 
         _regenerate_caddyfile()
     except Exception as exc:

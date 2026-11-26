@@ -1,3 +1,4 @@
+import asyncio  # noqa: F401
 from .base import authenticate_ws_token, get_websocket_subprotocol, _REDIS_WS_ERRORS
 from .terminal import TerminalConsumer
 from .build_log import BuildLogConsumer

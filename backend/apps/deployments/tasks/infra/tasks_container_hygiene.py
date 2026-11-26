@@ -280,7 +280,12 @@ def reconcile_gvisor_hosts_task(dry_run: bool = False):
         checked += 1
         service_nets = set((nets or {}).keys())
         expected: dict[str, str] = {}
-        for addon in Addon.objects.filter(service=service, status='ACTIVE'):
+        from django.db.models import Q
+        project_id = getattr(service, 'project_id', None)
+        addon_filter = Q(service=service)
+        if project_id:
+            addon_filter |= Q(service__project_id=project_id)
+        for addon in Addon.objects.filter(status='ACTIVE').filter(addon_filter):
             url = (getattr(addon, 'connection_url', '') or '').strip()
             if not url:
                 continue
@@ -303,7 +308,75 @@ def reconcile_gvisor_hosts_task(dry_run: bool = False):
                 if ip:
                     expected[host] = ip
                     break
+        # Check sibling project Service entries present in ExtraHosts so stale
+        # entries from prior blue-green swaps never strand containers on dead IPs.
+        live_map: dict[str, str] = {}
+        for entry in live_hosts or []:
+            h_k, sep, h_v = str(entry).partition(":")
+            if sep and h_k.strip() and h_v.strip():
+                live_map[h_k.strip()] = h_v.strip()
+
+        stale_sibling_hosts: dict[str, str] = {}
+        if project_id and live_map:
+            try:
+                siblings = Service.objects.filter(project_id=project_id).exclude(id=service.id)
+            except Exception:
+                siblings = ()
+            for sibling in siblings:
+                sib_name = (getattr(sibling, 'name', '') or '').strip()
+                if not sib_name:
+                    continue
+                present_keys = [
+                    k for k in (sib_name, f"{sib_name}.default.internal") if k in live_map
+                ]
+                if not present_keys:
+                    continue
+                refs: list[str] = []
+                try:
+                    deps_mgr = getattr(sibling, 'deployments', None)
+                    if deps_mgr is not None:
+                        active_cid = (
+                            deps_mgr.filter(status='ACTIVE')
+                            .order_by('-created_at')
+                            .values_list('container_id', flat=True)
+                            .first()
+                        )
+                        if active_cid:
+                            refs.append(str(active_cid).strip())
+                except Exception:
+                    pass
+                if sib_name not in refs:
+                    refs.append(sib_name)
+                sib_ip = ''
+                for ref in refs:
+                    sib_insp = _sh([
+                        'docker', 'inspect', ref, '--format',
+                        '{{.State.Status}}\t{{json .NetworkSettings.Networks}}',
+                    ])
+                    if sib_insp.returncode != 0:
+                        continue
+                    try:
+                        sib_state, sib_nets_s = sib_insp.stdout.strip().split('\t')
+                        if sib_state.strip().lower() == 'running':
+                            sib_nets = json.loads(sib_nets_s or '{}')
+                            for net_name in service_nets:
+                                ip = ((sib_nets.get(net_name) or {}).get('IPAddress') or '').strip()
+                                if ip:
+                                    sib_ip = ip
+                                    break
+                    except Exception:
+                        sib_ip = ''
+                    if sib_ip:
+                        break
+                for host_key in present_keys:
+                    if sib_ip:
+                        expected[host_key] = sib_ip
+                    else:
+                        stale_sibling_hosts[host_key] = 'remove-stale'
+
         drift = _hosts_drift(live_hosts, expected)
+        if stale_sibling_hosts:
+            drift = {**drift, **stale_sibling_hosts}
         if not drift:
             continue
         if dry_run or len(recreated) >= RECONCILE_MAX_RECREATES:

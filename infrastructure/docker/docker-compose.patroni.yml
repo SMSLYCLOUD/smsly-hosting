@@ -10,15 +10,20 @@ services:
       - patroni-net
 
   patroni1:
-    image: ghcr.io/zalando/spilo-16:3.0-p1
+    image: registry:5000/smsly/spilo:16
+    build:
+      context: ../spilo
+      dockerfile: Dockerfile
     hostname: patroni1
     environment:
       SCOPE: smsly-cluster
       ETCD3_HOST: "etcd:2379"
+      PATRONI_NAME: patroni1
       PGUSER_SUPERUSER: postgres
       PGPASSWORD_SUPERUSER: ${PATRONI_SUPERUSER_PASSWORD:?must be set}
       PGUSER_ADMIN: smsly_admin
       PGPASSWORD_ADMIN: ${PATRONI_ADMIN_PASSWORD:?must be set}
+      PGPASSWORD_STANDBY: ${REPLICATION_PASSWORD:-}
       PG_HMAC: sha256
     ports:
       - "127.0.0.1:5432:5432"
@@ -29,15 +34,20 @@ services:
       - etcd
 
   patroni2:
-    image: ghcr.io/zalando/spilo-16:3.0-p1
+    image: registry:5000/smsly/spilo:16
+    build:
+      context: ../spilo
+      dockerfile: Dockerfile
     hostname: patroni2
     environment:
       SCOPE: smsly-cluster
       ETCD3_HOST: "etcd:2379"
+      PATRONI_NAME: patroni2
       PGUSER_SUPERUSER: postgres
       PGPASSWORD_SUPERUSER: ${PATRONI_SUPERUSER_PASSWORD:?must be set}
       PGUSER_ADMIN: smsly_admin
       PGPASSWORD_ADMIN: ${PATRONI_ADMIN_PASSWORD:?must be set}
+      PGPASSWORD_STANDBY: ${REPLICATION_PASSWORD:-}
       PG_HMAC: sha256
     ports:
       - "127.0.0.1:5433:5432"
@@ -48,15 +58,20 @@ services:
       - etcd
 
   patroni3:
-    image: ghcr.io/zalando/spilo-16:3.0-p1
+    image: registry:5000/smsly/spilo:16
+    build:
+      context: ../spilo
+      dockerfile: Dockerfile
     hostname: patroni3
     environment:
       SCOPE: smsly-cluster
       ETCD3_HOST: "etcd:2379"
+      PATRONI_NAME: patroni3
       PGUSER_SUPERUSER: postgres
       PGPASSWORD_SUPERUSER: ${PATRONI_SUPERUSER_PASSWORD:?must be set}
       PGUSER_ADMIN: smsly_admin
       PGPASSWORD_ADMIN: ${PATRONI_ADMIN_PASSWORD:?must be set}
+      PGPASSWORD_STANDBY: ${REPLICATION_PASSWORD:-}
       PG_HMAC: sha256
     ports:
       - "127.0.0.1:5434:5432"
@@ -73,7 +88,7 @@ services:
       - "127.0.0.1:5001:5001" # Replicas
       - "127.0.0.1:7000:7000" # Stats
     volumes:
-      - ./postgres/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     networks:
       - patroni-net
     depends_on:

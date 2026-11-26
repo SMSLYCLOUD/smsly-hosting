@@ -891,7 +891,7 @@ class AddonProvisioner:
                 )
 
                 # If the alias is not found in the output, attempt to attach it.
-                if parsed_hostname not in inspect_proc.stdout:
+                if inspect_proc.returncode == 0 and parsed_hostname not in inspect_proc.stdout:
                     # Retry network reconnection up to 3 times for transient Docker daemon issues
                     for attempt in range(3):
                         subprocess.run(
@@ -1066,16 +1066,17 @@ class AddonProvisioner:
             elif addon_type == 'MINIO':
                 container_id, recreated_url = self._provision_minio(container_name, password, cast(int, port), hostname, username=username, public_domain=public_domain, host_port=host_port_for_recreate)
             elif addon_type == 'POSTGRES':
-                # user/db follow the CURRENT alias (see remote comment
-                # above); the row URL converges on them below.
+                # Preserve existing URL username/db_name first (e.g. across
+                # shared <-> container migrations or volume re-attachments),
+                # falling back to the sanitized alias/container name only when omitted.
                 _pg_suffix = (hostname or container_name).replace('-', '_').replace('.', '_').replace(' ', '_')[:63]
                 container_id, recreated_url = self._provision_postgres(
                     container_name,
                     password,
                     cast(int, port),
                     hostname,
-                    db_user=_pg_suffix or username or None,
-                    db_name=_pg_suffix or db_name or None,
+                    db_user=username or _pg_suffix or None,
+                    db_name=db_name or _pg_suffix or None,
                     public_domain=public_domain,
                     host_port=host_port_for_recreate,
                 )
@@ -1098,18 +1099,19 @@ class AddonProvisioner:
 
             self._connect_addon_networks(container_name, addon, public_domain=public_domain, host_port=host_port_for_recreate)
             if addon_type == 'POSTGRES':
-                # Converge the row on what the container actually seeded
-                # (user/db from the current alias) — otherwise the app
-                # dials a db the server never created.
+                # Converge the row only if user/db were missing from existing_url
+                # (otherwise keep existing credentials intact).
                 from urllib.parse import urlparse as _uup, urlunparse as _uun
                 try:
                     _pp = _uup(existing_url)
                     _suffix = (hostname or container_name).replace('-', '_').replace('.', '_').replace(' ', '_')[:63]
-                    _cred = _suffix or ''
+                    _eff_user = username or _suffix or ''
+                    _eff_db = db_name or _suffix or ''
+                    _cred = _eff_user
                     if password:
                         _cred += f":{password}"
                     _netloc = f"{_cred}@{_pp.hostname or hostname}:{_pp.port or port}"
-                    existing_url = _uun(_pp._replace(netloc=_netloc, path=f"/{_suffix or db_name}"))
+                    existing_url = _uun(_pp._replace(netloc=_netloc, path=f"/{_eff_db}"))
                 except Exception:
                     pass
                 if 'sslmode=' in (recreated_url or ''):
@@ -2205,6 +2207,18 @@ metrics = false
                 env_vars[str(_k)] = str(_v)
         env_file = self._write_env_file(env_vars)
 
+        secret_keys = {
+            str(config.get('pass_env') or ''),
+            str(config.get('root_pass_env') or ''),
+        } - {''}
+        non_secret_env_flags: list[str] = []
+        for _k, _v in env_vars.items():
+            if _k in secret_keys or any(tok in _k.upper() for tok in ('PASS', 'SECRET', 'TOKEN', 'KEY')):
+                continue
+            if password and str(_v) == str(password):
+                continue
+            non_secret_env_flags.extend(['-e', f'{_k}={_v}'])
+
         cmd = [
             'docker', 'run', '-d',
             '--name', container_name,
@@ -2212,6 +2226,7 @@ metrics = false
             '--restart', 'unless-stopped',
             *self.SECURITY_OPTS,
             '--env-file', env_file,
+            *non_secret_env_flags,
             '-v', f'{container_name}-data:{config.get("data_dir", "/data")}'
         ]
 
@@ -2588,7 +2603,10 @@ metrics = false
             hostname = str(parsed.get('hostname') or alias_name).strip()
         else:
             password = _secrets.token_urlsafe(48)
-            hostname = alias_name
+            short_id = str(addon.id).split('-')[0]
+            hostname = f"pg-{short_id}"
+            db_user = f"u_{short_id}"
+            db_name = f"db_{short_id}"
         if not password:
             raise ValueError("Shared Postgres needs a password; refusing to provision without one.")
 
@@ -3455,7 +3473,8 @@ metrics = false
 
     def deprovision(self, container_id: str,
                     container_name: str | None = None,
-                    retain_volume: bool = False) -> bool:
+                    retain_volume: bool = False,
+                    addon=None) -> bool:
         """
         Remove an addon container and its volumes.
 
@@ -3490,7 +3509,16 @@ metrics = false
                 from apps.addons.services.addon_tls import remove_tls_volume
                 from apps.addons.services import volume_encryption
                 remove_tls_volume(f'{container_name}-tls', timeout=60)
-                volume_encryption.cleanup_volume(None, f'{container_name}-data')
+                if addon is None and container_name:
+                    import re as _re_id
+                    m = _re_id.search(r'([0-9a-fA-F-]{36})$', container_name)
+                    if m:
+                        try:
+                            from apps.deployments.models.addons import Addon as _AddonModel
+                            addon = _AddonModel.objects.filter(id=m.group(1)).first()
+                        except Exception:
+                            addon = None
+                volume_encryption.cleanup_volume(addon, f'{container_name}-data')
             elif container_name and retain_volume:
                 logger.info(
                     "Retaining data volume for %s (soft-delete window)",
@@ -3504,7 +3532,8 @@ metrics = false
             return False
 
     def deprovision_remote(self, container_id: str, server,
-                           container_name: str | None = None) -> bool:
+                           container_name: str | None = None,
+                           retain_volume: bool = False) -> bool:
         """
         Remove an addon container from a remote full-stack node via SSH.
         """
@@ -3522,8 +3551,9 @@ metrics = false
             safe_id = shlex.quote(container_id)
             ssh.exec_command(f"docker stop {safe_id} 2>/dev/null; docker rm -f {safe_id}", timeout=30)
             if container_name:
-                safe_vol = shlex.quote(f'{container_name}-data')
-                ssh.exec_command(f"docker volume rm {safe_vol} 2>/dev/null", timeout=60, raise_on_error=False)
+                if not retain_volume:
+                    safe_vol = shlex.quote(f'{container_name}-data')
+                    ssh.exec_command(f"docker volume rm {safe_vol} 2>/dev/null", timeout=60, raise_on_error=False)
                 from apps.addons.services.addon_tls import remove_tls_volume
                 remove_tls_volume(f'{container_name}-tls', ssh=ssh, timeout=60)
                 # Remove the persisted redis.conf (mounted for requirepass)
@@ -3558,20 +3588,20 @@ metrics = false
                 _srv = ManagedServer.objects.filter(name=_host).first()
                 if _srv is not None and not getattr(_srv, 'is_primary', True) \
                         and not getattr(_srv, 'is_lite_agent', False):
-                    return self.deprovision_remote(container_id, _srv, container_name)
+                    return self.deprovision_remote(container_id, _srv, container_name, retain_volume=retain_volume)
             except Exception:
                 pass
             # Stamped node unknown/missing: fall through to the service
             # derivation below rather than deleting from the wrong host.
         elif _host.lower() == 'master':
             return self.deprovision(container_id, container_name,
-                                    retain_volume=retain_volume)
+                                    retain_volume=retain_volume, addon=addon)
         server = getattr(addon.service, 'server', None) if addon else None
         if (server and not server.is_primary
                 and not getattr(server, 'is_lite_agent', False)):
-            return self.deprovision_remote(container_id, server, container_name)
+            return self.deprovision_remote(container_id, server, container_name, retain_volume=retain_volume)
         return self.deprovision(container_id, container_name,
-                                retain_volume=retain_volume)
+                                retain_volume=retain_volume, addon=addon)
 
     def get_status(self, container_id: str) -> dict:
         """Get the status of an addon container."""
@@ -3872,10 +3902,9 @@ metrics = false
                     )
 
             else:
-                logger.warning(f"Native backup not implemented for {addon.addon_type}, skipping gracefully.")
-                # We write a dummy file so the backup task doesn't crash
-                with open(backup_path, 'w') as f:
-                    f.write(f"Native backup not supported yet for {addon.addon_type}")
+                raise NotImplementedError(
+                    f"Backup is not supported for addon type {addon.addon_type}"
+                )
 
             return backup_path
 

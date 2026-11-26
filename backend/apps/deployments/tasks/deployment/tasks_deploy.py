@@ -387,7 +387,11 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         _handle_failure(self, deployment, str(e), "Pipeline Failure")
     except (docker.errors.DockerException, ConnectionError, TimeoutError) as exc:
         if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc, countdown=30)
+            try:
+                raise self.retry(exc=exc, countdown=30)
+            except (docker.errors.DockerException, ConnectionError, TimeoutError):
+                from celery.exceptions import Retry
+                raise Retry(message=str(exc), exc=exc, when=30) from exc
         _handle_failure(self, deployment, str(exc), "Transient Failure")
     except SoftTimeLimitExceeded:
         _handle_failure(self, deployment, "Task exceeded time limit", "Timeout Failure")
@@ -406,7 +410,11 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
                     )
             except Exception:
                 pass
-            raise self.retry(exc=e, countdown=60)
+            try:
+                raise self.retry(exc=e, countdown=60)
+            except RuntimeError:
+                from celery.exceptions import Retry
+                raise Retry(message=str(e), exc=e, when=60) from e
         _handle_failure(self, deployment, str(e), "System Failure")
     except Exception as e:
         _handle_failure(self, deployment, str(e), "System Failure")
@@ -874,3 +882,40 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
 
 
 from ..deploy.deletion import delete_service_task  # noqa: F401
+
+
+@shared_task(
+    bind=True,
+    max_retries=0,
+    soft_time_limit=120,
+    time_limit=150,
+    name="apps.deployments.tasks.refresh_service_sablier_task",
+)
+def refresh_service_sablier_task(self, service_id: str) -> dict:
+    """Recreate a service's live/sleeping container in-place to sync Sablier labels.
+
+    Triggered when toggling ``sablier_enabled`` or editing ``sablier_session``
+    so Docker container labels and Traefik middlewares converge without requiring
+    a full rebuild. Skips manually STOPPED or deleted services.
+    """
+    from apps.deployments.models import Service
+    from apps.deployments.services.container_refresh import (
+        ContainerRefreshError,
+        recreate_with_fresh_env,
+    )
+
+    service = Service.objects.filter(id=service_id).select_related("server").first()
+    if service is None:
+        return {"ok": False, "skipped": "service not found"}
+    svc_status = str(getattr(service, "status", "") or "").upper()
+    if svc_status in ("STOPPED", "DELETED", "DELETION_PENDING"):
+        return {"ok": False, "skipped": f"service {svc_status.lower()}"}
+    try:
+        return recreate_with_fresh_env(service, include_stopped=True)
+    except ContainerRefreshError as exc:
+        logger.info("Sablier label recreate skipped for %s: %s", service.name, exc)
+        return {"ok": False, "skipped": str(exc)[:200]}
+    except Exception as exc:
+        logger.warning("Sablier label recreate failed for %s: %s", service.name, exc)
+        return {"ok": False, "error": str(exc)[:200]}
+

@@ -75,21 +75,50 @@ RUN cp /etc/apt/sources.list /etc/apt/sources.list.official 2>/dev/null || true;
     | tee /etc/apt/sources.list.d/docker.list > /dev/null \
     && apt-get update \
     && apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin docker-compose-plugin \
-    # Security: Trivy vulnerability scanner
-    && curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | bash -s -- -b /usr/local/bin \
-    # Security: Cosign image signing (Sigstore keyless)
-    && COSIGN_ARCH=$(dpkg --print-architecture | sed 's/x86_64/amd64/;s/aarch64/arm64/') \
-    && curl -sSL -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${COSIGN_ARCH}" \
+    # Security: Trivy vulnerability scanner (pinned version + SHA256)
+    && TRIVY_VERSION="0.76.2" \
+    && case "${ARCH}" in \
+        amd64) TRIVY_ARCH="64bit"; TRIVY_SHA256="bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf" ;; \
+        arm64) TRIVY_ARCH="ARM64"; TRIVY_SHA256="ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3" ;; \
+        *) echo "Unsupported arch for trivy: ${ARCH}" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL -o /tmp/trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" \
+    && echo "${TRIVY_SHA256}  /tmp/trivy.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
+    && chmod +x /usr/local/bin/trivy \
+    && rm -f /tmp/trivy.tar.gz \
+    # Security: Cosign image signing (pinned version + SHA256)
+    && COSIGN_VERSION="v2.4.1" \
+    && case "${ARCH}" in \
+        amd64) COSIGN_SHA256="8b24b946dd5809c6bd93de08033bcf6bc0ed7d336b7785787c080f574b89249b" ;; \
+        arm64) COSIGN_SHA256="3b2e2e3854d0356c45fe6607047526ccd04742d20bd44afb5be91fa2a6e7cb4a" ;; \
+        *) echo "Unsupported arch for cosign: ${ARCH}" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-${ARCH}" \
+    && echo "${COSIGN_SHA256}  /usr/local/bin/cosign" | sha256sum -c - \
     && chmod +x /usr/local/bin/cosign \
-    # Nixpacks buildpack CLI for nixpacks-strategy deployments
-    && NIXPACKS_ARCH=$(dpkg --print-architecture) \
-    && curl -sSL -o /tmp/nixpacks.deb "https://github.com/railwayapp/nixpacks/releases/download/v1.40.0/nixpacks-v1.40.0-${NIXPACKS_ARCH}.deb" \
-    && dpkg -i /tmp/nixpacks.deb && rm /tmp/nixpacks.deb \
-    # SOPS file-based secrets (default backend; Infisical is opt-in).
-    # Pinned version; asset pattern verified live (octet-stream 200).
+    # Nixpacks buildpack CLI for nixpacks-strategy deployments (pinned + SHA256)
+    && if [ "${ARCH}" = "amd64" ]; then \
+         curl -fsSL -o /tmp/nixpacks.deb "https://github.com/railwayapp/nixpacks/releases/download/v1.40.0/nixpacks-v1.40.0-amd64.deb" \
+         && echo "be0430d2e8faed285b65830e15cc9b53d078360955d6dde387edd40c03d15acc  /tmp/nixpacks.deb" | sha256sum -c - \
+         && dpkg -i /tmp/nixpacks.deb && rm -f /tmp/nixpacks.deb; \
+       elif [ "${ARCH}" = "arm64" ]; then \
+         curl -fsSL -o /tmp/nixpacks.tar.gz "https://github.com/railwayapp/nixpacks/releases/download/v1.40.0/nixpacks-v1.40.0-aarch64-unknown-linux-musl.tar.gz" \
+         && echo "691fdf680a3bd5240b87ffa8d3198d5c8fdf365603351e47f5314ff82c80bed9  /tmp/nixpacks.tar.gz" | sha256sum -c - \
+         && tar -xzf /tmp/nixpacks.tar.gz -C /usr/local/bin nixpacks \
+         && chmod +x /usr/local/bin/nixpacks && rm -f /tmp/nixpacks.tar.gz; \
+       else \
+         echo "Unsupported arch for nixpacks: ${ARCH}" >&2; exit 1; \
+       fi \
+    # SOPS file-based secrets (default backend; Infisical is opt-in, pinned + SHA256).
     # age comes from apt above (keygen + fallback decrypt).
-    && SOPS_ARCH=$(dpkg --print-architecture | sed 's/x86_64/amd64/;s/aarch64/arm64/') \
-    && curl -sSL -o /usr/local/bin/sops "https://github.com/getsops/sops/releases/download/v3.10.2/sops-v3.10.2.linux.${SOPS_ARCH}" \
+    && case "${ARCH}" in \
+        amd64) SOPS_SHA256="79b0f844237bd4b0446e4dc884dbc1765fc7dedc3968f743d5949c6f2e701739" ;; \
+        arm64) SOPS_SHA256="e91ddc04e6a78f5aed9e4fc347a279b539c43b74d99e6b8078e2f2f6f5b309f5" ;; \
+        *) echo "Unsupported arch for sops: ${ARCH}" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL -o /usr/local/bin/sops "https://github.com/getsops/sops/releases/download/v3.10.2/sops-v3.10.2.linux.${ARCH}" \
+    && echo "${SOPS_SHA256}  /usr/local/bin/sops" | sha256sum -c - \
     && chmod +x /usr/local/bin/sops \
     && sops --version 2>&1 | head -n 1 \
     && rm -rf /var/lib/apt/lists/*
@@ -116,4 +145,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://127.0.0.1:8000/healthz || exit 1
 # Default CMD: gunicorn for backend. Celery/celery-beat override via docker-compose command:
 # Use ASGI so Django Channels WebSockets work consistently (dev + prod).
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "config.asgi:application", "--workers", "4", "--worker-class", "uvicorn.workers.UvicornWorker", "--timeout", "600"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "config.asgi:application", "-c", "/app/gunicorn.conf.py", "--workers", "4", "--worker-class", "uvicorn.workers.UvicornWorker", "--timeout", "600"]

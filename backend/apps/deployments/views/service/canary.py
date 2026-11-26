@@ -186,9 +186,19 @@ def split_backend_ips(service) -> tuple[set, set]:
         live_name = str(getattr(service, "name", "") or "").strip()
         if live_name:
             try:
-                live_ips = ips_of(client.containers.get(live_name))
+                from apps.deployments.services.replica_parity import (
+                    find_service_containers,
+                )
+                for c in find_service_containers(client, live_name):
+                    cname = str(getattr(c, "name", "") or "")
+                    if any(tag in cname for tag in ("-rollback-", "-green-", "-promoting-")):
+                        continue
+                    live_ips.update(ips_of(c))
             except Exception:
-                pass
+                try:
+                    live_ips = ips_of(client.containers.get(live_name))
+                except Exception:
+                    pass
         deployment = (
             Deployment.objects.filter(
                 service=service,

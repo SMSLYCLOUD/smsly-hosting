@@ -12,7 +12,7 @@ import time
 from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
-from rest_framework import permissions, status, viewsets
+from rest_framework import mixins, permissions, status, viewsets
 from rest_framework.decorators import action, throttle_classes
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
@@ -121,9 +121,7 @@ def _gateway_secret_candidates(source_ip):
         if secret:
             secrets.append(secret)
 
-    configured_secret = str(
-        getattr(settings, 'GATEWAY_SECRET', '') or getattr(settings, 'SECRET_KEY', '')
-    ).strip()
+    configured_secret = str(getattr(settings, 'GATEWAY_SECRET', '') or '').strip()
     if configured_secret:
         secrets.append(configured_secret)
 
@@ -191,17 +189,25 @@ def _resolve_incoming_owner(request, source_ip):
     )
 
 
-class ServerTransferViewSet(viewsets.ModelViewSet):
+class ServerTransferViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
     queryset = ServerTransfer.objects.select_related('service').all()
     serializer_class = ServerTransferSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_permissions(self):
-        if self.action == 'register_incoming' or self.action.startswith('incoming_'):
+        action_name = self.action or ''
+        if action_name == 'register_incoming' or action_name.startswith('incoming_'):
             return [permissions.AllowAny()]
         return super().get_permissions()
 
     def get_queryset(self):
+        if (self.action or '').startswith('incoming_'):
+            return self.queryset
         user = self.request.user
         if not user or not user.is_authenticated:
             return self.queryset.none()
@@ -319,6 +325,12 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
 
         transfer_type = payload['transfer_type']
 
+        if transfer_type == 'FULL' and not request.user.is_superuser:
+            return Response(
+                {'error': 'Only superusers can initiate full server transfers.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         service = None
         if transfer_type == 'SERVICE':
             service = Service.objects.filter(
@@ -340,12 +352,16 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
 
         if source_server_id:
             source_server = ManagedServer.objects.filter(id=source_server_id, owner=request.user).first()
-            if source_server:
-                if not source_server_ip:
-                    source_server_ip = source_server.host or source_server.private_ip or source_server.wg_address
-                if not source_ssh_key and not source_ssh_password:
-                    source_ssh_key = (source_server.ssh_key or '').strip()
-                    source_ssh_password = (source_server.ssh_password or '').strip()
+            if not source_server:
+                return Response(
+                    {'error': 'Source server not found'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            if not source_server_ip:
+                source_server_ip = source_server.host or source_server.private_ip or source_server.wg_address
+            if not source_ssh_key and not source_ssh_password:
+                source_ssh_key = (source_server.ssh_key or '').strip()
+                source_ssh_password = (source_server.ssh_password or '').strip()
 
         if not source_server_ip:
             source_server_ip = PlatformConfig.load().server_ip
@@ -678,7 +694,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         """Pull a Docker image from the registry to this node."""
         transfer = self.get_object()
         if not self._incoming_auth_required(request, transfer):
-            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
         image = request.data.get('image')
         if not image:
             return Response({'error': 'image required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -707,7 +723,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         """
         transfer = self.get_object()
         if not self._incoming_auth_required(request, transfer):
-            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
         image = request.data.get('image')
         container_name = request.data.get('container_name')
         env = request.data.get('env', {})
@@ -866,7 +882,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         """
         transfer = self.get_object()
         if not self._incoming_auth_required(request, transfer):
-            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
         import subprocess
         script = request.data.get('script')
         shell = request.data.get('shell', False)
@@ -939,7 +955,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         """Stop and remove a container on this node (used for source-side stop)."""
         transfer = self.get_object()
         if not self._incoming_auth_required(request, transfer):
-            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
         container_name = request.data.get('container_name')
         if not container_name:
             return Response({'error': 'container_name required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -962,7 +978,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         """Check if a container is running on this node."""
         transfer = self.get_object()
         if not self._incoming_auth_required(request, transfer):
-            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
         container_name = request.query_params.get('container_name')
         if not container_name:
             return Response({'error': 'container_name required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -982,7 +998,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         """Check if Docker is installed on this node (always true for containerized backend)."""
         transfer = self.get_object()
         if not self._incoming_auth_required(request, transfer):
-            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
         try:
             from apps.cloud.docker_client import get_docker_client
             client = get_docker_client()
@@ -1002,7 +1018,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         """
         transfer = self.get_object()
         if not self._incoming_auth_required(request, transfer):
-            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
 
         import base64
 
@@ -1013,18 +1029,37 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         if not dest_path:
             return Response({'error': 'path is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Security: only allow writes to /tmp/
-        if not dest_path.startswith('/tmp/'):
+        # Security: only allow writes inside /tmp/ without traversal or symlinks
+        dest_path_str = str(dest_path).strip()
+        if not dest_path_str.startswith('/tmp/'):
             return Response({'error': 'Only /tmp/ paths are allowed'}, status=status.HTTP_400_BAD_REQUEST)
+
+        tmp_root = os.path.realpath('/tmp')
+        norm_dest = os.path.normpath(dest_path_str)
+        cur = norm_dest
+        while cur and cur not in ('/', '/tmp', tmp_root):
+            if os.path.islink(cur):
+                return Response({'error': 'Symlink paths are not allowed'}, status=status.HTTP_400_BAD_REQUEST)
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+
+        real_dest = os.path.realpath(dest_path_str)
+        try:
+            if os.path.commonpath([real_dest, tmp_root]) != tmp_root or real_dest == tmp_root:
+                return Response({'error': 'Invalid destination path'}, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError:
+            return Response({'error': 'Invalid destination path'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Size probe for resumable uploads: returns bytes present so
         # the sender can continue from offset instead of restarting.
         if isinstance(request.data, dict) and request.data.get('query_size'):
             try:
-                size = os.path.getsize(dest_path) if os.path.exists(dest_path) else 0
+                size = os.path.getsize(real_dest) if os.path.exists(real_dest) else 0
             except OSError:
                 size = 0
-            return Response({'status': 'size', 'path': dest_path, 'size': size})
+            return Response({'status': 'size', 'path': real_dest, 'size': size})
 
         if content_base64:
             try:
@@ -1072,10 +1107,10 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         mode = 'ab' if (offset > 0 or chunk_index > 0 or append_flag) else 'wb'
 
         try:
-            os.makedirs(os.path.dirname(dest_path) or '/tmp', exist_ok=True)
-            with open(dest_path, mode) as f:
+            os.makedirs(os.path.dirname(real_dest) or tmp_root, exist_ok=True)
+            with open(real_dest, mode) as f:
                 f.write(raw)
-            return Response({'status': 'written', 'path': dest_path, 'size': len(raw), 'mode': mode})
+            return Response({'status': 'written', 'path': real_dest, 'size': len(raw), 'mode': mode})
         except Exception:
             logger.exception("Incoming write-file failed")
             return Response({'error': 'An internal error occurred. Please check server logs.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -1091,7 +1126,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         a gzipped pg_dump. Stored at DB_BACKUP_DIR with a timestamp.
         """
         if not self._incoming_auth_required(request, None):
-            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
 
         raw_body = request.body
         if not raw_body or len(raw_body) < 100:
@@ -1133,7 +1168,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
     def incoming_db_backup_status(self, request):
         """Return info about the latest stored master DB backup on this node."""
         if not self._incoming_auth_required(request, None):
-            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
 
         backup_dir = getattr(settings, 'DB_BACKUP_DIR', '/opt/smsly-hosting/backups/master-db')
         try:

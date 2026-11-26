@@ -99,15 +99,18 @@ class NodeScorer:
 
     def _query_node_mem(self, node):
         ip = self._node_ip(node)
-        # No fleet-average fallback: averaging all nodes mis-scores this
-        # node when Prometheus has no data for it (caller defaults to 50%).
+        if not ip:
+            return None
+        # Free memory percentage (Available / Total * 100); higher is healthier.
         return self._promql_avg(
-            f'100 - (node_memory_MemAvailable_bytes{{instance=~".*{ip}.*"}} '
-            f'/ node_memory_MemTotal_bytes{{instance=~".*{ip}.*"}} * 100)'
+            f'(node_memory_MemAvailable_bytes{{instance=~".*{ip}.*"}} '
+            f'/ node_memory_MemTotal_bytes{{instance=~".*{ip}.*"}}) * 100'
         )
 
     def _query_node_cpu(self, node):
         ip = self._node_ip(node)
+        if not ip:
+            return None
         return self._promql_avg(
             f'100 - (avg by(instance)(rate(node_cpu_seconds_total{{mode!="idle",'
             f'instance=~".*{ip}.*"}}[2m])) * 100)'
@@ -115,10 +118,13 @@ class NodeScorer:
 
     def _query_node_disk(self, node):
         ip = self._node_ip(node)
+        if not ip:
+            return None
+        # Free disk percentage (avail / size * 100); higher is healthier.
         return self._promql_avg(
-            f'100 - (node_filesystem_avail_bytes{{instance=~".*{ip}.*",'
+            f'(node_filesystem_avail_bytes{{instance=~".*{ip}.*",'
             f'mountpoint="/"}} / node_filesystem_size_bytes{{instance=~".*{ip}.*",'
-            f'mountpoint="/"}} * 100)'
+            f'mountpoint="/"}}) * 100'
         )
 
     def _promql_avg(self, query):
@@ -146,5 +152,7 @@ class NodeScorer:
 
     @staticmethod
     def _node_ip(node):
-        raw = node.wg_address or node.private_ip or node.host or ''
+        raw = str(node.wg_address or node.private_ip or node.host or '').strip()
+        if not raw or not re.fullmatch(r'[A-Za-z0-9._:-]+', raw):
+            return ''
         return raw  # Prometheus RE2 doesn't support \. escape; dots in .* context are fine

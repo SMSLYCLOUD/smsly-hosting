@@ -220,6 +220,7 @@ class AgentReadyGateTests(TestCase):
         defaults = dict(
             name="gate-node", host="10.10.10.12", owner=user,
             status=ManagedServer.Status.ONLINE,
+            provision_status=ManagedServer.ProvisionStatus.DONE,
         )
         defaults.update(kwargs)
         return ManagedServer.objects.create(**defaults)
@@ -254,7 +255,9 @@ class ApiUrlValidationTests(SimpleTestCase):
         from apps.deployments.views.server.serializers import (
             ManagedServerCreateSerializer,
         )
-        serializer = ManagedServerCreateSerializer()
+        serializer = ManagedServerCreateSerializer(
+            context={"request": SimpleNamespace(user=SimpleNamespace(is_staff=True))},
+        )
         return serializer.validate_api_url(value)
 
     def test_mesh_private_ip_allowed(self):

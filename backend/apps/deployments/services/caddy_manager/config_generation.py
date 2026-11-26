@@ -49,8 +49,12 @@ CORAZA_SNIPPET = """(coraza_waf) {
             # /api/v1/services/<uuid>/). Scoped strictly to /api/v1/ URIs;
             # tenant blocks also strip X-SMSLY-Remote-Sync inside a route
             # block before Coraza runs.
-            SecRule REQUEST_HEADERS:X-SMSLY-Remote-Sync "@streq 1" "id:1000001,phase:1,pass,nolog,t:none,chain"
-                SecRule REQUEST_URI "@beginsWith /api/v1/" "t:none,t:urlDecodeUni,t:normalizePath,ctl:ruleEngine=Off"
+            SecRule REQUEST_HEADERS:X-SMSLY-Remote-Sync '@streq 1' 'id:1000000,phase:1,deny,status:403,log,t:none,chain'
+                SecRule &REQUEST_HEADERS:X-Gateway-Signature-V2 '@eq 0' 't:none,chain'
+                    SecRule &REQUEST_HEADERS:Authorization '@eq 0' 't:none'
+            SecRule REQUEST_HEADERS:X-SMSLY-Remote-Sync "@streq 1" "id:1000001,phase:1,pass,log,t:none,chain"
+                SecRule &REQUEST_HEADERS:X-Gateway-Signature-V2 "@gt 0" "t:none,chain"
+                    SecRule REQUEST_URI "@beginsWith /api/v1/" "t:none,t:urlDecodeUni,t:normalizePath,ctl:ruleRemoveById=911100,ctl:ruleRemoveById=920170,ctl:ruleRemoveById=920171"
         `
     }
 }"""
@@ -71,6 +75,7 @@ EDGE_JWT_FORWARD_AUTH_LINES = [
 
 # Host aliases (accounts.google.com pattern): extra hostnames that serve the app
 _ALIAS_REWRITE_ROOT_RE = re.compile(r"^/[A-Za-z0-9/_.-]{0,100}$")
+_REDIRECT_TARGET_PATH_RE = re.compile(r"^/[A-Za-z0-9/_.-]{0,200}$")
 _MAX_HOST_ALIASES_PER_SERVICE = 10
 
 _CLOUDFLARE_TRUSTED_CIDRS: tuple[str, ...] = (
@@ -102,20 +107,28 @@ def _format_host_cidr(raw_ip: str) -> str:
 def _trusted_proxy_cidrs(include_cloudflare: bool = True, config=None) -> list[str]:
     """Return ordered Caddy trusted_proxies CIDRs for master & node Caddyfiles.
 
-    Always trusts private_ranges, Tailscale/CGNAT/mesh 100.64.0.0/10, and known
-    ManagedServer host/WireGuard IPs so multi-hop master->node proxying preserves
-    real attacker IPs instead of banning the master server IP. Appends Cloudflare
-    edge CIDRs when edge proxying is enabled.
+    When Cloudflare edge proxying is enabled, trusts private_ranges,
+    100.64.0.0/10, known ManagedServer IPs, and Cloudflare edge CIDRs.
+    When Cloudflare edge proxying is NOT enabled, narrows trusted proxies
+    to private_ranges, the WireGuard mesh 10.100.0.0/24, and known
+    ManagedServer host/WireGuard IPs.
     """
-    cidrs: list[str] = ["private_ranges", "100.64.0.0/10"]
+    cidrs: list[str] = (
+        ["private_ranges", "100.64.0.0/10"]
+        if include_cloudflare
+        else ["private_ranges", "10.100.0.0/24"]
+    )
     if config is not None:
         srv_cidr = _format_host_cidr(getattr(config, "server_ip", "") or "")
         if srv_cidr:
             cidrs.append(srv_cidr)
     try:
+        from django.db.models import Q
         from apps.deployments.models.core import ManagedServer
         if _table_exists(ManagedServer._meta.db_table):
-            for host_ip, wg_ip in ManagedServer.objects.values_list("host", "wg_address"):
+            for host_ip, wg_ip in ManagedServer.objects.filter(
+                Q(is_primary=True) | Q(owner__is_staff=True) | Q(owner__is_superuser=True)
+            ).values_list("host", "wg_address"):
                 for raw in (host_ip, wg_ip):
                     cidr = _format_host_cidr(raw or "")
                     if cidr:
@@ -129,10 +142,11 @@ def _trusted_proxy_cidrs(include_cloudflare: bool = True, config=None) -> list[s
 
 def _build_servers_trusted_proxies_lines(include_cloudflare: bool = True, config=None) -> list[str]:
     proxies = " ".join(_trusted_proxy_cidrs(include_cloudflare=include_cloudflare, config=config))
+    ip_headers = "Cf-Connecting-Ip X-Forwarded-For" if include_cloudflare else "X-Forwarded-For"
     return [
         "    servers {",
         f"        trusted_proxies static {proxies}",
-        "        client_ip_headers Cf-Connecting-Ip X-Forwarded-For",
+        f"        client_ip_headers {ip_headers}",
         "    }",
     ]
 
@@ -227,6 +241,40 @@ def node_domain_proxy_info(slug: str, node_number, base_domain: str) -> dict:
         "deep_proxiable": paid_proxy,
         "deep_default": "dns-only",
     }
+
+
+def node_service_domains_for_service(service, node=None) -> list[str]:
+    """Return the node-scoped hostnames (flat/deep + legacy) for *service*.
+
+    Accepts an optional explicit *node* (e.g. an overflow target node);
+    otherwise resolves the effective server via ``_resolve_effective_server``.
+    Returns ``[]`` for primary/local services or when base domain is unset.
+    """
+    try:
+        from apps.deployments.models.service import Service as _Svc
+
+        svr = node or _resolve_effective_server(service)
+        if svr is None or getattr(svr, "is_primary", True):
+            return []
+        node_num = getattr(svr, "node_number", None)
+        if node_num is None or not isinstance(node_num, int):
+            return []
+        base = _Svc.default_public_base_domain()
+        raw_slug = getattr(service, "slug", "") or getattr(service, "name", "") or ""
+        if not isinstance(raw_slug, str):
+            return []
+        slug = raw_slug.strip().lower().replace(" ", "-")
+        if not slug or not base:
+            return []
+        hosts = [
+            node_service_domain(slug, node_num, base),
+            node_service_domain_nested(slug, node_num, base),
+            node_service_domain_legacy_flat(slug, node_num, base),
+            node_service_domain_legacy_nested(slug, node_num, base),
+        ]
+        return [h for h in dict.fromkeys(hosts) if h]
+    except Exception:
+        return []
 
 
 def _resolve_effective_server(service):
@@ -388,15 +436,79 @@ def _apply_backend_retry_budget(caddyfile: str) -> str:
     return "\n".join(out)
 
 
-def _append_reverse_proxy(lines: list[str], upstream_url: str, upstream_host: str = ""):
+def _strip_cf_connecting_ip_in_proxies(caddyfile: str) -> str:
+    """Strip client-supplied CF-Connecting-IP on non-Cloudflare edges."""
+    import re as _re
+
+    bare_re = _re.compile(r"^([ \t]*)reverse_proxy ([^\s{]+)[ \t]*$")
+    block_re = _re.compile(r"^([ \t]*)reverse_proxy (.+?) \{$")
+
+    out: list[str] = []
+    lines = caddyfile.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        bare = bare_re.match(line)
+        if bare:
+            indent, upstream = bare.group(1), bare.group(2)
+            if upstream == "frontend:3000":
+                out.append(line)
+            else:
+                out.append(f"{indent}reverse_proxy {upstream} {{")
+                out.append(f"{indent}    header_up -CF-Connecting-IP")
+                out.append(f"{indent}}}")
+            i += 1
+            continue
+        opened = block_re.match(line)
+        if opened:
+            indent = opened.group(1)
+            buf = [line]
+            i += 1
+            depth = 1
+            has_cf = False
+            while i < len(lines) and depth > 0:
+                current = lines[i]
+                if "cf-connecting-ip" in current.lower():
+                    has_cf = True
+                depth += current.count("{") - current.count("}")
+                buf.append(current)
+                i += 1
+            if not has_cf:
+                buf.insert(-1, f"{indent}    header_up -CF-Connecting-IP")
+            out.extend(buf)
+            continue
+        out.append(line)
+        i += 1
+    return "\n".join(out)
+
+
+def _append_reverse_proxy(
+    lines: list[str],
+    upstream_url: str,
+    upstream_host: str = "",
+    *,
+    sablier_enabled: bool = False,
+):
     upstream_url = upstream_url or _service_proxy_upstream()
     has_fallbacks = len(str(upstream_url).split()) > 1
     is_remote_upstream = "://" in str(upstream_url)
-    if upstream_host or has_fallbacks or is_remote_upstream:
+    is_fallback_route = str(upstream_url).strip() == "route-fallback:80"
+    sab_retry = bool(sablier_enabled) and not is_fallback_route
+    if upstream_host or has_fallbacks or is_remote_upstream or sab_retry:
         lines.append(f"    reverse_proxy {upstream_url} {{")
         if has_fallbacks:
-            lines.append("        lb_try_duration 5s")
-            lines.append("        lb_try_interval 250ms")
+            lines.append("        lb_policy round_robin")
+            lines.append("        fail_duration 15s")
+            lines.append("        max_fails 2")
+            if sab_retry:
+                lines.append("        lb_try_duration 60s")
+                lines.append("        lb_try_interval 1s")
+            else:
+                lines.append("        lb_try_duration 5s")
+                lines.append("        lb_try_interval 250ms")
+        elif sab_retry:
+            lines.append("        lb_try_duration 60s")
+            lines.append("        lb_try_interval 1s")
         if upstream_host:
             lines.append(f"        header_up Host {upstream_host}")
         if is_remote_upstream:
@@ -467,6 +579,10 @@ def _service_path_redirect_rules(service) -> list[tuple[str, str, str, str]]:
         try:
             target_host = normalize_domain(target_host)
         except ValueError:
+            continue
+        if target_path and (
+            not _REDIRECT_TARGET_PATH_RE.match(target_path) or ".." in target_path
+        ):
             continue
         rule_key = (source_host, path)
         if rule_key in seen:
@@ -573,7 +689,7 @@ def _service_host_alias_rules(service) -> list[tuple[str, str]]:
         except ValueError:
             continue
         rewrite_root = str(entry.get("rewrite_root") or "").strip()
-        if rewrite_root and not _ALIAS_REWRITE_ROOT_RE.match(rewrite_root):
+        if rewrite_root and (not _ALIAS_REWRITE_ROOT_RE.match(rewrite_root) or ".." in rewrite_root):
             continue
         seen_hosts.add(host)
         rules.append((host, rewrite_root))
@@ -596,7 +712,8 @@ def _alias_scoped_redirects(rules: list[tuple[str, str, str, str]],
 def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: str, host_header: str,
                            path_redirect_rules: list[tuple[str, str, str, str]] | None = None,
                            edge_jwt_required: bool = False, waf_opt_out: bool = False,
-                           crowdsec_enabled: bool = False) -> str:
+                           crowdsec_enabled: bool = False,
+                           sablier_enabled: bool = False) -> str:
     """Caddyfile site block for a host alias (accounts.google.com pattern).
 
     Semantics (from Service.host_aliases help_text):
@@ -627,15 +744,25 @@ def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: st
         lines.extend([
             "    route {",
             "        request_header -X-SMSLY-Remote-Sync",
+            "        request_header -X-User-Id",
+            "        request_header -X-Edge-Scope",
             "        import coraza_waf",
             "    }",
         ])
     else:
-        lines.append("    request_header -X-SMSLY-Remote-Sync")
+        lines.extend([
+            "    request_header -X-SMSLY-Remote-Sync",
+            "    request_header -X-User-Id",
+            "    request_header -X-Edge-Scope",
+        ])
     # Aliases proxy DIRECTLY to the upstream (bypassing Traefik), so the
     # edge gate must be emitted here too — otherwise a gated service's
     # alias hosts serve the whole app unauthenticated.
     if edge_jwt_required:
+        lines.extend([
+            "    request_header -X-User-Id",
+            "    request_header -X-Edge-Scope",
+        ])
         lines.extend(EDGE_JWT_FORWARD_AUTH_LINES)
     lines.extend([
         "    log {",
@@ -658,12 +785,12 @@ def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: st
             f"        rewrite * {rewrite_root}",
         ])
         before = len(lines)
-        _append_reverse_proxy(lines, upstream_url, host_header)
+        _append_reverse_proxy(lines, upstream_url, host_header, sablier_enabled=sablier_enabled)
         for i in range(before, len(lines)):
             lines[i] = "    " + lines[i]
         lines.append("    }")
     lines.append("    handle {")
-    _append_reverse_proxy(lines, upstream_url, host_header)
+    _append_reverse_proxy(lines, upstream_url, host_header, sablier_enabled=sablier_enabled)
     lines.append("    }")
     lines.extend(["    encode gzip", "}"])
     return "\n".join(lines)
@@ -677,6 +804,7 @@ def _build_service_domain_block(
     edge_jwt_required: bool = False,
     waf_opt_out: bool = False,
     crowdsec_enabled: bool = False,
+    sablier_enabled: bool = False,
 ) -> str:
     lines = [f"{domain} {{"]
 
@@ -688,20 +816,30 @@ def _build_service_domain_block(
         lines.extend([
             "    route {",
             "        request_header -X-SMSLY-Remote-Sync",
+            "        request_header -X-User-Id",
+            "        request_header -X-Edge-Scope",
             "        import coraza_waf",
             "    }",
         ])
     else:
-        lines.append("    request_header -X-SMSLY-Remote-Sync")
+        lines.extend([
+            "    request_header -X-SMSLY-Remote-Sync",
+            "    request_header -X-User-Id",
+            "    request_header -X-Edge-Scope",
+        ])
     if edge_jwt_required:
+        lines.extend([
+            "    request_header -X-User-Id",
+            "    request_header -X-Edge-Scope",
+        ])
         lines.extend(EDGE_JWT_FORWARD_AUTH_LINES)
 
     if upstream_url:
-        _append_reverse_proxy(lines, upstream_url, upstream_host or domain)
+        _append_reverse_proxy(lines, upstream_url, upstream_host or domain, sablier_enabled=sablier_enabled)
     elif upstream_host and upstream_host != domain:
-        _append_reverse_proxy(lines, _service_proxy_upstream(), upstream_host)
+        _append_reverse_proxy(lines, _service_proxy_upstream(), upstream_host, sablier_enabled=sablier_enabled)
     else:
-        _append_reverse_proxy(lines, _service_proxy_upstream())
+        _append_reverse_proxy(lines, _service_proxy_upstream(), sablier_enabled=sablier_enabled)
 
     lines.extend(
         [
@@ -736,14 +874,46 @@ def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool
 
     try:
         from apps.deployments.models import Service
+        from apps.domains.models import Domain, DomainStatus
 
         if not _table_exists(Service._meta.db_table):
             return []
 
-        for service in Service.objects.only(
-            "id", "public_domain", "custom_domains", "public_domain_hidden", "staging_domain",
-            "host_aliases", "path_redirects", "edge_jwt_required", "waf_opt_out",
-        ).order_by("id"):
+        all_verified_domains: set[str] = set()
+        if _table_exists(Domain._meta.db_table):
+            for raw_dom in Domain.objects.filter(
+                status__in=[
+                    DomainStatus.ACTIVE,
+                    DomainStatus.DNS_VERIFIED,
+                    DomainStatus.SSL_PROVISIONING,
+                ],
+                verified=True,
+            ).values_list("domain_name", flat=True):
+                try:
+                    all_verified_domains.add(normalize_domain(str(raw_dom or "").strip()))
+                except ValueError:
+                    continue
+
+        services = list(
+            Service.objects.only(
+                "id", "status", "sablier_enabled",
+                "public_domain", "custom_domains", "public_domain_hidden", "staging_domain",
+                "host_aliases", "path_redirects", "edge_jwt_required", "waf_opt_out",
+            ).order_by("id")
+        )
+        svc_context: dict = {}
+
+        # Pass 1: process all public_domain and verified Domain blocks first so
+        # no service's host_aliases can shadow another service's verified Domain.
+        for service in services:
+            sablier_stopped = (
+                str(getattr(service, "status", "") or "").upper() == "STOPPED"
+                and bool(getattr(service, "sablier_enabled", False))
+            )
+            effective_remote_upstream = (
+                "route-fallback:80" if sablier_stopped
+                else _remote_upstream_url_for_service(service)
+            )
             raw_public = (
                 str(service.public_domain or "").strip().lower()
                 if isinstance(service.public_domain, str)
@@ -761,6 +931,9 @@ def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool
                     )
 
             isHidden = getattr(service, "public_domain_hidden", False)
+            sab_active = bool(getattr(service, "sablier_enabled", False)) and not sablier_stopped
+            svc_context[service.id] = (effective_remote_upstream, public_domain, isHidden, sab_active)
+
             if public_domain and public_domain not in seen:
                 if isHidden:
                     logger.debug("Skipping hidden public domain block for %s", public_domain)
@@ -778,15 +951,15 @@ def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool
                         _build_service_domain_block(
                             public_domain,
                             public_domain,
-                            upstream_url=_remote_upstream_url_for_service(service),
+                            upstream_url=effective_remote_upstream,
                             path_redirect_rules=_service_path_redirect_rules(service),
                             edge_jwt_required=bool(getattr(service, "edge_jwt_required", False)),
                             waf_opt_out=bool(getattr(service, "waf_opt_out", False)),
                             crowdsec_enabled=crowdsec_enabled,
+                            sablier_enabled=sab_active,
                         )
                     )
 
-            from apps.domains.models import DomainStatus
             # VISIBILITY GATE: a Private service (is_public=False) or a
             # Hidden default-domain (public_domain_hidden=True) must not
             # keep custom domains publicly reachable — the toggle's
@@ -861,12 +1034,22 @@ def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool
                         lines.extend([
                             "    route {",
                             "        request_header -X-SMSLY-Remote-Sync",
+                            "        request_header -X-User-Id",
+                            "        request_header -X-Edge-Scope",
                             "        import coraza_waf",
                             "    }",
                         ])
                     else:
-                        lines.append("    request_header -X-SMSLY-Remote-Sync")
+                        lines.extend([
+                            "    request_header -X-SMSLY-Remote-Sync",
+                            "    request_header -X-User-Id",
+                            "    request_header -X-Edge-Scope",
+                        ])
                     if bool(getattr(service, "edge_jwt_required", False)):
+                        lines.extend([
+                            "    request_header -X-User-Id",
+                            "    request_header -X-Edge-Scope",
+                        ])
                         lines.extend(EDGE_JWT_FORWARD_AUTH_LINES)
                     lines.append("    tls {")
                     lines.append("        on_demand")
@@ -882,25 +1065,34 @@ def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool
                     lines.append("        }")
                     lines.append("    }")
 
-                    upstream_url = _remote_upstream_url_for_service(service)
+                    upstream_url = effective_remote_upstream
                     if upstream_url:
-                        _append_reverse_proxy(lines, upstream_url, target_host or value)
+                        _append_reverse_proxy(lines, upstream_url, target_host or value, sablier_enabled=sab_active)
                     elif target_host and target_host != value:
-                        _append_reverse_proxy(lines, _service_proxy_upstream(), target_host)
+                        _append_reverse_proxy(lines, _service_proxy_upstream(), target_host, sablier_enabled=sab_active)
                     else:
-                        _append_reverse_proxy(lines, _service_proxy_upstream())
+                        _append_reverse_proxy(lines, _service_proxy_upstream(), sablier_enabled=sab_active)
                     lines.append("    encode gzip")
                     lines.append("}")
                     blocks.append("\n".join(lines))
 
+        # Pass 2: host_aliases and staging domains (after all verified Domains).
+        for service in services:
+            effective_remote_upstream, public_domain, _is_hidden, sab_active = svc_context[service.id]
             # Host aliases (accounts.google.com pattern): dedicated site
             # blocks that serve this app under extra hostnames. Exact host
             # matches take precedence over the platform wildcard block.
-            upstream_url = _remote_upstream_url_for_service(service)
+            upstream_url = effective_remote_upstream
             redirect_rules = _service_path_redirect_rules(service)
             for alias_host, rewrite_root in _service_host_alias_rules(service):
-                if alias_host in seen:
+                if alias_host in seen or alias_host in all_verified_domains:
                     continue
+                try:
+                    from apps.deployments.views._helpers import _is_platform_owned_domain
+                    if _is_platform_owned_domain(alias_host):
+                        continue
+                except Exception:
+                    pass
                 seen.add(alias_host)
                 # Only domain-scoped rules naming THIS alias host are
                 # emitted here — they had no site block before and were
@@ -916,6 +1108,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool
                     edge_jwt_required=bool(getattr(service, "edge_jwt_required", False)),
                     waf_opt_out=bool(getattr(service, "waf_opt_out", False)),
                     crowdsec_enabled=crowdsec_enabled,
+                    sablier_enabled=sab_active,
                 ))
 
             # Custom staging domain: only route if this service has an active
@@ -949,6 +1142,8 @@ def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool
                             lines.extend([
                                 "    route {",
                                 "        request_header -X-SMSLY-Remote-Sync",
+                                "        request_header -X-User-Id",
+                                "        request_header -X-Edge-Scope",
                                 "        import coraza_waf",
                                 "    }",
                             ])
@@ -979,6 +1174,8 @@ def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool
     import secure_headers{_addon_cs}
     route {{
         request_header -X-SMSLY-Remote-Sync
+        request_header -X-User-Id
+        request_header -X-Edge-Scope
         import coraza_waf
     }}
     reverse_proxy {_service_proxy_upstream()}
@@ -1071,12 +1268,18 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
                     latest_local_map.pop(sid, None)
 
         for service in Service.objects.select_related('server').only(
-            "id", "public_domain", "custom_domains", "public_domain_hidden",
+            "id", "status", "sablier_enabled",
+            "public_domain", "custom_domains", "public_domain_hidden",
             "is_preview", "server",
             "wildcard_url_enabled", "is_public",
             "wildcard_redirect_custom_domain", "wildcard_internal_only",
         ).all():
             if getattr(service, "is_preview", False):
+                continue
+            if (
+                str(getattr(service, "status", "") or "").upper() == "STOPPED"
+                and bool(getattr(service, "sablier_enabled", False))
+            ):
                 continue
 
             routing_off = getattr(service, "wildcard_url_enabled", True) is False
@@ -1248,13 +1451,19 @@ def _get_wildcard_remote_host_map(wildcard_domain: str) -> dict[str, list[str]]:
                     latest_local_map.pop(sid, None)
 
         for service in Service.objects.select_related('server').only(
-            "id", "public_domain", "custom_domains", "public_domain_hidden",
+            "id", "status", "sablier_enabled",
+            "public_domain", "custom_domains", "public_domain_hidden",
             "wildcard_url_enabled", "server", "wildcard_internal_only",
         ).all():
             if not getattr(service, "wildcard_url_enabled", True):
                 continue
             if bool(getattr(service, "wildcard_internal_only", False)):
                 # Handled by the dedicated internal-only section instead.
+                continue
+            if (
+                str(getattr(service, "status", "") or "").upper() == "STOPPED"
+                and bool(getattr(service, "sablier_enabled", False))
+            ):
                 continue
 
             # Determine if this service is remote using same logic as _get_wildcard_known_hosts
@@ -1303,6 +1512,43 @@ def _get_wildcard_remote_host_map(wildcard_domain: str) -> dict[str, list[str]]:
     return {upstream: sorted(hosts) for upstream, hosts in remote_hosts.items()}
 
 
+def _get_wildcard_edge_jwt_hosts(wildcard_domain: str) -> set[str]:
+    """Wildcard hosts whose service requires edge JWT (forward_auth)."""
+    hosts: set[str] = set()
+    if not wildcard_domain:
+        return hosts
+    try:
+        from apps.deployments.models import Service
+
+        if not _table_exists(Service._meta.db_table):
+            return hosts
+        suffix = f".{wildcard_domain}"
+        for service in Service.objects.only(
+            "id", "public_domain", "custom_domains", "edge_jwt_required",
+        ).filter(edge_jwt_required=True):
+            raw_public = str(service.public_domain or "").strip()
+            if raw_public:
+                try:
+                    pub = normalize_domain(raw_public)
+                    if pub.endswith(suffix):
+                        hosts.add(pub)
+                except ValueError:
+                    pass
+            for item in (service.custom_domains or []):
+                raw_c = item.strip() if isinstance(item, str) else ""
+                if not raw_c:
+                    continue
+                try:
+                    c = normalize_domain(raw_c)
+                    if c.endswith(suffix):
+                        hosts.add(c)
+                except ValueError:
+                    pass
+    except Exception as exc:
+        logger.debug("Wildcard edge_jwt host lookup skipped: %s", exc)
+    return hosts
+
+
 def _get_wildcard_disabled_hosts(wildcard_domain: str) -> list[str]:
     """Public wildcard domains that must serve the 503 fallback page.
 
@@ -1325,9 +1571,25 @@ def _get_wildcard_disabled_hosts(wildcard_domain: str) -> list[str]:
 
         suffix = f".{wildcard_domain}"
         for service in Service.objects.only(
-            "id", "public_domain", "public_domain_hidden",
+            "id", "status", "sablier_enabled", "custom_domains",
+            "public_domain", "public_domain_hidden",
             "wildcard_url_enabled", "is_public",
         ).all():
+            sablier_stopped = (
+                str(getattr(service, "status", "") or "").upper() == "STOPPED"
+                and bool(getattr(service, "sablier_enabled", False))
+            )
+            if sablier_stopped:
+                for item in (service.custom_domains or []):
+                    raw_c = item.strip() if isinstance(item, str) else ""
+                    if not raw_c:
+                        continue
+                    try:
+                        cdom = normalize_domain(raw_c)
+                    except ValueError:
+                        continue
+                    if cdom.endswith(suffix):
+                        hosts.add(cdom)
             raw_public = str(service.public_domain or "").strip()
             if not raw_public:
                 continue
@@ -1340,7 +1602,7 @@ def _get_wildcard_disabled_hosts(wildcard_domain: str) -> list[str]:
             hidden = bool(getattr(service, "public_domain_hidden", False))
             routing_off = getattr(service, "wildcard_url_enabled", True) is False
             private = getattr(service, "is_public", True) is False
-            if hidden or routing_off or private:
+            if hidden or routing_off or private or sablier_stopped:
                 hosts.add(public_domain)
     except Exception as exc:
         logger.warning("Could not load disabled wildcard hosts: %s", exc)
@@ -1390,11 +1652,17 @@ def _get_wildcard_internal_only_upstreams(wildcard_domain: str) -> dict[str, lis
                     latest_local_map.pop(sid, None)
 
         for service in Service.objects.select_related('server').only(
-            "id", "public_domain", "public_domain_hidden",
+            "id", "status", "sablier_enabled",
+            "public_domain", "public_domain_hidden",
             "wildcard_url_enabled", "wildcard_internal_only",
             "is_public", "server",
         ).all():
             if not getattr(service, "wildcard_internal_only", False):
+                continue
+            if (
+                str(getattr(service, "status", "") or "").upper() == "STOPPED"
+                and bool(getattr(service, "sablier_enabled", False))
+            ):
                 continue
             if getattr(service, "is_preview", False):
                 continue
@@ -1749,12 +2017,19 @@ def generate_node_caddyfile(node) -> str:
     # module). Global order + snippet must precede all sites — this file
     # otherwise carries no global block. :80 blocks stay clean: that path
     # arrives from master already inspected.
+    _node_edge_proxied = bool(getattr(config, "edge_proxy_records", False))
+    _node_ask_secret = str(os.environ.get("CADDY_ASK_SECRET", "") or getattr(config, "caddy_ask_secret", "") or "").strip()
+    if _node_ask_secret:
+        os.environ.setdefault("CADDY_ASK_SECRET", _node_ask_secret)
     sections.append(
         "{\n"
+        "    on_demand_tls {\n"
+        "        ask http://host.docker.internal:8971/ask?secret={env.CADDY_ASK_SECRET}\n"
+        "    }\n"
         "    order coraza_waf first\n"
         + "\n".join(
             _build_servers_trusted_proxies_lines(
-                include_cloudflare=bool(getattr(config, "edge_proxy_records", False)),
+                include_cloudflare=_node_edge_proxied,
                 config=config,
             )
         )
@@ -1779,6 +2054,7 @@ def generate_node_caddyfile(node) -> str:
         "    }",
         *_node_secure_header_lines(),
         "    import coraza_waf",
+        *(["    request_header -CF-Connecting-IP"] if not _node_edge_proxied else []),
         "    log {",
         "        output file /var/log/caddy/access.log {",
         "            mode 0644",
@@ -1798,14 +2074,36 @@ def generate_node_caddyfile(node) -> str:
     ])
     sections.append("\n".join(mgmt_block))
 
-    # Service blocks
-    services = Service.objects.filter(
-        node_url_enabled=True,
-    ).order_by("id")
+    # Service blocks (primary-owned node services + remote overflow replicas).
+    from django.db.models import Q as _Q
+    replica_service_ids: set = set()
+    running_replica_service_ids: set = set()
+    try:
+        from apps.autoscaler.models.replica import ServiceReplica
+        if _table_exists(ServiceReplica._meta.db_table):
+            for sid, st in ServiceReplica.objects.filter(
+                node=node,
+                status__in=["RUNNING", "SPAWNING"],
+            ).values_list("service_id", "status"):
+                replica_service_ids.add(sid)
+                if st == "RUNNING":
+                    running_replica_service_ids.add(sid)
+    except Exception:
+        pass
+
+    services = (
+        Service.objects.filter(
+            _Q(node_url_enabled=True) | _Q(id__in=replica_service_ids),
+        )
+        .distinct()
+        .order_by("id")
+    )
 
     for service in services:
         svr = _resolve_effective_server(service)
-        if not svr or svr.id != node.id:
+        is_owner = bool(svr and svr.id == node.id)
+        is_replica_host = service.id in replica_service_ids
+        if not is_owner and not is_replica_host:
             continue
 
         slug = (service.slug or service.name.lower().replace(" ", "-")).strip()
@@ -1814,21 +2112,50 @@ def generate_node_caddyfile(node) -> str:
         legacy_flat = node_service_domain_legacy_flat(slug, node_number, base_domain)
         legacy_nested = node_service_domain_legacy_nested(slug, node_number, base_domain)
         # App container name follows the service name (same convention
-        # as _local_upstream_for_service on master). The Caddy container
-        # shares smsly-net with app containers, so plain container-name
-        # DNS resolves — never localhost (that's Caddy itself).
+        # as _local_upstream_for_service on master). When Sablier, Canary, or
+        # horizontal/overflow replicas are present on this node, proxy through
+        # node Traefik (traefik:80) so Traefik pools primary + replicas and
+        # applies WRR/Sablier middlewares instead of pinning one container.
         container = (service.name or "").strip() or slug
         port = getattr(service, "internal_port", 8000) or 8000
-        # Sablier wake path (opt-in): ALL blocks proxy through node
-        # Traefik so stopped containers wake on request (same pattern
-        # as master: Caddy -> traefik:80 -> sablier plugin). Direct
-        # container:port upstreams 503 while asleep and never wake.
         sab = bool(getattr(service, "sablier_enabled", False))
-        proxy_target = "traefik:80" if sab else f"{container}:{port}"
-        proxy_retry_lines = (
-            ["        lb_try_duration 30s", "        lb_try_interval 1s"]
-            if sab else []
+        is_canary = str(getattr(service, "deploy_strategy", "") or "").upper() == "CANARY"
+        has_node_replicas = (
+            service.id in running_replica_service_ids
+            or not is_owner
         )
+        use_traefik = sab or is_canary or has_node_replicas
+        sablier_manually_stopped = (
+            sab and str(getattr(service, "status", "") or "").upper() == "STOPPED"
+        )
+        edge_jwt_required = bool(getattr(service, "edge_jwt_required", False))
+        proxy_target = "traefik:80" if use_traefik else f"{container}:{port}"
+        if sab:
+            proxy_retry_lines = ["        lb_try_duration 60s", "        lb_try_interval 1s"]
+        elif has_node_replicas:
+            proxy_retry_lines = ["        lb_try_duration 5s", "        lb_try_interval 250ms"]
+        else:
+            proxy_retry_lines = []
+
+        def _node_proxy_lines(target: str, retry: list[str]) -> list[str]:
+            if sablier_manually_stopped:
+                return ['    respond "Service is stopped" 503']
+            auth_lines = (
+                [
+                    "    request_header -X-User-Id",
+                    "    request_header -X-Edge-Scope",
+                    *EDGE_JWT_FORWARD_AUTH_LINES,
+                ]
+                if edge_jwt_required
+                else []
+            )
+            return [
+                *auth_lines,
+                f"    reverse_proxy {target} {{",
+                *retry,
+                "        header_up Host {host}",
+                "    }",
+            ]
 
         # Every public hostname that can arrive here: the flat node
         # name (+ legacy grid alias), the service's public/custom wildcard
@@ -1894,21 +2221,20 @@ def generate_node_caddyfile(node) -> str:
         # Sablier services ride node Traefik here too: a direct
         # container:port upstream 503s while asleep and never wakes
         # (the sablier plugin only runs in the Traefik chain).
-        _plain_target = proxy_target if sab else f"{container}:{port}"
-        _plain_retry = proxy_retry_lines if sab else []
+        _plain_target = proxy_target if use_traefik else f"{container}:{port}"
+        _plain_retry = proxy_retry_lines if use_traefik else []
         for http_host in http_hosts:
             flat_block = [
                 f"{http_host}:80 {{",
                 "    request_header -X-SMSLY-Remote-Sync",
+                "    request_header -X-User-Id",
+                "    request_header -X-Edge-Scope",
                 "    log {",
                 "        output file /var/log/caddy/access.log {",
                 "            mode 0644",
                 "        }",
                 "    }",
-                f"    reverse_proxy {_plain_target} {{",
-                *_plain_retry,
-                "        header_up Host {host}",
-                "    }",
+                *_node_proxy_lines(_plain_target, _plain_retry),
                 "    encode gzip",
                 "}",
             ]
@@ -1920,11 +2246,17 @@ def generate_node_caddyfile(node) -> str:
         # Advanced Certificates (edge_proxy_wildcards).
         # Per-service WAF (direct grey access bypasses master inspection).
         if bool(getattr(service, "waf_opt_out", False)):
-            _waf_lines = ["    request_header -X-SMSLY-Remote-Sync"]
+            _waf_lines = [
+                "    request_header -X-SMSLY-Remote-Sync",
+                "    request_header -X-User-Id",
+                "    request_header -X-Edge-Scope",
+            ]
         else:
             _waf_lines = [
                 "    route {",
                 "        request_header -X-SMSLY-Remote-Sync",
+                "        request_header -X-User-Id",
+                "        request_header -X-Edge-Scope",
                 "        import coraza_waf",
                 "    }",
             ]
@@ -1940,10 +2272,7 @@ def generate_node_caddyfile(node) -> str:
                 "            mode 0644",
                 "        }",
                 "    }",
-                f"    reverse_proxy {proxy_target} {{",
-                *proxy_retry_lines,
-                "        header_up Host {host}",
-                "    }",
+                *_node_proxy_lines(proxy_target, proxy_retry_lines),
                 "    encode gzip",
                 "}",
             ]
@@ -1964,10 +2293,7 @@ def generate_node_caddyfile(node) -> str:
             "            mode 0644",
             "        }",
             "    }",
-            f"    reverse_proxy {proxy_target} {{",
-            *proxy_retry_lines,
-            "        header_up Host {host}",
-            "    }",
+            *_node_proxy_lines(proxy_target, proxy_retry_lines),
             "    encode gzip",
             "}",
         ]
@@ -2003,10 +2329,7 @@ def generate_node_caddyfile(node) -> str:
                 "            mode 0644",
                 "        }",
                 "    }",
-                f"    reverse_proxy {proxy_target} {{",
-                *proxy_retry_lines,
-                "        header_up Host {host}",
-                "    }",
+                *_node_proxy_lines(proxy_target, proxy_retry_lines),
                 "    encode gzip",
                 "}",
             ]
@@ -2015,7 +2338,10 @@ def generate_node_caddyfile(node) -> str:
     header = "# Node Caddyfile - Auto-generated by Grid Controller\n"
     header += f"# Node: {node.name} (grid{node_number}.{base_domain})\n"
     header += "# Do not edit manually; changes will be overwritten.\n\n"
-    return header + "\n\n".join(sections) + "\n"
+    rendered_node = header + "\n\n".join(sections) + "\n"
+    if not _node_edge_proxied:
+        rendered_node = _strip_cf_connecting_ip_in_proxies(rendered_node)
+    return rendered_node
 
 
 def generate_caddyfile(config) -> str:
@@ -2048,15 +2374,16 @@ def generate_caddyfile(config) -> str:
     _crowdsec_key = _resolve_crowdsec_bouncer_key(config)
     _crowdsec_active = bool(getattr(config, "enable_crowdsec_waf", False) and _crowdsec_key)
 
-    _ask_secret = ""
-    try:
-        from apps.deployments.models.core import PlatformConfig
-        _cfg = PlatformConfig.load()
-        _ask_secret = str(getattr(_cfg, 'caddy_ask_secret', '') or '').strip()
-    except Exception as exc:
-        logger.debug("Failed to load PlatformConfig for Caddy ask secret: %s", exc)
+    _ask_secret = str(os.environ.get("CADDY_ASK_SECRET", "") or "").strip()
     if not _ask_secret:
-        _ask_secret = str(getattr(settings, "CADDY_ASK_SECRET", "") or "")
+        try:
+            from apps.deployments.models.core import PlatformConfig
+            _cfg = PlatformConfig.load()
+            _ask_secret = str(getattr(_cfg, 'caddy_ask_secret', '') or '').strip()
+        except Exception as exc:
+            logger.debug("Failed to load PlatformConfig for Caddy ask secret: %s", exc)
+    if not _ask_secret:
+        _ask_secret = str(getattr(settings, "CADDY_ASK_SECRET", "") or "").strip()
     # Caddy runs containerized; the sidecar is a host systemd unit, so the
     # ask URL must use host.docker.internal (extra_hosts: host-gateway on
     # the caddy service). 127.0.0.1 here would be the Caddy container
@@ -2138,6 +2465,7 @@ def generate_caddyfile(config) -> str:
                 "    encode gzip",
                 "    import secure_headers",
                 *(["    crowdsec"] if _crowdsec_active else []),
+                *(["    request_header -CF-Connecting-IP"] if not _edge_proxied else []),
                 "    log {",
                 "        output file /var/log/caddy/access.log {",
                 "            mode 0644",
@@ -2255,6 +2583,7 @@ def generate_caddyfile(config) -> str:
         if _wildcard_site_on:
             wildcard_known_hosts = _get_wildcard_known_hosts(domain)
             wildcard_remote_hosts = _get_wildcard_remote_host_map(domain)
+            remote_edge_jwt_hosts = _get_wildcard_edge_jwt_hosts(domain)
             wildcard_lines = [
                 f"*.{domain} {{",
             ]
@@ -2274,6 +2603,10 @@ def generate_caddyfile(config) -> str:
             if _crowdsec_active:
                 wildcard_lines.append("    crowdsec")
             wildcard_lines.append("    request_header -X-SMSLY-Remote-Sync")
+            wildcard_lines.append("    request_header -X-User-Id")
+            wildcard_lines.append("    request_header -X-Edge-Scope")
+            if not _edge_proxied:
+                wildcard_lines.append("    request_header -CF-Connecting-IP")
 
             local_previews = []
             preview_auth_on = True
@@ -2302,6 +2635,30 @@ def generate_caddyfile(config) -> str:
                 if p_domain.endswith(f".{domain}"):
                     matcher = f"@local_preview_{index}"
                     port = getattr(p_service, "internal_port", 8000) or 8000
+                    edge_jwt_required = bool(getattr(p_service, "edge_jwt_required", False))
+                    use_edge_traefik = (
+                        bool(getattr(p_service, "sablier_enabled", False))
+                        or str(getattr(p_service, "deploy_strategy", "") or "").upper() == "CANARY"
+                        or edge_jwt_required
+                    )
+                    if use_edge_traefik:
+                        proxy_lines = [
+                            f"        reverse_proxy {_service_proxy_upstream()} {{",
+                            "            header_up Host {host}",
+                            "        }",
+                        ]
+                    else:
+                        proxy_lines = [
+                            f"        reverse_proxy {p_service.name}:{port}",
+                        ]
+                    preview_auth_lines = [
+                        "        request_header -X-User-Id",
+                        "        request_header -X-Edge-Scope",
+                    ]
+                    if edge_jwt_required:
+                        preview_auth_lines.extend(
+                            "    " + line for line in EDGE_JWT_FORWARD_AUTH_LINES
+                        )
                     # PREVIEW ACCESS GATE: previews often run against full
                     # clones of the production database. Without this
                     # block anyone who scraped the PR hostname browsed the
@@ -2317,7 +2674,8 @@ def generate_caddyfile(config) -> str:
                                     "        basic_auth {",
                                     f"            preview {p_hash}",
                                     "        }",
-                                    f"        reverse_proxy {p_service.name}:{port}",
+                                    *preview_auth_lines,
+                                    *proxy_lines,
                                     "    }",
                                 ]
                             )
@@ -2326,7 +2684,8 @@ def generate_caddyfile(config) -> str:
                         [
                             f"    {matcher} host {p_domain}",
                             f"    handle {matcher} {{",
-                            f"        reverse_proxy {p_service.name}:{port}",
+                            *preview_auth_lines,
+                            *proxy_lines,
                             "    }",
                         ]
                     )
@@ -2336,21 +2695,38 @@ def generate_caddyfile(config) -> str:
             # Defined BEFORE redirects/disabled/known handlers.
             internal_only_upstreams = _get_wildcard_internal_only_upstreams(domain)
             if internal_only_upstreams:
+                internal_edge_jwt_hosts = _get_wildcard_edge_jwt_hosts(domain)
                 wildcard_lines.extend(
                     [
                         f"    @internal_only_hosts host {' '.join(sorted(h for hosts in internal_only_upstreams.values() for h in hosts))}",
                         "    @internal_src client_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10",
                         "    handle @internal_only_hosts {",
+                        "        request_header -X-User-Id",
+                        "        request_header -X-Edge-Scope",
                         "        handle @internal_src {",
                     ]
                 )
-                for index, (upstream_url, hosts) in enumerate(internal_only_upstreams.items()):
-                    matcher = f"@internal_upstream_{index}"
-                    upstream_has_fallbacks = len(str(upstream_url).split()) > 1
+
+                def _emit_internal_upstream(group_matcher: str, group_hosts: list[str], require_jwt: bool, upstream_url: str, upstream_has_fallbacks: bool) -> None:
+                    if not group_hosts:
+                        return
+                    auth_lines = (
+                        [
+                            "            request_header -X-User-Id",
+                            "            request_header -X-Edge-Scope",
+                            *["        " + line for line in EDGE_JWT_FORWARD_AUTH_LINES],
+                        ]
+                        if require_jwt
+                        else [
+                            "            request_header -X-User-Id",
+                            "            request_header -X-Edge-Scope",
+                        ]
+                    )
                     wildcard_lines.extend(
                         [
-                            f"        {matcher} host {' '.join(hosts)}",
-                            f"        handle {matcher} {{",
+                            f"        {group_matcher} host {' '.join(group_hosts)}",
+                            f"        handle {group_matcher} {{",
+                            *auth_lines,
                             f"            reverse_proxy {upstream_url} {{",
                         ]
                     )
@@ -2368,6 +2744,14 @@ def generate_caddyfile(config) -> str:
                             "        }",
                         ]
                     )
+
+                for index, (upstream_url, hosts) in enumerate(internal_only_upstreams.items()):
+                    matcher = f"@internal_upstream_{index}"
+                    upstream_has_fallbacks = len(str(upstream_url).split()) > 1
+                    jwt_hosts = [h for h in hosts if h in internal_edge_jwt_hosts]
+                    open_hosts = [h for h in hosts if h not in internal_edge_jwt_hosts]
+                    _emit_internal_upstream(f"{matcher}_jwt", jwt_hosts, True, upstream_url, upstream_has_fallbacks)
+                    _emit_internal_upstream(matcher, open_hosts, False, upstream_url, upstream_has_fallbacks)
                 wildcard_lines.extend(
                     [
                         "            handle {",
@@ -2418,6 +2802,45 @@ def generate_caddyfile(config) -> str:
                     ]
                 )
 
+            def _emit_remote_group(group_matcher: str, group_hosts: list[str], require_jwt: bool) -> None:
+                if not group_hosts:
+                    return
+                auth_lines = (
+                    [
+                        "        request_header -X-User-Id",
+                        "        request_header -X-Edge-Scope",
+                        *["    " + line for line in EDGE_JWT_FORWARD_AUTH_LINES],
+                    ]
+                    if require_jwt
+                    else []
+                )
+                wildcard_lines.extend(
+                    [
+                        f"    {group_matcher} host {' '.join(group_hosts)}",
+                        f"    handle {group_matcher} {{",
+                        *auth_lines,
+                        f"        reverse_proxy {upstream_url} {{",
+                    ]
+                )
+                if upstream_has_fallbacks:
+                    wildcard_lines.extend(
+                        [
+                            "            lb_policy round_robin",
+                            "            fail_duration 15s",
+                            "            max_fails 2",
+                            "            lb_try_duration 5s",
+                            "            lb_try_interval 250ms",
+                        ]
+                    )
+                wildcard_lines.extend(
+                    [
+                        "            header_up Host {host}",
+                        "            header_up Cf-Connecting-Ip {client_ip}",
+                        "        }",
+                        "    }",
+                    ]
+                )
+
             for index, (upstream_url, hosts) in enumerate(sorted(wildcard_remote_hosts.items())):
                 if not hosts:
                     continue
@@ -2430,16 +2853,29 @@ def generate_caddyfile(config) -> str:
                     # name behind it, and the node would fail the handshake.
                     for hi, host in enumerate(sorted(hosts)):
                         hmatch = f"{matcher}_{hi}"
+                        auth_lines = (
+                            [
+                                "        request_header -X-User-Id",
+                                "        request_header -X-Edge-Scope",
+                                *["    " + line for line in EDGE_JWT_FORWARD_AUTH_LINES],
+                            ]
+                            if host in remote_edge_jwt_hosts
+                            else []
+                        )
                         wildcard_lines.extend(
                             [
                                 f"    {hmatch} host {host}",
                                 f"    handle {hmatch} {{",
+                                *auth_lines,
                                 f"        reverse_proxy {upstream_url} {{",
                             ]
                         )
                         if upstream_has_fallbacks:
                             wildcard_lines.extend(
                                 [
+                                    "            lb_policy round_robin",
+                                    "            fail_duration 15s",
+                                    "            max_fails 2",
                                     "            lb_try_duration 5s",
                                     "            lb_try_interval 250ms",
                                 ]
@@ -2457,28 +2893,10 @@ def generate_caddyfile(config) -> str:
                             ]
                         )
                     continue
-                wildcard_lines.extend(
-                    [
-                        f"    {matcher} host {' '.join(hosts)}",
-                        f"    handle {matcher} {{",
-                        f"        reverse_proxy {upstream_url} {{",
-                    ]
-                )
-                if upstream_has_fallbacks:
-                    wildcard_lines.extend(
-                        [
-                            "            lb_try_duration 5s",
-                            "            lb_try_interval 250ms",
-                        ]
-                    )
-                wildcard_lines.extend(
-                    [
-                        "            header_up Host {host}",
-                        "            header_up Cf-Connecting-Ip {client_ip}",
-                        "        }",
-                        "    }",
-                    ]
-                )
+                jwt_hosts = [h for h in hosts if h in remote_edge_jwt_hosts]
+                open_hosts = [h for h in hosts if h not in remote_edge_jwt_hosts]
+                _emit_remote_group(f"{matcher}_jwt", jwt_hosts, require_jwt=True)
+                _emit_remote_group(matcher, open_hosts, require_jwt=False)
 
             if wildcard_known_hosts:
                 # WAF opt-outs bypass Coraza: their handle comes FIRST
@@ -2496,6 +2914,8 @@ def generate_caddyfile(config) -> str:
                             f"    @waf_optout host {' '.join(_waf_optouts)}",
                             "    handle @waf_optout {",
                             "        request_header -X-SMSLY-Remote-Sync",
+                            "        request_header -X-User-Id",
+                            "        request_header -X-Edge-Scope",
                             f"        reverse_proxy {_service_proxy_upstream()}",
                             "    }",
                         ]
@@ -2506,6 +2926,8 @@ def generate_caddyfile(config) -> str:
                         "    handle @known_hosts {",
                         "        route {",
                         "            request_header -X-SMSLY-Remote-Sync",
+                        "            request_header -X-User-Id",
+                        "            request_header -X-Edge-Scope",
                         "            import coraza_waf",
                         f"            reverse_proxy {_service_proxy_upstream()}",
                         "        }",
@@ -2538,10 +2960,11 @@ def generate_caddyfile(config) -> str:
 
     if domain and not use_ssl:
         _http_cs = "\n    crowdsec" if _crowdsec_active else ""
+        _http_cf = "\n    request_header -CF-Connecting-IP" if not _edge_proxied else ""
         sections.append(
             f"""http://{domain} {{
     encode gzip
-    import secure_headers{_http_cs}
+    import secure_headers{_http_cs}{_http_cf}
     handle /api/* {{
         reverse_proxy backend:8000
     }}
@@ -2615,10 +3038,11 @@ def generate_caddyfile(config) -> str:
                 if os.path.exists(_f):
                     try:
                         _mode = os.stat(_f).st_mode & 0o777
-                        # Cert: 644 (readable by all), Key: 600 (owner-only)
-                        _target = 0o600 if _f == _key_path else 0o644
-                        if _mode < _target:
-                            os.chmod(_f, _target)
+                        if _f == _key_path:
+                            if (_mode & 0o007) != 0 or _mode < 0o600:
+                                os.chmod(_f, 0o640)
+                        elif _mode < 0o644:
+                            os.chmod(_f, 0o644)
                     except OSError:
                         pass
     except Exception as _exc:
@@ -2639,10 +3063,12 @@ def generate_caddyfile(config) -> str:
         if _is_ip(str(domain)):
             _tls_line = f"    tls {_caddy_crt} {_caddy_key}"
         _cs_443 = "    crowdsec\n" if _crowdsec_active else ""
+        _cf_443 = "    request_header -CF-Connecting-IP\n" if not _edge_proxied else ""
         sections.append(
             f""":443 {{
 {_tls_line}
-{_cs_443}    handle /api/* {{
+    import secure_headers
+{_cs_443}{_cf_443}    handle /api/* {{
         reverse_proxy backend:8000
     }}
     handle /ws/* {{
@@ -2681,9 +3107,11 @@ def generate_caddyfile(config) -> str:
 
     if use_ssl and domain:
         _cs_80_ssl = "    crowdsec\n" if _crowdsec_active else ""
+        _cf_80_ssl = "    request_header -CF-Connecting-IP\n" if not _edge_proxied else ""
         sections.append(
             ":80 {\n"
             + _cs_80_ssl
+            + _cf_80_ssl
             + """    @redirectable {
         not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]+)?$
         not host localhost
@@ -2748,9 +3176,11 @@ def generate_caddyfile(config) -> str:
         )
     elif not domain:
         _cs_80_plain = "    crowdsec\n" if _crowdsec_active else ""
+        _cf_80_plain = "    request_header -CF-Connecting-IP\n" if not _edge_proxied else ""
         sections.append(
             ":80 {\n"
             + _cs_80_plain
+            + _cf_80_plain
             + """    # HTTP-proof domain verification challenge (see the use_ssl branch
     # above). First so the catch-all below never swallows it.
     handle /.well-known/smsly-verify/* {
@@ -2802,4 +3232,7 @@ def generate_caddyfile(config) -> str:
 
     header = "# Grid Caddyfile - Auto-generated by Settings UI\n"
     header += "# Do not edit manually; changes will be overwritten.\n\n"
-    return _apply_backend_retry_budget(header + "\n\n".join(sections) + "\n")
+    rendered = _apply_backend_retry_budget(header + "\n\n".join(sections) + "\n")
+    if not _edge_proxied:
+        rendered = _strip_cf_connecting_ip_in_proxies(rendered)
+    return rendered

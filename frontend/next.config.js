@@ -48,7 +48,7 @@ const API_V1_PREFIXES = [
 ]
 
 const API_V1_EXACT_PATHS = [
-  '/api/v1/audit-log',
+  '/api/v1/audit-logs',
 ]
 
 const EXACT_REWRITES = [
@@ -113,15 +113,11 @@ const nextConfig = {
       // Original Agent-5 catchall kept as a safety net for unlisted routes.
       {
         source: '/api/:path*',
-        destination: process.env.INTERNAL_API_URL
-          ? `${process.env.INTERNAL_API_URL}/api/:path*`
-          : `${API_BASE}/api/:path*`,
+        destination: `${API_BASE}/api/:path*`,
       },
       {
         source: '/accounts/:provider(github|google|gitlab|bitbucket_oauth2)/:path*',
-        destination: process.env.INTERNAL_API_URL
-            ? `${process.env.INTERNAL_API_URL}/accounts/:provider/:path*`
-          : `${API_BASE}/accounts/:provider/:path*`,
+        destination: `${API_BASE}/accounts/:provider/:path*`,
       },
     ]
   },

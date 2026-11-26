@@ -19,7 +19,7 @@ from ...services.server_guard import ServerGuard
 from ...tasks import (
     smart_deploy_task,
 )
-from ....teams.permissions import get_team_q_filter
+from ....teams.permissions import assert_can_write, get_team_q_filter
 from ....cloud.docker_client import get_docker_client
 from .._helpers import (
     _error_response,
@@ -130,6 +130,23 @@ class DeploymentViewSet(LifecycleActionsMixin, ReviewActionsMixin, LogsActionsMi
     def _is_remote_sync_request(self):
         return is_remote_sync_request(self.request)
 
+    def perform_create(self, serializer):
+        """Ensure caller has write access to the target service before creating a deployment."""
+        service = serializer.validated_data.get('service')
+        if service is not None and not is_remote_sync_request(self.request):
+            assert_can_write(self.request.user, service, action='deploy')
+        serializer.save()
+
+    def perform_update(self, serializer):
+        """Prevent reassigning an existing deployment to a different service."""
+        new_service = serializer.validated_data.get('service')
+        if new_service is not None and new_service != serializer.instance.service:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'service': 'Cannot change service of an existing deployment.'})
+        if not is_remote_sync_request(self.request):
+            assert_can_write(self.request.user, serializer.instance.service, action='modify')
+        serializer.save()
+
 
     @action(detail=True, methods=['post'])
     def rollback(self, request, pk=None):
@@ -161,9 +178,31 @@ class DeploymentViewSet(LifecycleActionsMixin, ReviewActionsMixin, LogsActionsMi
 
         target_deployment = self.get_object()
         service = target_deployment.service
+        assert_can_write(request.user, service, action='rollback')
         guard = ServerGuard.check_user_workload_allowed(getattr(service, 'server', None))
         if not guard["ok"]:
             return Response(guard, status=status.HTTP_400_BAD_REQUEST)
+
+        # Reject in-progress deployments — their commit_hash / image may change
+        # while the pipeline runs, so rolling back to "this row" is undefined.
+        in_progress = {
+            Deployment.Status.QUEUED,
+            Deployment.Status.BUILDING,
+            Deployment.Status.REVIEW,
+            Deployment.Status.DEPLOYING,
+            Deployment.Status.HEALTH_CHECK,
+            Deployment.Status.AWAITING_APPROVAL,
+        }
+        if target_deployment.status in in_progress:
+            return _error_response(
+                "ROLLBACK_IN_PROGRESS",
+                f"Cannot rollback to an in-progress ({target_deployment.status}) deployment.",
+                details={
+                    "deployment_id": str(target_deployment.id),
+                    "status": target_deployment.status,
+                },
+                user_action="Wait for the current deployment to complete or cancel it first.",
+            )
 
         # Only successful deployments are valid rollback targets. Rolling back
         # to a FAILED or CANCELLED row would just re-trigger the broken code.
@@ -197,30 +236,6 @@ class DeploymentViewSet(LifecycleActionsMixin, ReviewActionsMixin, LogsActionsMi
                 user_action="Choose a deployment that has a valid commit hash/image artifact.",
             )
 
-        # Reject in-progress deployments — their commit_hash / image may change
-        # while the pipeline runs, so rolling back to "this row" is undefined.
-        in_progress = {
-            Deployment.Status.QUEUED,
-            Deployment.Status.BUILDING,
-            Deployment.Status.REVIEW,
-            Deployment.Status.DEPLOYING,
-            Deployment.Status.HEALTH_CHECK,
-            Deployment.Status.AWAITING_APPROVAL,
-        }
-        if target_deployment.status in in_progress:
-            return _error_response(
-                "ROLLBACK_IN_PROGRESS",
-                f"Cannot rollback to an in-progress ({target_deployment.status}) deployment.",
-                details={
-                    "deployment_id": str(target_deployment.id),
-                    "status": target_deployment.status,
-                },
-                user_action=(
-                    "Wait for the in-progress deployment to finish, or "
-                    "cancel it, then retry rollback."
-                ),
-            )
-
         # Refuse to roll back to the deployment that is currently serving
         # traffic — that would redeploy the same commit/image and silently
         # no-op. Use Redeploy for force-rebuild of the current release, or
@@ -247,6 +262,12 @@ class DeploymentViewSet(LifecycleActionsMixin, ReviewActionsMixin, LogsActionsMi
                 ),
             )
 
+        from ...tasks.deploy.state import restore_deployment_artifact_metadata
+
+        # Restore artifact provenance (docker_image / repository_url / function_code)
+        # onto service before queueing rollback so the build/deploy uses target release.
+        rollback_meta = restore_deployment_artifact_metadata(service, target_deployment)
+
         # Create new deployment record for the rollback
         new_deployment = Deployment.objects.create(
             service=service,
@@ -256,6 +277,7 @@ class DeploymentViewSet(LifecycleActionsMixin, ReviewActionsMixin, LogsActionsMi
             branch=service.branch or '',
             is_rollback=True,
             rollback_from=target_deployment,
+            metadata=rollback_meta,
         )
 
         provider = _resolve_provider_for_service(service)
@@ -313,14 +335,29 @@ class DeploymentViewSet(LifecycleActionsMixin, ReviewActionsMixin, LogsActionsMi
         if not request.user.is_superuser:
             base_qs = base_qs.filter(service__owner=request.user)
 
-        failed_deploys = list(base_qs.only('id', 'container_id'))
+        failed_deploys = list(base_qs.select_related('service').only('id', 'container_id', 'service'))
 
         # ── 1b. DB: Select failed addons to prune ──
         from apps.deployments.models.addons import Addon
         addon_qs = Addon.objects.filter(status='FAILED')
         if not request.user.is_superuser:
             addon_qs = addon_qs.filter(service__owner=request.user)
-        failed_addons = list(addon_qs)
+        failed_addons = list(addon_qs.select_related('service'))
+
+        stale_threshold = timezone.now() - timezone.timedelta(minutes=30)
+        stale_qs = Deployment.objects.filter(
+            status='QUEUED',
+            created_at__lt=stale_threshold
+        )
+        if not request.user.is_superuser:
+            stale_qs = stale_qs.filter(service__owner=request.user)
+
+        seen_service_ids = set()
+        for item in [*failed_deploys, *failed_addons, *stale_qs.select_related('service')]:
+            svc = getattr(item, 'service', None)
+            if svc is not None and svc.id not in seen_service_ids:
+                seen_service_ids.add(svc.id)
+                assert_can_write(request.user, svc, action='prune')
 
         # ── 2. VPS: Container cleanup ──
         containers_removed = 0
@@ -356,38 +393,35 @@ class DeploymentViewSet(LifecycleActionsMixin, ReviewActionsMixin, LogsActionsMi
                 except docker.errors.NotFound:
                     logger.debug("Addon container %s already gone", addon_obj.name)
 
-            # Prune all stopped containers to be sure
-            client.containers.prune()
-
-            # Prune unused images. SECURITY: the unfiltered
-            # ``dangling: false`` prune affects every tenant on the
-            # host. Restrict the global prune to admins; non-admins
-            # only get their own dangling images (the safer default).
+            # Prune stopped containers & unused images + temp backups.
+            # SECURITY: unfiltered container/image/tmp prunes affect every
+            # tenant on the host — restrict host-wide prunes to admins.
             if is_admin:
+                client.containers.prune()
                 image_prune_res = client.images.prune(filters={"dangling": ["false"]})
                 images_pruned = image_prune_res.get("SpaceReclaimed", 0)
+
+                # ── 2b. VPS: Temp backup cleanup ──
+                # Clean up stale files in /tmp/backups (older than 1h)
+                temp_backups_dir = '/tmp/backups'
+                if os.path.exists(temp_backups_dir):
+                    import shutil
+                    import time
+                    now = time.time()
+                    for root, dirs, files in os.walk(temp_backups_dir):
+                        for f in files:
+                            f_path = os.path.join(root, f)
+                            if os.stat(f_path).st_mtime < now - 3600:
+                                with contextlib.suppress(OSError):
+                                    os.remove(f_path)
+                        for d in dirs:
+                            d_path = os.path.join(root, d)
+                            if os.stat(d_path).st_mtime < now - 3600:
+                                with contextlib.suppress(OSError):
+                                    shutil.rmtree(d_path)
             else:
                 image_prune_res = client.images.prune(filters={"dangling": ["true"]})
                 images_pruned = image_prune_res.get("SpaceReclaimed", 0)
-
-            # ── 2b. VPS: Temp backup cleanup ──
-            # Clean up stale files in /tmp/backups (older than 1h)
-            temp_backups_dir = '/tmp/backups'
-            if os.path.exists(temp_backups_dir):
-                import shutil
-                import time
-                now = time.time()
-                for root, dirs, files in os.walk(temp_backups_dir):
-                    for f in files:
-                        f_path = os.path.join(root, f)
-                        if os.stat(f_path).st_mtime < now - 3600:
-                            with contextlib.suppress(OSError):
-                                os.remove(f_path)
-                    for d in dirs:
-                        d_path = os.path.join(root, d)
-                        if os.stat(d_path).st_mtime < now - 3600:
-                            with contextlib.suppress(OSError):
-                                shutil.rmtree(d_path)
         except Exception as exc:
             logger.error("Docker/Temp prune failed during deployment cleanup: %s", exc)
 
@@ -396,14 +430,6 @@ class DeploymentViewSet(LifecycleActionsMixin, ReviewActionsMixin, LogsActionsMi
         addon_qs.delete()[0]
 
         # ── 4. DB: Cancel stuck QUEUED deployments ──
-        stale_threshold = timezone.now() - timezone.timedelta(minutes=30)
-        stale_qs = Deployment.objects.filter(
-            status='QUEUED',
-            created_at__lt=stale_threshold
-        )
-        if not request.user.is_superuser:
-            stale_qs = stale_qs.filter(service__owner=request.user)
-
         stale_count = stale_qs.update(
             status=Deployment.Status.CANCELLED,
             finished_at=timezone.now()

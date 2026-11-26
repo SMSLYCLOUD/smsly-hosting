@@ -10,6 +10,8 @@ from rest_framework import authentication, permissions
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 
+from apps.core.auth import CookieAwareTokenAuthentication
+
 from ..models import (
     PlatformConfig,  # type: ignore[attr-defined]    # re-exported via models.py; mypy can't see through the empty hub module.
 )
@@ -20,7 +22,11 @@ class RouteStatusView(GenericAPIView):
     Authenticated DNS/SSL status check for the platform domain.
     """
 
-    authentication_classes = [authentication.SessionAuthentication, authentication.TokenAuthentication]
+    authentication_classes = [
+        authentication.SessionAuthentication,
+        CookieAwareTokenAuthentication,
+        authentication.TokenAuthentication,
+    ]
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):  # pylint: disable=unused-argument

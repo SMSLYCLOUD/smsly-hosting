@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class TargetSetupMixin:
-    def _seed_target_deployment_record(self, backend_container=None, metadata=None):
+    def _seed_target_deployment_record(self, backend_container=None, metadata=None, container_id=None):
         if not self.transfer.service:
             return
 
@@ -26,11 +26,13 @@ class TargetSetupMixin:
             'service_name': service_name,
             'image_ref': image_ref,
             'source_node': str(self.transfer.source_server_ip or ''),
+            'container_id': str(container_id or service_name),
         }
         restore_code = """
 import json
 from django.utils import timezone
 from apps.deployments.models import Service, Deployment
+from apps.deployments.tasks.deploy.state import stamp_deployment_artifact_metadata
 
 payload = json.loads(%r)
 service_name = payload["service_name"]
@@ -41,7 +43,7 @@ if svc:
         now = timezone.now()
         container_id = payload.get("container_id") or None
         status = Deployment.Status.ACTIVE if container_id else Deployment.Status.FAILED
-        Deployment.objects.create(
+        dep = Deployment.objects.create(
             service=svc,
             status=status,
             commit_hash=(payload.get("image_ref") or "backup-restore")[-40:],
@@ -64,6 +66,10 @@ if svc:
                 },
             ],
         )
+        stamp_deployment_artifact_metadata(
+            dep, svc, image_ref=payload.get("image_ref") or None
+        )
+        dep.save(update_fields=["metadata"])
 """.strip() % json.dumps(payload)
 
         try:

@@ -84,7 +84,8 @@ def self_heal_remote_deployment(self, deployment_id: str, server_id: str):
                 broadcast_status(deployment)
 
                 try:
-                    provider = deployment.service.provider
+                    from apps.deployments.views._helpers import _resolve_provider_for_service
+                    provider = _resolve_provider_for_service(deployment.service)
                     if provider:
                         from .tasks_deploy import enqueue_smart_deploy_task
                         enqueue_smart_deploy_task(

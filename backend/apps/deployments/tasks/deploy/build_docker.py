@@ -53,9 +53,10 @@ def _detect_exposed_port(service, image_name: str | None = None) -> int | None:
                         exposed = container.image.attrs.get('Config', {}).get('ExposedPorts', {})
                     except docker.errors.NotFound:
                         pass
-                if not exposed and last_dep.image_name:
+                last_image = (getattr(last_dep, 'metadata', None) or {}).get('deployed_image')
+                if not exposed and last_image:
                     try:
-                        img = client.images.get(last_dep.image_name)
+                        img = client.images.get(last_image)
                         exposed = img.attrs.get('Config', {}).get('ExposedPorts', {})
                     except docker.errors.ImageNotFound:
                         pass
@@ -70,8 +71,13 @@ def _detect_exposed_port(service, image_name: str | None = None) -> int | None:
     return None
 
 def _run_managed_image_post_deploy_hooks(deployment, service: Service, container_id: str) -> None:
+    import sys as _sys
+    _build_mod = _sys.modules.get("apps.deployments.tasks.deploy.build")
+    _docker = getattr(_build_mod, "docker", None) or docker
+    _subprocess = getattr(_build_mod, "subprocess", None) or subprocess
+    _wait_healthy = getattr(_build_mod, "_wait_for_local_container_healthy", None) or _wait_for_local_container_healthy
     try:
-        client = docker.from_env()
+        client = _docker.from_env()
         container = client.containers.get(container_id)
         container_name = container.name
     except Exception as exc:
@@ -89,7 +95,7 @@ def _run_managed_image_post_deploy_hooks(deployment, service: Service, container
 
     if str(env_map.get("RUN_PRISMA_MIGRATE", "")).strip().lower() in {"1", "true", "yes"}:
         append_log(deployment, "\n[hook] Running Prisma migrate deploy inside container...\n")
-        prisma_res = subprocess.run(
+        prisma_res = _subprocess.run(
             ["docker", "exec", container_name, "sh", "-lc", "cd /app && npx prisma migrate deploy"],
             capture_output=True,
             text=True,
@@ -108,7 +114,7 @@ def _run_managed_image_post_deploy_hooks(deployment, service: Service, container
         model_name = get_ollama_model_name(service) or str(env_map.get("OLLAMA_MODEL", "")).strip()
         if model_name:
             append_log(deployment, f"\n[hook] Pulling Ollama model `{model_name}` inside {container_name}...\n")
-            pull_res = subprocess.run(
+            pull_res = _subprocess.run(
                 ["docker", "exec", container_name, "sh", "-lc", f"ollama pull {shlex.quote(model_name)}"],
                 capture_output=True,
                 text=True,
@@ -133,7 +139,7 @@ def _run_managed_image_post_deploy_hooks(deployment, service: Service, container
 
     try:
         append_log(deployment, "\n[hook] Syncing LiteLLM router catalog...\n")
-        copy_res = subprocess.run(
+        copy_res = _subprocess.run(
             ["docker", "cp", config_path, f"{container_name}:/app/proxy_server_config.yaml"],
             capture_output=True,
             text=True,
@@ -145,7 +151,7 @@ def _run_managed_image_post_deploy_hooks(deployment, service: Service, container
                 f"{copy_res.stdout}\n{copy_res.stderr}"
             )
 
-        restart_res = subprocess.run(
+        restart_res = _subprocess.run(
             ["docker", "restart", container_name],
             capture_output=True,
             text=True,
@@ -157,7 +163,7 @@ def _run_managed_image_post_deploy_hooks(deployment, service: Service, container
                 f"{restart_res.stdout}\n{restart_res.stderr}"
             )
 
-        if not _wait_for_local_container_healthy(deployment, container_id, timeout_seconds=180):
+        if not _wait_healthy(deployment, container_id, timeout_seconds=180):
             raise RuntimeError("Router restart completed but health did not recover in time")
 
         append_log(deployment, "[hook] LiteLLM router catalog synced.\n")

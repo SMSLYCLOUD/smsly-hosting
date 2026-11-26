@@ -7,13 +7,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/components/ui/use-toast";
-import { Loader2, Users, Building, Plus, Mail, Shield } from "lucide-react";
-import { organizationsApi } from "@/lib/api";
+import { Loader2, Building, Plus, Mail, Shield, Check } from "lucide-react";
+import { organizationsApi, type PendingOrganizationInvite } from "@/lib/api";
 
 export function OrganizationsTab() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [orgs, setOrgs] = useState<any[]>([]);
+  const [pendingInvites, setPendingInvites] = useState<PendingOrganizationInvite[]>([]);
+  const [acceptingOrgId, setAcceptingOrgId] = useState<string | null>(null);
   const [ssoConfigs, setSsoConfigs] = useState<any[]>([]);
   const [activeOrgId, setActiveOrgId] = useState<string>("");
   const [newOrgName, setNewOrgName] = useState("");
@@ -22,13 +24,16 @@ export function OrganizationsTab() {
 
   const fetchData = async () => {
     try {
-      const data = await organizationsApi.list();
+      const [data, invitesData, ssoData] = await Promise.all([
+        organizationsApi.list(),
+        organizationsApi.pendingInvites().catch(() => []),
+        organizationsApi.getSSO(),
+      ]);
       setOrgs(data);
+      setPendingInvites(invitesData);
       if (data.length > 0 && !activeOrgId) {
         setActiveOrgId(data[0].id);
       }
-      
-      const ssoData = await organizationsApi.getSSO();
       setSsoConfigs(ssoData);
     } catch (err) {
       console.error(err);
@@ -41,6 +46,26 @@ export function OrganizationsTab() {
     fetchData();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleAcceptInvite = async (orgId: string, orgName?: string) => {
+    setAcceptingOrgId(orgId);
+    try {
+      await organizationsApi.acceptInvite(orgId);
+      toast({
+        title: "Invitation accepted",
+        description: orgName ? `You have joined ${orgName}.` : "Organization invitation accepted.",
+      });
+      await fetchData();
+    } catch (err: any) {
+      toast({
+        title: "Failed to accept invitation",
+        description: err?.response?.data?.error || err?.message || "Could not accept invitation.",
+        variant: "destructive",
+      });
+    } finally {
+      setAcceptingOrgId(null);
+    }
+  };
 
   const handleCreateOrg = async () => {
     if (!newOrgName.trim()) return;
@@ -80,6 +105,45 @@ export function OrganizationsTab() {
 
   return (
     <div className="space-y-6">
+      {pendingInvites.length > 0 && (
+        <Card className="border-primary/30 bg-primary/5">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Mail className="h-4 w-4 text-primary" />
+              Pending Organization Invitations
+            </CardTitle>
+            <CardDescription>Accept an invitation to join an organization.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {pendingInvites.map((inv) => {
+              const targetOrgId = inv.organization_id || inv.organization;
+              return (
+                <div
+                  key={inv.id}
+                  className="flex items-center justify-between gap-4 rounded-lg border border-border bg-card p-3"
+                >
+                  <div>
+                    <p className="font-medium text-sm">{inv.organization_name}</p>
+                    <p className="text-xs text-muted-foreground">Role: {inv.role}</p>
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={() => handleAcceptInvite(targetOrgId, inv.organization_name)}
+                    disabled={acceptingOrgId === targetOrgId}
+                  >
+                    {acceptingOrgId === targetOrgId ? (
+                      <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                    ) : (
+                      <Check className="h-4 w-4 mr-1" />
+                    )}
+                    Accept
+                  </Button>
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
       <Card>
         <CardHeader>
           <CardTitle>Organizations</CardTitle>

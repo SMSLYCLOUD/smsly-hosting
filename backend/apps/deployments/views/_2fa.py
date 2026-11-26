@@ -86,6 +86,8 @@ def two_factor_confirm(request):
     if device.verify_token(token):
         device.confirmed = True
         device.save()
+        if hasattr(request, 'session'):
+            request.session['2fa_verified'] = True
         return Response({'enabled': True, 'message': '2FA enabled successfully'})
 
     return Response({'error': 'Invalid token. Try again with a new code from your authenticator app.'},
@@ -257,6 +259,7 @@ def two_factor_login(request):
             # .backend attr), and bare login(request, user) raises
             # AttributeError -> 500 on the success path.
             login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+            request.session['2fa_verified'] = True
             clear_pending_2fa(request)
             return _mint_token()
 
@@ -283,6 +286,7 @@ def two_factor_login(request):
                 device.confirmed = True
                 device.save()
                 login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+                request.session['2fa_verified'] = True
                 clear_pending_2fa(request)
                 logger.info("2FA enrollment completed for enforced admin %s", user_id)
                 return _mint_token()
@@ -293,16 +297,32 @@ def two_factor_login(request):
                     status=status.HTTP_401_UNAUTHORIZED)
 
 
-@api_view(['GET'])
+@api_view(['GET', 'POST'])
 @permission_classes([permissions.IsAuthenticated, CanManageAPITokens])
 def two_factor_backup_codes(request):
-    """Generate new backup codes for the user (invalidates old ones)."""
+    """GET: return remaining backup code count and masked prefixes (non-destructive).
+    POST: generate new backup codes for the user (invalidating old ones).
+    """
     from django_otp.plugins.otp_static.models import StaticDevice, StaticToken
 
-    # Remove old static devices
-    for device in devices_for_user(request.user):
-        if hasattr(device, 'plugin') and device.plugin == 'otp_static':
-            device.delete()
+    if request.method == 'GET':
+        tokens = list(
+            StaticToken.objects.filter(device__user=request.user).values_list('token', flat=True)
+        )
+        masked = [
+            f"{t[:2]}****{t[-2:]}" if len(t) >= 4 else "****"
+            for t in tokens
+        ]
+        return Response({
+            'remaining_count': len(tokens),
+            'has_backup_codes': len(tokens) > 0,
+            'masked_codes': masked,
+        })
+
+    # POST: Remove old static devices and their tokens, then issue 10 fresh codes
+    for device in StaticDevice.objects.filter(user=request.user):
+        device.token_set.all().delete()
+        device.delete()
 
     # Create new static device with 10 codes
     device = StaticDevice.objects.create(user=request.user, name='backup')

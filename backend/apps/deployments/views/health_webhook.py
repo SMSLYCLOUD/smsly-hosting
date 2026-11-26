@@ -1,9 +1,11 @@
 """Health Webhook API."""
+from datetime import timedelta
 import hmac
 import logging
 
 from django.conf import settings
 from django.core.cache import cache
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
@@ -11,8 +13,12 @@ from rest_framework.views import APIView
 
 from apps.deployments.models.audit import AuditLog
 from apps.deployments.models.core import Deployment, Service
+from apps.deployments.tasks.deploy.state import stamp_deployment_artifact_metadata
 
 logger = logging.getLogger(__name__)
+
+_NONCE_CACHE_TTL_SECONDS = 300
+_TOKEN_MAX_IDLE_DAYS = 90
 
 
 class ServiceHealthWebhookThrottle(AnonRateThrottle):
@@ -84,25 +90,46 @@ class ServiceHealthWebhookView(APIView):
         if not hmac.compare_digest(expected_token, webhook_token):
             return Response({"error": "Invalid health token"}, status=status.HTTP_403_FORBIDDEN)
 
+        # Idle token expiry: reject tokens unused for more than 90 days.
+        last_used = getattr(service, "health_webhook_token_last_used_at", None)
+        if last_used and (timezone.now() - last_used) > timedelta(days=_TOKEN_MAX_IDLE_DAYS):
+            AuditLog.objects.create(
+                actor="system",
+                action="HEALTH_WEBHOOK_REJECTED",
+                target=f"Service:{service.id}",
+                metadata={
+                    "service_id": str(service.id),
+                    "reason": "token_idle_expired",
+                    "max_idle_days": _TOKEN_MAX_IDLE_DAYS,
+                    "ip": _client_ip(request),
+                },
+            )
+            return Response(
+                {
+                    "error": (
+                        f"Health webhook token expired after {_TOKEN_MAX_IDLE_DAYS} days of inactivity"
+                    )
+                },
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
         # Replay protection: each request must carry a unique nonce
-        # (header X-Webhook-Nonce or body 'nonce') the server has
-        # never seen. The nonce is recorded in the cache for 10
-        # minutes, so a captured-and-replayed request after that
-        # window would also need the (still-secret) token to be
-        # accepted — i.e. the nonce is a strong second factor.
+        # (header X-SMSLY-Webhook-Nonce / X-Webhook-Nonce or body 'nonce')
+        # the server has never seen within _NONCE_CACHE_TTL_SECONDS.
         nonce = (
-            request.headers.get("X-Webhook-Nonce")
+            request.headers.get("X-SMSLY-Webhook-Nonce")
+            or request.headers.get("X-Webhook-Nonce")
             or request.data.get("nonce")
             or ""
         ).strip()
         if not nonce or len(nonce) < 8 or len(nonce) > 128:
             return Response(
-                {"error": "Missing or invalid nonce (X-Webhook-Nonce header)"},
+                {"error": "Missing or invalid nonce (X-SMSLY-Webhook-Nonce / X-Webhook-Nonce header)"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         nonce_key = f"webhook_nonce:health:{service.id}:{nonce}"
         try:
-            if not cache.add(nonce_key, "1", timeout=600):
+            if not cache.add(nonce_key, "1", timeout=_NONCE_CACHE_TTL_SECONDS):
                 return Response(
                     {"error": "Nonce already used"},
                     status=status.HTTP_401_UNAUTHORIZED,
@@ -139,7 +166,8 @@ class ServiceHealthWebhookView(APIView):
 
         if event == "health_update" and health_status == "healthy":
             service.health_status = "healthy"
-            service.save(update_fields=["health_status", "updated_at"])
+            service.health_webhook_token_last_used_at = timezone.now()
+            service.save(update_fields=["health_status", "health_webhook_token_last_used_at", "updated_at"])
 
             active_deployments = Deployment.objects.filter(
                 service=service,
@@ -147,8 +175,9 @@ class ServiceHealthWebhookView(APIView):
             )
             activated = 0
             for deployment in active_deployments:
+                stamp_deployment_artifact_metadata(deployment, service)
                 deployment.status = Deployment.Status.ACTIVE
-                deployment.save(update_fields=["status", "updated_at"])
+                deployment.save(update_fields=["status", "metadata", "updated_at"])
                 activated += 1
 
                 # Post success commit status to GitHub (non-blocking)
@@ -179,7 +208,8 @@ class ServiceHealthWebhookView(APIView):
 
         if event == "health_update":
             service.health_status = "unhealthy"
-            service.save(update_fields=["health_status", "updated_at"])
+            service.health_webhook_token_last_used_at = timezone.now()
+            service.save(update_fields=["health_status", "health_webhook_token_last_used_at", "updated_at"])
             AuditLog.objects.create(
                 actor="system",
                 action="HEALTH_WEBHOOK_APPLIED",

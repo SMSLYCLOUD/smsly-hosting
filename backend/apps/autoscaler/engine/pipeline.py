@@ -56,6 +56,22 @@ def _clear_starvation(service_id: str):
     django_cache.delete(_starvation_key(service_id))
 
 
+def _is_sablier_standby(service, metrics=None) -> bool:
+    """True when *service* is intentionally sleeping under Sablier scale-to-zero."""
+    if getattr(service, "sablier_enabled", False) is not True:
+        return False
+    if str(getattr(service, "health_status", "") or "").strip().lower() == "standby":
+        return True
+    if metrics is not None and getattr(metrics, "cpu_percent", None) is None:
+        try:
+            gen = getattr(service, "generate_internal_addresses", None)
+            if callable(gen) and not gen():
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def _ai_advisory(service, rec, metrics, running, max_replicas) -> None:
     """Best-effort AI consultation on scale-up near the replica ceiling.
 
@@ -140,18 +156,36 @@ def analyze_and_apply(service, *, now=None, min_interval_seconds: int = 0) -> Sc
                 applied=False, error='service not found',
             )
 
-    # Dedup: skip if another task analysed this service recently.
-    if min_interval_seconds > 0:
-        cache_key = f'autoscale_last:{service.id}'
-        if django_cache.get(cache_key):
-            return ScaleResult(
-                recommendation=Recommendation(reason='dedup: recently analysed'),
-                applied=False,
-            )
-        django_cache.set(cache_key, '1', timeout=min_interval_seconds)
+    # Dedup: skip if another task already triggered a scaling action recently.
+    cache_key = f'autoscale_last:{service.id}'
+    if min_interval_seconds > 0 and django_cache.get(cache_key):
+        return ScaleResult(
+            recommendation=Recommendation(reason='dedup: recently analysed'),
+            applied=False,
+        )
 
     # 1. Metrics
+    if _is_sablier_standby(service):
+        _clear_starvation(str(service.id))
+        return ScaleResult(
+            recommendation=Recommendation(
+                action='none',
+                reason='Service is sleeping on-demand (Sablier standby).',
+            ),
+            applied=False,
+        )
+
     metrics = MetricsCollector(service).collect()
+
+    if _is_sablier_standby(service, metrics=metrics):
+        _clear_starvation(str(service.id))
+        return ScaleResult(
+            recommendation=Recommendation(
+                action='none',
+                reason='Service is sleeping on-demand (Sablier standby).',
+            ),
+            applied=False,
+        )
 
     # Circuit breaker: if all metric sources fail, track consecutive
     # outages. Once the limit is reached, refuse to scale down (the
@@ -195,11 +229,15 @@ def analyze_and_apply(service, *, now=None, min_interval_seconds: int = 0) -> Sc
     cooldown_down = alert_cfg.get('cooldown_down_min')
 
     # 4. Decide
+    eff_min_replicas = (
+        0 if getattr(service, "sablier_enabled", False) is True
+        else (service.min_replicas or 0)
+    )
     engine = DecisionEngine(
         metrics,
         running_replicas=running,
         max_replicas=service.max_replicas,
-        min_replicas=service.min_replicas or 0,
+        min_replicas=eff_min_replicas,
         cpu_target=service.autoscale_cpu_target,
         last_scale_at=last_event,
         spawning_in_progress=spawning,
@@ -215,6 +253,8 @@ def analyze_and_apply(service, *, now=None, min_interval_seconds: int = 0) -> Sc
 
     # 4. Apply
     result = Reconciler(service, now=now).apply(rec)
+    if min_interval_seconds > 0 and result.applied:
+        django_cache.set(cache_key, '1', timeout=min_interval_seconds)
     return result
 
 
@@ -228,49 +268,66 @@ def analyze_only(service, *, now=None) -> dict:
     # autoscaling docs, then falls back to DB and Docker.
     metrics = MetricsCollector(service, prefer='prometheus').collect()
 
+    if _is_sablier_standby(service, metrics=metrics):
+        _clear_starvation(str(service.id))
+
     # Mirror analyze_and_apply's starvation circuit breaker so the REST
     # endpoint cannot recommend a scale-down on stale metrics while the
     # periodic task refuses.
-    if metrics.cpu_percent is None:
-        _record_metrics_outage(str(service.id))
+    if _is_sablier_standby(service, metrics=metrics):
+        rec = Recommendation(
+            action='none',
+            reason='Service is sleeping on-demand (Sablier standby).',
+        )
+        running = ServiceReplica.objects.filter(service=service, status='RUNNING').count()
+        spawning = ServiceReplica.objects.filter(
+            service=service, status__in=('SPAWNING', 'DRAINING')
+        ).exists()
     else:
-        _clear_starvation(str(service.id))
+        if metrics.cpu_percent is None:
+            _record_metrics_outage(str(service.id))
+        else:
+            _clear_starvation(str(service.id))
 
-    running = ServiceReplica.objects.filter(service=service, status='RUNNING').count()
-    spawning = ServiceReplica.objects.filter(
-        service=service, status__in=('SPAWNING', 'DRAINING')
-    ).exists()
-    last_destroyed = ServiceReplica.objects.filter(
-        service=service, status='DESTROYED',
-    ).order_by('-destroyed_at').first()
-    last_spawned = ServiceReplica.objects.filter(
-        service=service, status='RUNNING',
-    ).order_by('-created_at').first()
+        running = ServiceReplica.objects.filter(service=service, status='RUNNING').count()
+        spawning = ServiceReplica.objects.filter(
+            service=service, status__in=('SPAWNING', 'DRAINING')
+        ).exists()
+        last_destroyed = ServiceReplica.objects.filter(
+            service=service, status='DESTROYED',
+        ).order_by('-destroyed_at').first()
+        last_spawned = ServiceReplica.objects.filter(
+            service=service, status='RUNNING',
+        ).order_by('-created_at').first()
 
-    # Use the same last-event computation as analyze_and_apply so the
-    # REST endpoint and the periodic task agree on cooldown state.
-    candidates = [service.last_scale_at,
-                  last_spawned.created_at if last_spawned else None,
-                  last_destroyed.destroyed_at if last_destroyed and last_destroyed.destroyed_at else None]
-    last_event = max((c for c in candidates if c is not None), default=None)
+        # Use the same last-event computation as analyze_and_apply so the
+        # REST endpoint and the periodic task agree on cooldown state.
+        candidates = [service.last_scale_at,
+                      last_spawned.created_at if last_spawned else None,
+                      last_destroyed.destroyed_at if last_destroyed and last_destroyed.destroyed_at else None]
+        last_event = max((c for c in candidates if c is not None), default=None)
 
-    alert_cfg = dict(service.alert_config or {})  # copy to avoid mutating the DB field
-    cooldown_up = alert_cfg.get('cooldown_up_min')
-    cooldown_down = alert_cfg.get('cooldown_down_min')
+        alert_cfg = dict(service.alert_config or {})  # copy to avoid mutating the DB field
+        cooldown_up = alert_cfg.get('cooldown_up_min')
+        cooldown_down = alert_cfg.get('cooldown_down_min')
 
-    engine = DecisionEngine(
-        metrics,
-        running_replicas=running,
-        max_replicas=service.max_replicas,
-        min_replicas=service.min_replicas or 0,
-        cpu_target=service.autoscale_cpu_target,
-        last_scale_at=last_event,
-        spawning_in_progress=spawning,
-        now=now,
-        **({'cooldown_up_min': int(cooldown_up)} if cooldown_up is not None else {}),
-        **({'cooldown_down_min': int(cooldown_down)} if cooldown_down is not None else {}),
-    )
-    rec = engine.decide()
+        eff_min_replicas = (
+            0 if getattr(service, "sablier_enabled", False) is True
+            else (service.min_replicas or 0)
+        )
+        engine = DecisionEngine(
+            metrics,
+            running_replicas=running,
+            max_replicas=service.max_replicas,
+            min_replicas=eff_min_replicas,
+            cpu_target=service.autoscale_cpu_target,
+            last_scale_at=last_event,
+            spawning_in_progress=spawning,
+            now=now,
+            **({'cooldown_up_min': int(cooldown_up)} if cooldown_up is not None else {}),
+            **({'cooldown_down_min': int(cooldown_down)} if cooldown_down is not None else {}),
+        )
+        rec = engine.decide()
     # Legacy-compatible keys expected by the service Insights tab
     # (previously produced by ScalingAnalyzer.analyze). The unified
     # pipeline is the single source of truth; these are projections of

@@ -24,8 +24,11 @@ class HealthMixin:
         server = _refresh_managed_server_health(server)
         return Response(ManagedServerSerializer(server).data)
 
-    @action(detail=False, methods=["post"])
-    @throttle_classes([ServerCheckAllThrottle])
+    @action(
+        detail=False,
+        methods=["post"],
+        throttle_classes=[ServerCheckAllThrottle],
+    )
     def check_all(self, request):
         from apps.deployments.tasks.infra.tasks_health import refresh_managed_server_health
         servers = list(self.get_queryset())

@@ -17,6 +17,9 @@ never appear in ``ps`` output or container ``Config.Cmd``.
 """
 import contextlib
 import logging
+import os
+import re
+import secrets
 import subprocess
 import time
 
@@ -24,6 +27,43 @@ from shlex import quote as shlex_quote
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
+
+
+def _ha_fernet():
+    """Return a Fernet instance backed by FIELD_ENCRYPTION_KEY, or None."""
+    try:
+        from cryptography.fernet import Fernet
+        from django.conf import settings
+        key = getattr(settings, 'FIELD_ENCRYPTION_KEY', None) or os.environ.get('FIELD_ENCRYPTION_KEY', '')
+        if isinstance(key, (list, tuple)):
+            key = key[0] if key else ''
+        if isinstance(key, bytes):
+            key = key.decode('ascii', errors='ignore')
+        key = str(key or '').strip()
+        if not key:
+            return None
+        return Fernet(key.encode('ascii'))
+    except Exception:
+        return None
+
+
+def _encrypt_ha_secret(secret: str) -> str:
+    f = _ha_fernet()
+    if not f:
+        raise AddonHaError("FIELD_ENCRYPTION_KEY not configured for HA replication credential storage")
+    return "enc:" + f.encrypt(secret.encode('utf-8')).decode('ascii')
+
+
+def _decrypt_ha_secret(token: str) -> str | None:
+    if not isinstance(token, str) or not token.startswith("enc:"):
+        return None
+    f = _ha_fernet()
+    if not f:
+        return None
+    try:
+        return f.decrypt(token[4:].encode('ascii')).decode('utf-8')
+    except Exception:
+        return None
 
 REDIS_IMAGE = 'redis:7-alpine'
 HAPROXY_IMAGE = 'haproxy:2.9-alpine'
@@ -414,7 +454,7 @@ class AddonHaManager:
         primary = self.primary_container(addon)
         alias = addon.name
         replicator = 'ha_replicator'
-        replicator_password = addon.id.hex[:24]
+        replicator_password = secrets.token_urlsafe(24)
 
         self._assert_running(primary)
         self._assert_no_existing_components(addon)
@@ -424,7 +464,13 @@ class AddonHaManager:
 
         wg_ip = None
         publish_port = None
+        remote_wg_ip = None
+        remote_publish_port = None
         if placement == 'remote':
+            if remote_server is None or not getattr(remote_server, 'wg_address', None):
+                raise AddonHaError(
+                    "Remote placement requires a target server with a WireGuard address."
+                )
             node = self._primary_node()
             if not node or not getattr(node, 'wg_address', None):
                 raise AddonHaError(
@@ -433,6 +479,8 @@ class AddonHaManager:
                 )
             wg_ip = node.wg_address
             publish_port = self._pick_free_port(self.derive_publish_port(addon.id))
+            remote_wg_ip = remote_server.wg_address
+            remote_publish_port = self._pick_free_port(self.derive_publish_port(addon.id) + 1)
 
         try:
             # 1. Recreate the primary with replication enabled.
@@ -441,9 +489,14 @@ class AddonHaManager:
                 publish=(wg_ip, publish_port) if wg_ip else None)
             self._wait_tcp(primary, port, timeout=120)
 
-            # 2. Replication role + pg_hba rule inside the primary.
+            # 2. Replication role + scoped pg_hba rule inside the primary.
+            hba_cidr = (
+                f"{remote_wg_ip}/32" if placement == 'remote' and remote_wg_ip
+                else self._local_hba_subnet(self.network_name or addon_provisioner.network_name)
+            )
             self._create_replication_role(primary, db_user, db_name,
-                                          replicator, replicator_password)
+                                          replicator, replicator_password,
+                                          hba_cidr=hba_cidr)
 
             if placement == 'remote':
                 if remote_server is None:
@@ -451,7 +504,8 @@ class AddonHaManager:
                 standby = f"{primary}-ha-standby"
                 self._run_remote_postgres_standby(
                     remote_server, standby, wg_ip, publish_port,
-                    replicator, replicator_password)
+                    replicator, replicator_password,
+                    publish=(remote_wg_ip, remote_publish_port) if remote_wg_ip else None)
                 self._wait_remote_pg_ready(remote_server, standby, timeout=300)
             else:
                 # 3. Seed + start the streaming standby.
@@ -471,6 +525,7 @@ class AddonHaManager:
             'primary': primary,
             'standby': standby,
             'replicator_user': replicator,
+            'replicator_password': _encrypt_ha_secret(replicator_password),
             'network': self.network_name or addon_provisioner.network_name,
         }
         if placement == 'remote':
@@ -478,6 +533,7 @@ class AddonHaManager:
                 'server_id': str(getattr(remote_server, 'id', '')),
                 'server_host': getattr(remote_server, 'host', ''),
                 'replication_endpoint': f'{wg_ip}:{publish_port}',
+                'remote_endpoint': f'{remote_wg_ip}:{remote_publish_port}',
             })
         return topology
 
@@ -527,14 +583,14 @@ class AddonHaManager:
             or f"{self.primary_container(addon)}-ha-standby"
         return primary, standby
 
-    def fence_primary(self, addon) -> None:
+    def fence_primary(self, addon, container_name: str | None = None) -> None:
         """Stop the old primary so it cannot resurrect as a rogue master.
 
         ``--restart unless-stopped`` containers stay stopped after a manual
         stop, so this is durable until teardown/re-enable reseeds it.
         """
-        primary = self.primary_container(addon)
-        if not self._container_exists(primary):
+        primary = container_name or self.primary_container(addon)
+        if not primary or not self._container_exists(primary):
             return
         subprocess.run(
             ['docker', 'stop', '-t', '30', primary],
@@ -542,19 +598,54 @@ class AddonHaManager:
         )
         logger.info("addon_ha: fenced old primary %s", primary)
 
+    def fence_primary_container(self, addon, old_name: str | None = None) -> None:
+        """Alias used by watchdog/views to fence a specific old primary container."""
+        self.fence_primary(addon, container_name=old_name)
+
+    def _resolve_replicator_password(self, addon) -> str:
+        topology = addon.ha_topology if isinstance(getattr(addon, 'ha_topology', None), dict) else {}
+        enc_pw = topology.get('replicator_password')
+        if enc_pw:
+            decrypted = _decrypt_ha_secret(enc_pw)
+            if decrypted:
+                return decrypted
+        return addon.id.hex[:24]
+
+    def _local_hba_subnet(self, network_name: str) -> str:
+        try:
+            proc = subprocess.run(
+                ['docker', 'network', 'inspect', '-f',
+                 '{{range .IPAM.Config}}{{.Subnet}} {{end}}', network_name],
+                capture_output=True, text=True, timeout=10,
+            )
+            subnets = [s for s in (proc.stdout or '').split() if '/' in s]
+            if subnets:
+                return subnets[0]
+        except Exception:
+            pass
+        return '172.16.0.0/12'
+
     def reseed_as_standby(self, addon, source_container: str) -> str:
         """Turn the fenced old-primary container into a standby of ``source``.
 
-        Reuses the original container name (port mappings and Traefik labels
-        are re-attached), wipes the divergent data, and seeds fresh from the
-        current master. This is the same seeding path as enable time, so the
-        topology converges back to primary + streaming standby.
+        Reuses the fenced container name (never the active ``source_container``),
+        wipes divergent data, and seeds fresh from the current master.
         """
         from apps.addons.services.addon_provisioner import addon_provisioner
 
-        name = self.primary_container(addon)
-        replicator = 'ha_replicator'
-        replicator_password = addon.id.hex[:24]
+        topology = addon.ha_topology if isinstance(getattr(addon, 'ha_topology', None), dict) else {}
+        candidates = [
+            topology.get('standby'),
+            topology.get('primary'),
+            self.primary_container(addon),
+        ]
+        name = next((c for c in candidates if c and c != source_container), None)
+        if not name:
+            raise AddonHaError(
+                f"Refusing to reseed active master container {source_container!r}"
+            )
+        replicator = topology.get('replicator_user') or 'ha_replicator'
+        replicator_password = self._resolve_replicator_password(addon)
 
         creds = self._parse_pg_url(addon.connection_url)
         port = creds['port']
@@ -717,7 +808,8 @@ class AddonHaManager:
 
     def _run_remote_postgres_standby(self, server, name: str, wg_ip: str,
                                      wg_port: int, replicator: str,
-                                     replicator_password: str) -> None:
+                                     replicator_password: str,
+                                     publish: tuple[str, int] | None = None) -> None:
         """Seed a streaming standby on a remote mesh node over SSH.
 
         The standby pulls WAL from the primary node's WireGuard-published
@@ -760,11 +852,15 @@ class AddonHaManager:
                 '--cap-add=FOWNER',
                 '--pids-limit', '1024',
                 '--env-file', remote_env,
+            ]
+            if publish:
+                cmd_parts.extend(['-p', f'{publish[0]}:{publish[1]}:5432'])
+            cmd_parts.extend([
                 '-v', f'{name}-data:/var/lib/postgresql/data',
                 '-v', f'{tls_vol}:/etc/ssl/smsly-addon:ro',
                 'pgvector/pgvector:pg16',
                 'sh', '-c', seed_cmd,
-            ]
+            ])
             cmd_str = ' '.join(shlex_quote(p) for p in cmd_parts)
             out, err, code = ssh.exec_command(cmd_str, timeout=300)
             if code != 0:
@@ -846,8 +942,15 @@ class AddonHaManager:
                         f"Remote promotion failed: {err or out}")
 
             creds = self._parse_pg_url(addon.connection_url)
-            endpoint = topology.get('replication_endpoint') or ''
-            wg_host, _, wg_port = endpoint.partition(':')
+            endpoint = topology.get('remote_endpoint') or ''
+            if endpoint and ':' in endpoint:
+                wg_host, _, wg_port = endpoint.partition(':')
+            else:
+                wg_host = getattr(server, 'wg_address', '') or ''
+                wg_port = str(creds['port'])
+                if not wg_host:
+                    fallback_ep = topology.get('replication_endpoint') or ''
+                    wg_host, _, wg_port = fallback_ep.partition(':')
 
             # Fence the dead local primary if reachable.
             subprocess.run(['docker', 'stop', '-t', '30',
@@ -870,19 +973,26 @@ class AddonHaManager:
                 ssh.close()
 
     def _create_replication_role(self, primary: str, db_user: str, db_name: str,
-                                 replicator: str, replicator_password: str) -> None:
+                                 replicator: str, replicator_password: str,
+                                 hba_cidr: str = '172.16.0.0/12') -> None:
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', replicator):
+            raise AddonHaError(f"Invalid replicator role name: {replicator!r}")
+        tag = "rpw_" + uuid4().hex[:8]
         role_sql = (
             "DO $$ BEGIN "
             f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{replicator}') THEN "
             f"CREATE ROLE {replicator} REPLICATION LOGIN PASSWORD "
-            f"'{replicator_password}'; END IF; END $$;"
+            f"${tag}${replicator_password}${tag}$; "
+            "ELSE "
+            f"ALTER ROLE {replicator} WITH PASSWORD ${tag}${replicator_password}${tag}$; "
+            "END IF; END $$;"
         )
         subprocess.run(
             ['docker', 'exec', primary, 'psql', '-U', db_user, '-d', db_name,
              '-c', role_sql],
             capture_output=True, text=True, check=True, timeout=60,
         )
-        hba_line = f'hostssl replication {replicator} 0.0.0.0/0 scram-sha-256'
+        hba_line = f'hostssl replication {replicator} {hba_cidr} scram-sha-256'
         subprocess.run(
             ['docker', 'exec', primary, 'sh', '-c',
              'HBA="${PGDATA:-/var/lib/postgresql/data}/pg_hba.conf"; '
@@ -995,7 +1105,7 @@ class AddonHaManager:
         try:
             ssh = self._ssh_client(server)
             _out, _err, code = ssh.exec_command(
-                f"docker inspect -f '{{{{.State.Running}}}} {master}'",
+                f"docker inspect -f '{{{{.State.Running}}}}' {shlex_quote(master)}",
                 timeout=30, raise_on_error=False,
             )
             if code != 0:

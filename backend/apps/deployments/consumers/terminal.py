@@ -11,7 +11,12 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.conf import settings
 
-from .base import authenticate_ws_token, get_websocket_subprotocol, verify_deployment_ownership
+from .base import (
+    authenticate_ws_credential,
+    authenticate_ws_token,
+    get_websocket_subprotocol,
+    verify_deployment_ownership,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +67,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         super().__init__(*args, **kwargs)
         self.deployment_id = None
         self.user = None
+        self.api_token = None
         self.container_id = None
         self.exec_id = None
         self.exec_socket = None
@@ -74,6 +80,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self.is_disconnected = False
         self._accepted = False
         self._last_activity = time.time()
+        self._last_input_time = 0.0
+        self._input_frame_window = 0.005
         self._keepalive_timeout_seconds = self._resolve_keepalive_timeout()
         self._remote_server = None
         self._remote_container_ref = ""
@@ -107,30 +115,33 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             if not token_key and len(subprotocols) == 1 and subprotocols[0] and subprotocols[0] != 'token':
                 token_key = subprotocols[0]
 
-            if not token_key:
-                logger.warning(
-                    "WebSocket connection rejected: No token subprotocol for "
-                    "deployment %s", self.deployment_id)
-                await self.close(code=4001)
-                return
-
-            self.user = await self._authenticate_token(token_key)
-            if not self.user:
+            if token_key:
+                if type(self)._authenticate_token is TerminalConsumer._authenticate_token:
+                    self.user, self.api_token = await authenticate_ws_credential(token_key)
+                else:
+                    self.user = await self._authenticate_token(token_key)
+                    self.api_token = None
+                if not self.user:
+                    logger.warning(
+                        "WebSocket connection rejected: Invalid token for "
+                        "deployment %s", self.deployment_id)
+                    await self.close(code=4002)
+                    return
+            else:
                 # Cookie/session fallback (same as platform_update.py):
                 # browsers with a valid session but no exchanged WS token
-                # (session/OAuth login, throttled exchange) authenticate
-                # via QueryStringAuthMiddleware's scope[user] instead of
-                # failing closed here. Ownership is still verified below.
+                # authenticate via QueryStringAuthMiddleware's scope[user].
                 scope_user = self.scope.get('user')
                 if (scope_user is not None
                         and getattr(scope_user, 'is_authenticated', False)
                         and getattr(scope_user, 'is_active', False)):
                     self.user = scope_user
+                    self.api_token = self.scope.get('api_token')
             if not self.user:
                 logger.warning(
-                    "WebSocket connection rejected: Invalid token for "
+                    "WebSocket connection rejected: No token subprotocol for "
                     "deployment %s", self.deployment_id)
-                await self.close(code=4002)
+                await self.close(code=4001)
                 return
 
             if not await self._verify_ownership():
@@ -176,8 +187,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self.close(code=4000)
 
     async def _async_setup(self):
+        setup_completed = False
         try:
-            self.container_id = await self._find_container()
+            self.container_id = await asyncio.wait_for(self._find_container(), timeout=30)
             if not self.container_id:
                 logger.error("Terminal connect: No container found for deployment %s", self.deployment_id)
                 await self._out_queue.put({
@@ -188,12 +200,13 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
             if self._remote_server is not None:
                 await self._setup_remote_relay()
+                setup_completed = self._remote_ws is not None
                 return
 
             logger.info("Terminal connect: Found container %s for deployment %s", self.container_id, self.deployment_id)
             await asyncio.sleep(0.5)
 
-            success = await self._start_exec()
+            success = await asyncio.wait_for(self._start_exec(), timeout=30)
             if not success:
                 logger.error("Terminal connect: Failed to start exec in %s", self.container_id)
                 await self._out_queue.put({
@@ -220,8 +233,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await loop.run_in_executor(None, self._send_to_shell, "\n")
 
             self._read_task = asyncio.create_task(self._read_output())
+            setup_completed = True
         except asyncio.CancelledError:
             logger.info("Terminal setup task cancelled")
+            raise
         except Exception as e:
             if settings.DEBUG:
                 logger.error("Error during terminal setup: %s", e, exc_info=True)
@@ -229,6 +244,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             enc = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
             await self._out_queue.put({'message': enc})
             await self.close()
+        finally:
+            if not setup_completed and (self.exec_id or self.exec_socket or self._raw_sock):
+                await self._close_exec_socket()
 
     async def disconnect(self, code):
         self.is_disconnected = True
@@ -245,23 +263,24 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             ('_send_task', "send_loop"),
         ]
 
-        for attr, name in tasks_to_cancel:
-            task = getattr(self, attr, None)
-            if task and not task.done():
-                task.cancel()
-                try:
-                    await asyncio.wait_for(task, timeout=0.2)
-                except (TimeoutError, asyncio.CancelledError):
-                    if settings.DEBUG:
-                        logger.debug("%s task CANCELLED", name)
-                except Exception as e:
-                    logger.debug("Error cancelling %s task: %s", name, e)
-                finally:
-                    setattr(self, attr, None)
+        try:
+            for attr, name in tasks_to_cancel:
+                task = getattr(self, attr, None)
+                if task and not task.done():
+                    task.cancel()
+                    try:
+                        await asyncio.wait_for(task, timeout=2.0)
+                    except (TimeoutError, asyncio.CancelledError):
+                        if settings.DEBUG:
+                            logger.debug("%s task CANCELLED", name)
+                    except Exception as e:
+                        logger.debug("Error cancelling %s task: %s", name, e)
+                    finally:
+                        setattr(self, attr, None)
+        finally:
+            await self._close_exec_socket()
 
-        self._close_exec_socket()
-
-    def _close_exec_socket(self):
+    async def _close_exec_socket(self):
         for sock in (self._raw_sock, self.exec_socket):
             if sock is None:
                 continue
@@ -274,12 +293,13 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self._remote_relay_task = None
         if relay is not None and not relay.done():
             relay.cancel()
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await asyncio.wait_for(relay, timeout=0.2)
         ws = self._remote_ws
         self._remote_ws = None
         if ws is not None:
             with contextlib.suppress(Exception):
-                loop = asyncio.get_running_loop()
-                loop.create_task(ws.close())
+                await ws.close()
 
     async def receive(self, text_data=None, bytes_data=None):
         if settings.DEBUG:
@@ -315,6 +335,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
+        now = time.monotonic()
+        if now - self._last_input_time < self._input_frame_window:
+            return
+        self._last_input_time = now
+
         if text_data:
             self._last_activity = time.time()
             for char in text_data:
@@ -339,17 +364,53 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             if settings.DEBUG:
                 logger.error("Error forwarding input to container: %s", e, exc_info=True)
 
+    @staticmethod
+    def _truncate_command(command: str, max_len: int = 200) -> str:
+        if not command:
+            return ""
+        if len(command) <= max_len:
+            return command
+        suffix = "...[truncated]"
+        if max_len <= len(suffix):
+            return command[:max_len]
+        return command[: max_len - len(suffix)] + suffix
+
+    @staticmethod
+    def _redact_command(command: str) -> str:
+        if not command:
+            return ""
+        import re
+        redacted = re.sub(
+            r'(?i)([A-Za-z0-9_]*(?:token|password|passwd|pwd|secret|api_key|apikey|credential|private_key)[A-Za-z0-9_]*)(\s*[=:]\s*)(\S+)',
+            r'\1\2[REDACTED]',
+            command,
+        )
+        redacted = re.sub(
+            r'(?i)(--?(?:token|password|passwd|secret|api-key|apikey|key)(?:=|\s+))(\S+)',
+            r'\1[REDACTED]',
+            redacted,
+        )
+        redacted = re.sub(
+            r'(?i)(Authorization:\s*Bearer\s+|Bearer\s+)(\S+)',
+            r'\1[REDACTED]',
+            redacted,
+        )
+        redacted = re.sub(r'://([^:/@\s]+):([^@\s]+)@', r'://\1:[REDACTED]@', redacted)
+        redacted = re.sub(r'\b[0-9a-fA-F]{32,}\b', '[REDACTED]', redacted)
+        return redacted
+
     async def _audit_command(self, command: str) -> None:
         """Persist one executed command without blocking the input path."""
         try:
             from asgiref.sync import sync_to_async
             from apps.deployments.utils import log_event
+            sanitized = self._truncate_command(self._redact_command(command))
             await sync_to_async(log_event)(
                 action="CONSOLE_COMMAND_EXECUTED",
                 target=f"Deployment: {self.deployment_id}",
                 actor=self.user,
                 metadata={
-                    "command": command,
+                    "command": sanitized,
                     "container_id": self.container_id,
                 },
             )
@@ -443,7 +504,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     except Exception as exc:
                         logger.debug("Failed to send reconnecting message: %s", exc)
 
-                    self._close_exec_socket()
+                    await self._close_exec_socket()
                     # Back off exponentially (1s → 10s cap): rapid
                     # reconnects hammer the Docker API when the
                     # container is mid-redeploy and going nowhere.
@@ -502,6 +563,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             with contextlib.suppress(Exception):
                 await self.close()
         finally:
+            await self._close_exec_socket()
             if settings.DEBUG:
                 logger.info("_read_output task TERMINATED")
 
@@ -521,20 +583,36 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     msg = await asyncio.wait_for(self._out_queue.get(), timeout=wait_timeout)
 
                     if not self.is_disconnected:
-                        await self.send(text_data=json.dumps(msg))
+                        try:
+                            await self.send(text_data=json.dumps(msg))
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            self.is_disconnected = True
+                            with contextlib.suppress(Exception):
+                                await self.close()
+                            break
                         await asyncio.sleep(0.01)
                 except TimeoutError:
                     if not self.is_disconnected:
                         try:
                             await self.send(text_data=json.dumps({'type': 'pong'}))
+                        except asyncio.CancelledError:
+                            raise
                         except Exception:
+                            self.is_disconnected = True
+                            with contextlib.suppress(Exception):
+                                await self.close()
                             break
         except asyncio.CancelledError:
             if settings.DEBUG:
                 logger.info("_send_loop task CANCELLED")
+            raise
         except Exception as e:
             if settings.DEBUG:
                 logger.error("_send_loop error: %s", e)
+            with contextlib.suppress(Exception):
+                await self.close()
         finally:
             if settings.DEBUG:
                 logger.info("_send_loop task TERMINATED")
@@ -603,17 +681,51 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             except Exception as exc:
                 logger.debug("Terminal remote target resolve failed: %s", exc)
 
+            from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
             client = get_docker_exec_client()
-            containers = client.containers.list(
-                filters={'name': service_name, 'status': 'running'})
-            if containers:
-                return containers[0].id
+            service_id = str(service.pk)
+
+            def _is_owned_non_platform(c):
+                if getattr(c, 'status', '') != 'running':
+                    return False
+                labels = getattr(c, 'labels', None)
+                if not isinstance(labels, dict):
+                    attrs_cfg = (getattr(c, 'attrs', None) or {}).get('Config')
+                    labels = attrs_cfg.get('Labels') if isinstance(attrs_cfg, dict) else None
+                if not isinstance(labels, dict):
+                    labels = {}
+                cname = getattr(c, 'name', '') or ''
+                return not DeletionOrchestrator._is_foreign_or_platform_resource(service, labels, cname)
+
+            if dep.container_id:
+                try:
+                    c = client.containers.get(dep.container_id)
+                    labels = getattr(c, 'labels', None)
+                    if not isinstance(labels, dict):
+                        attrs_cfg = (getattr(c, 'attrs', None) or {}).get('Config')
+                        labels = attrs_cfg.get('Labels') if isinstance(attrs_cfg, dict) else {}
+                    if _is_owned_non_platform(c) and (not labels or str(labels.get('smsly.service_id', '') or '') == service_id):
+                        return c.id
+                except Exception:
+                    pass
 
             containers = client.containers.list(
-                filters={'label': f'smsly.service={service_name}',
-                         'status': 'running'})
-            if containers:
-                return containers[0].id
+                filters={'label': f'smsly.service_id={service_id}', 'status': 'running'})
+            for c in containers:
+                if _is_owned_non_platform(c):
+                    return c.id
+
+            containers = client.containers.list(
+                filters={'label': f'smsly.service={service_name}', 'status': 'running'})
+            for c in containers:
+                if _is_owned_non_platform(c):
+                    return c.id
+
+            containers = client.containers.list(
+                filters={'name': service_name, 'status': 'running'})
+            for c in containers:
+                if getattr(c, 'name', '') == service_name and _is_owned_non_platform(c):
+                    return c.id
 
             return None
         except Exception as e:
@@ -675,7 +787,12 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         return await authenticate_ws_token(token_key)
 
     async def _verify_ownership(self):
-        return await verify_deployment_ownership(self.user, self.deployment_id)
+        return await verify_deployment_ownership(
+            self.user,
+            self.deployment_id,
+            require_write=True,
+            api_token=getattr(self, 'api_token', None),
+        )
 
     async def _setup_remote_relay(self):
         from asgiref.sync import sync_to_async

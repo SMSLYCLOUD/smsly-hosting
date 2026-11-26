@@ -58,22 +58,26 @@ class StripeService:
 
     @staticmethod
     def ensure_customer(user) -> BillingAccount:
+        from django.db import transaction
+
         StripeService._configure_stripe()
 
-        account = StripeService.get_or_create_billing_account(user)
-        if account.stripe_customer_id:
-            return account
+        with transaction.atomic():
+            account = StripeService.get_or_create_billing_account(user)
+            account = BillingAccount.objects.select_for_update().get(id=account.id)
+            if account.stripe_customer_id:
+                return account
 
-        email_value = getattr(user, "email", "") or ""
-        name_value = getattr(user, "username", "") or ""
-        customer = stripe.Customer.create(
-            email=email_value or "",
-            name=name_value or "",
-            metadata={"user_id": str(getattr(user, "id", ""))},
-        )
-        account.stripe_customer_id = customer.id
-        account.save(update_fields=["stripe_customer_id"])
-        return account
+            email_value = getattr(user, "email", "") or ""
+            name_value = getattr(user, "username", "") or ""
+            customer = stripe.Customer.create(
+                email=email_value or "",
+                name=name_value or "",
+                metadata={"user_id": str(getattr(user, "id", ""))},
+            )
+            account.stripe_customer_id = customer.id
+            account.save(update_fields=["stripe_customer_id"])
+            return account
 
     @staticmethod
     def create_subscription_checkout_session(
@@ -158,10 +162,36 @@ class StripeService:
         status = (sub.get("status") or "").upper()
         period_end = sub.get("current_period_end")
         account.subscription_status = status if status else BillingAccount.SubscriptionStatus.NONE
+        update_fields = ["subscription_status", "current_period_end"]
+        if status in {"CANCELED", "CANCELLED", "UNPAID", "INCOMPLETE_EXPIRED"}:
+            account.plan = BillingAccount.Plan.HOBBY
+            account.stripe_subscription_id = ""
+            update_fields.extend(["plan", "stripe_subscription_id"])
         if isinstance(period_end, int):
             account.current_period_end = timezone.datetime.fromtimestamp(
                 period_end, tz=timezone.get_current_timezone()
             )
-        account.save(update_fields=["subscription_status", "current_period_end"])
+        account.save(update_fields=update_fields)
         return account
+
+    @staticmethod
+    def cancel_subscription(user) -> bool:
+        """Cancel the user's active Stripe subscription immediately and downgrade locally."""
+        account = BillingAccount.objects.filter(user=user).first()
+        if not account:
+            return False
+
+        sub_id = (account.stripe_subscription_id or "").strip()
+        if sub_id and StripeService.is_configured():
+            StripeService._configure_stripe()
+            if hasattr(stripe.Subscription, "cancel"):
+                stripe.Subscription.cancel(sub_id)
+            else:
+                stripe.Subscription.delete(sub_id)
+
+        account.subscription_status = BillingAccount.SubscriptionStatus.CANCELED
+        account.plan = BillingAccount.Plan.HOBBY
+        account.stripe_subscription_id = ""
+        account.save(update_fields=["subscription_status", "plan", "stripe_subscription_id"])
+        return True
 

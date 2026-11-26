@@ -9,20 +9,26 @@ import { MaintenanceTabs } from '@/components/addons/MaintenanceTabs';
 import { AddonHaCard } from '@/components/addons/AddonHaCard';
 import CliConfigCard from '@/components/addons/CliConfigCard';
 import { CLI_ADDON_TYPES } from '@/lib/addonRegistry';
+import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/use-toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Database, Loader2, Globe, Server, ExternalLink } from 'lucide-react';
+import { ArrowLeft, Database, Loader2, Globe, Server, ExternalLink, Trash2, Lock, Unlock, Play, Square } from 'lucide-react';
 import Link from 'next/link';
 
 export default function AddonDetailPage() {
   const { toast } = useToast();
+  const confirm = useConfirm();
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
   const [addon, setAddon] = useState<Addon | null>(null);
   const [loading, setLoading] = useState(true);
   const [imgError, setImgError] = useState(false);
+  const [togglingBucket, setTogglingBucket] = useState(false);
+  const [deprovisioning, setDeprovisioning] = useState(false);
+  const [powering, setPowering] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -35,58 +41,106 @@ export default function AddonDetailPage() {
 
   if (loading) {
     return (
-      <main className="min-h-screen flex flex-col text-foreground relative">
-        <div className="border-b border-border bg-card/60 backdrop-blur-md">
-          <div className="container mx-auto py-6">
-            <div className="flex items-center gap-4 mb-4">
-              <Skeleton className="h-8 w-8 rounded-full" />
-              <div className="space-y-2">
-                <Skeleton className="h-6 w-48" />
-                <Skeleton className="h-4 w-32" />
+      <DashboardShell>
+        <div className="min-h-screen flex flex-col text-foreground relative">
+          <div className="border-b border-border bg-card/60 backdrop-blur-md">
+            <div className="container mx-auto py-6">
+              <div className="flex items-center gap-4 mb-4">
+                <Skeleton className="h-8 w-8 rounded-full" />
+                <div className="space-y-2">
+                  <Skeleton className="h-6 w-48" />
+                  <Skeleton className="h-4 w-32" />
+                </div>
               </div>
             </div>
           </div>
-        </div>
-        <div className="flex-1 container mx-auto py-8">
-          <div className="flex items-center justify-center h-64 text-muted-foreground gap-2">
-            <Loader2 className="w-5 h-5 animate-spin" /> Loading addon...
+          <div className="flex-1 container mx-auto py-8">
+            <div className="flex items-center justify-center h-64 text-muted-foreground gap-2">
+              <Loader2 className="w-5 h-5 animate-spin" /> Loading addon...
+            </div>
           </div>
         </div>
-      </main>
+      </DashboardShell>
     );
   }
 
   if (!addon) return null;
 
   const handleTogglePublic = async () => {
+    const nextPublic = !addon.is_bucket_public;
+    if (nextPublic) {
+      const ok = await confirm({
+        title: 'Make bucket public?',
+        message: 'Anyone will be able to read objects from this MinIO bucket. Ensure no sensitive data is stored before enabling public access.',
+        variant: 'warning',
+        confirmText: 'Make Public',
+      });
+      if (!ok) return;
+    }
+    setTogglingBucket(true);
     try {
-      await addonsApi.togglePublicBucket(addon.id);
-      toast({ title: 'Toggled bucket public access' });
-      // reload
+      await addonsApi.toggleBucketPublic(addon.id, nextPublic);
+      toast({
+        title: 'Bucket access updated',
+        description: `Bucket is now ${nextPublic ? 'public' : 'private'}.`,
+      });
       const updated = await addonsApi.get(addon.id);
       setAddon(updated);
     } catch (e: unknown) {
       toast({ title: 'Error', description: e instanceof Error ? e.message : 'Unknown error', variant: 'destructive' });
+    } finally {
+      setTogglingBucket(false);
     }
   };
 
   const handleDeprovision = async () => {
-    const typed = prompt(`Type "${addon.name}" to confirm deprovisioning. This cannot be undone.`);
-    if (typed === null) return;
+    if (!await confirm({
+      title: 'Delete addon?',
+      message: `Permanently deprovision "${addon.name}"? This cannot be undone.`,
+      variant: 'destructive',
+      confirmText: 'Deprovision',
+      requireMatchText: addon.name,
+    })) return;
+    setDeprovisioning(true);
     try {
-      await addonsApi.deprovision(addon.id, typed);
+      await addonsApi.deprovision(addon.id, addon.name);
       toast({ title: 'Deprovisioning started' });
       router.push('/dashboard');
     } catch (e: unknown) {
       toast({ title: 'Error', description: e instanceof Error ? e.message : 'Unknown error', variant: 'destructive' });
+      setDeprovisioning(false);
     }
   };
 
+
+  const handleStartStop = async (start: boolean) => {
+    const verb = start ? 'Start' : 'Stop';
+    if (!await confirm({
+      title: `${verb} addon container?`,
+      message: start
+        ? 'Spin up this parked addon container on demand. Volumes are intact — data is preserved.'
+        : 'Park this addon container on demand to free capacity. Volumes are kept — nothing is deleted.',
+      confirmText: verb,
+    })) return;
+    setPowering(true);
+    try {
+      if (start) await addonsApi.startContainer(addon.id);
+      else await addonsApi.stopContainer(addon.id);
+      toast({ title: `Addon ${start ? 'started' : 'stopped'}` });
+      const updated = await addonsApi.get(addon.id);
+      setAddon(updated);
+    } catch (e: unknown) {
+      toast({ title: 'Error', description: e instanceof Error ? e.message : `Failed to ${verb.toLowerCase()} addon`, variant: 'destructive' });
+    } finally {
+      setPowering(false);
+    }
+  };
 
   const meta = ADDON_TYPES.find(t => t.value === addon.addon_type);
   const statusColor = (s: string) => {
     switch (s) {
       case 'ACTIVE': return 'bg-emerald-500/10 text-emerald-500';
+      case 'STOPPED': return 'bg-amber-500/10 text-amber-500';
       case 'PROVISIONING': return 'bg-yellow-500/10 text-yellow-500';
       case 'FAILED': return 'bg-red-500/10 text-red-500';
       default: return 'bg-zinc-500/10 text-zinc-500';
@@ -94,75 +148,129 @@ export default function AddonDetailPage() {
   };
 
   return (
-    <main className="min-h-screen flex flex-col text-foreground relative">
-      <div className="border-b border-border bg-card/60 backdrop-blur-md">
-        <div className="container mx-auto py-6">
-          <div className="flex items-center gap-4">
-            <Link href="/dashboard" className="p-2 hover:bg-muted rounded-full transition-colors text-muted-foreground hover:text-foreground">
-              <ArrowLeft size={20} />
-            </Link>
-            <span className="text-3xl block h-8 w-8 relative flex items-center justify-center">
-              {meta?.logo && !imgError ? (
-                <Image 
-                    src={meta.logo} 
-                    alt={meta?.label || ''} 
-                    className="w-full h-full object-contain" 
-                    unoptimized 
-                    onError={() => setImgError(true)}
-                />
-              ) : (
-                <Database className="w-full h-full text-muted-foreground" />
-              )}
-            </span>
-            <div>
-              <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-bold tracking-tight">{addon.name}</h1>
-                <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${statusColor(addon.status)}`}>
-                  {addon.status}
+    <DashboardShell>
+      <div className="min-h-screen flex flex-col text-foreground relative">
+        <div className="border-b border-border bg-card/60 backdrop-blur-md">
+          <div className="container mx-auto py-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <Link href="/dashboard" className="p-2 hover:bg-muted rounded-full transition-colors text-muted-foreground hover:text-foreground">
+                  <ArrowLeft size={20} />
+                </Link>
+                <span className="text-3xl block h-8 w-8 relative flex items-center justify-center">
+                  {meta?.logo && !imgError ? (
+                    <Image 
+                        src={meta.logo} 
+                        alt={meta?.label || ''} 
+                        className="w-full h-full object-contain" 
+                        unoptimized 
+                        onError={() => setImgError(true)}
+                    />
+                  ) : (
+                    <Database className="w-full h-full text-muted-foreground" />
+                  )}
                 </span>
+                <div>
+                  <div className="flex items-center gap-3">
+                    <h1 className="text-2xl font-bold tracking-tight">{addon.name}</h1>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${statusColor(addon.status)}`}>
+                      {addon.status}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
+                    <span className={`text-xs font-medium ${meta?.color || ''}`}>{meta?.label || addon.addon_type}</span>
+                    <span className="flex items-center gap-1.5">
+                      <Server size={12} />
+                      {addon.service ? `Service: ${addon.service}` : 'Standalone'}
+                    </span>
+                    {addon.public_domain && (
+                      <a
+                        href={`https://${addon.public_domain}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center gap-1.5 text-blue-400 hover:text-blue-300"
+                      >
+                        <Globe size={12} />
+                        {addon.public_domain}
+                        <ExternalLink size={10} />
+                      </a>
+                    )}
+                  </div>
+                </div>
               </div>
-              <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
-                <span className={`text-xs font-medium ${meta?.color || ''}`}>{meta?.label || addon.addon_type}</span>
-                <span className="flex items-center gap-1.5">
-                  <Server size={12} />
-                  {addon.service ? `Service: ${addon.service}` : 'Standalone'}
-                </span>
-                {addon.public_domain && (
-                  <a
-                    href={`https://${addon.public_domain}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-1.5 text-blue-400 hover:text-blue-300"
+              <div className="flex items-center gap-2">
+                {addon.provision_mode !== 'shared' && addon.status === 'STOPPED' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleStartStop(true)}
+                    disabled={powering}
                   >
-                    <Globe size={12} />
-                    {addon.public_domain}
-                    <ExternalLink size={10} />
-                  </a>
+                    {powering ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Play className="w-4 h-4 mr-2" />}
+                    Start
+                  </Button>
                 )}
+                {addon.provision_mode !== 'shared' && addon.status === 'ACTIVE' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleStartStop(false)}
+                    disabled={powering}
+                  >
+                    {powering ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Square className="w-4 h-4 mr-2" />}
+                    Stop
+                  </Button>
+                )}
+                {addon.addon_type === 'MINIO' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleTogglePublic}
+                    disabled={togglingBucket}
+                  >
+                    {togglingBucket ? (
+                      <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    ) : addon.is_bucket_public ? (
+                      <Lock className="w-4 h-4 mr-2" />
+                    ) : (
+                      <Unlock className="w-4 h-4 mr-2" />
+                    )}
+                    {addon.is_bucket_public ? 'Make Bucket Private' : 'Make Bucket Public'}
+                  </Button>
+                )}
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleDeprovision}
+                  disabled={deprovisioning}
+                >
+                  {deprovisioning ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Trash2 className="w-4 h-4 mr-2" />}
+                  Deprovision
+                </Button>
               </div>
             </div>
           </div>
         </div>
-      </div>
 
-      <div className="flex-1 container mx-auto py-8 space-y-6">
-        <AddonHaCard addon={addon} onChanged={setAddon} />
-        {CLI_ADDON_TYPES.includes(addon.addon_type) && (
-          <CliConfigCard addonId={addon.id} addonType={addon.addon_type} />
-        )}
-        {addon.status === 'ACTIVE' ? (
-          <MaintenanceTabs addonId={addon.id} />
-        ) : (
-          <div className="bg-card border border-border rounded-xl p-12 text-center">
-            <Database className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-            <h3 className="font-semibold text-foreground mb-2">Addon is not active</h3>
-            <p className="text-sm text-muted-foreground">
-              Maintenance tools are available only when the addon status is ACTIVE.
-              Current status: <span className={`font-bold uppercase ${statusColor(addon.status)}`}>{addon.status}</span>
-            </p>
-          </div>
-        )}
+        <div className="flex-1 container mx-auto py-8 space-y-6">
+          <AddonHaCard addon={addon} onChanged={setAddon} />
+          {CLI_ADDON_TYPES.includes(addon.addon_type) && (
+            <CliConfigCard addonId={addon.id} addonType={addon.addon_type} />
+          )}
+          {addon.status === 'ACTIVE' ? (
+            <MaintenanceTabs addonId={addon.id} />
+          ) : (
+            <div className="bg-card border border-border rounded-xl p-12 text-center">
+              <Database className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+              <h3 className="font-semibold text-foreground mb-2">Addon is not active</h3>
+              <p className="text-sm text-muted-foreground">
+                Maintenance tools are available only when the addon status is ACTIVE.
+                Current status: <span className={`font-bold uppercase ${statusColor(addon.status)}`}>{addon.status}</span>
+              </p>
+            </div>
+          )}
+        </div>
       </div>
-    </main>
+    </DashboardShell>
   );
 }

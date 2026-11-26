@@ -8,7 +8,12 @@ from rest_framework import status
 from rest_framework.decorators import action, throttle_classes
 from rest_framework.response import Response
 
-from .helpers import _is_command_allowed, _redact_transfer_text
+from .helpers import (
+    _assert_server_write_access,
+    _bind_request_user,
+    _is_command_allowed,
+    _redact_transfer_text,
+)
 from .serializers import ServerCommandThrottle, ServerHealThrottle
 
 logger = logging.getLogger(__name__)
@@ -16,10 +21,12 @@ logger = logging.getLogger(__name__)
 
 class HealingMixin:
 
-    @action(detail=True, methods=["post"])
-    @throttle_classes([ServerHealThrottle])
+    @action(detail=True, methods=["post"], throttle_classes=[ServerHealThrottle])
     def heal(self, request, pk=None):
         server = self.get_object()
+        denied = _assert_server_write_access(request, server)
+        if denied is not None:
+            return denied
 
         if not server.ssh_key and not server.ssh_password:
             return Response(
@@ -36,12 +43,22 @@ class HealingMixin:
         if deployment_id:
             try:
                 from apps.deployments.models.core import Deployment
-                deployment = Deployment.objects.get(id=deployment_id)
+                deployment = Deployment.objects.select_related(
+                    "service", "service__project__team"
+                ).get(id=deployment_id, service__server=server)
             except (Deployment.DoesNotExist, ValueError):
                 return Response(
                     {"error": f"Deployment {deployment_id} not found"},
                     status=status.HTTP_404_NOT_FOUND,
                 )
+
+            if not (request.user.is_staff or request.user.is_superuser):
+                from apps.teams.permissions import user_can_write
+                if not deployment.service or not user_can_write(request.user, deployment.service):
+                    return Response(
+                        {"error": "You do not have permission to heal this deployment."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
 
             from apps.deployments.tasks.deployment.tasks_deploy_remote import self_heal_remote_deployment
             self_heal_remote_deployment.delay(
@@ -67,10 +84,12 @@ class HealingMixin:
         server = self.get_object()
         return self._run_diagnostics(server)
 
-    @action(detail=True, methods=["post"])
-    @throttle_classes([ServerCommandThrottle])
+    @action(detail=True, methods=["post"], throttle_classes=[ServerCommandThrottle])
     def run_command(self, request, pk=None):
         server = self.get_object()
+        denied = _assert_server_write_access(request, server)
+        if denied is not None:
+            return denied
 
         if not server.ssh_key and not server.ssh_password:
             return Response(
@@ -85,7 +104,12 @@ class HealingMixin:
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not _is_command_allowed(command):
+        _bind_request_user(request.user)
+        try:
+            allowed = _is_command_allowed(command)
+        finally:
+            _bind_request_user(None)
+        if not allowed:
             return Response(
                 {"error": "Command not allowed. Only safe docker subcommands (ps, logs, stats, inspect, images, info, version, df, top, port, events) and system diagnostic commands are permitted."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -99,13 +123,16 @@ class HealingMixin:
             out, err, code = orchestrator._exec(command, timeout=60)
             orchestrator._close_ssh()
 
+            import sys as _sys
+            _vs_mod = _sys.modules.get("apps.deployments.views_servers")
+            _redact_fn = getattr(_vs_mod, "_redact_transfer_text", None) or _redact_transfer_text
             try:
-                redacted_out = _redact_transfer_text(out or "")
+                redacted_out = _redact_fn(out or "")
             except Exception as exc:
                 logger.error("Redaction failed for run_command stdout: %s", exc)
                 redacted_out = "[REDACTION FAILED — output suppressed for safety]"
             try:
-                redacted_err = _redact_transfer_text(err or "")
+                redacted_err = _redact_fn(err or "")
             except Exception as exc:
                 logger.error("Redaction failed for run_command stderr: %s", exc)
                 redacted_err = "[REDACTION FAILED — output suppressed for safety]"

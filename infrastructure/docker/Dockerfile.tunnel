@@ -3,11 +3,11 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install dependencies
-COPY requirements.tunnel.txt .
-RUN pip install --no-cache-dir -r requirements.tunnel.txt
+COPY backend/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy tunnel server
-COPY backend/services/tunnels/ ./tunnels/
+# Copy backend tunnel server package
+COPY backend/ ./
 
 # Create non-root user for runtime
 RUN addgroup --system tunnel && adduser --system --ingroup tunnel tunnel && \
@@ -18,4 +18,4 @@ USER tunnel
 EXPOSE 8080
 
 # Run tunnel server
-CMD ["python", "-m", "tunnels.server"]
+CMD ["python", "-m", "apps.deployments.services.tunnels.server"]

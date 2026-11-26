@@ -1,5 +1,6 @@
 {{- range $name, $cfg := .Values.pdb }}
 {{- if $cfg.enabled }}
+---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -9,8 +10,20 @@ metadata:
 spec:
   minAvailable: {{ $cfg.minAvailable | default 1 }}
   selector:
+    {{- if eq $name "celery" }}
     matchLabels:
-      app.kubernetes.io/name: {{ $name }}
       app.kubernetes.io/instance: {{ $.Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          {{- range $wname, $_ := $.Values.celery.workers }}
+          - celery-{{ $wname }}
+          {{- end }}
+    {{- else }}
+    matchLabels:
+      app.kubernetes.io/name: {{ include "smsly-hosting.name" $ }}-{{ $name }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+    {{- end }}
 {{- end }}
 {{- end }}

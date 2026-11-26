@@ -9,6 +9,12 @@
 # ============================================================
 set -euo pipefail
 
+FORCE_DOCKER_RESTART="${FORCE_DOCKER_RESTART:-false}"
+for _arg in "$@"; do
+    [ "$_arg" = "--restart-docker" ] && FORCE_DOCKER_RESTART=true
+done
+unset _arg
+
 _ensure_docker_kata_registration() {
     local kata_bin
     kata_bin="$(command -v kata-runtime 2>/dev/null || true)"
@@ -21,6 +27,9 @@ _ensure_docker_kata_registration() {
     if [ ! -f "$DAEMON_JSON" ]; then
         echo '{}' > "$DAEMON_JSON"
     fi
+
+    local _daemon_before=""
+    _daemon_before="$(cat "$DAEMON_JSON" 2>/dev/null || echo '')"
 
     local _kata_reg_out=""
     _kata_reg_out="$(python3 -c "
@@ -45,15 +54,22 @@ else:
     print(f'  kata-runtime already registered correctly at {kata_path}')
     ")"
 
+    local _daemon_after=""
+    _daemon_after="$(cat "$DAEMON_JSON" 2>/dev/null || echo '')"
+
     # Restart Docker only if registration changed daemon.json — an
     # unconditional restart kills all running containers on every re-run.
-    if echo "$_kata_reg_out" | grep -q "already registered correctly"; then
+    if [ "$_daemon_before" = "$_daemon_after" ] || echo "$_kata_reg_out" | grep -q "already registered correctly"; then
         echo "  Docker restart skipped (kata-runtime registration unchanged)"
-    elif command -v systemctl ; then
-        systemctl daemon-reload
-        systemctl restart docker
-        echo "  Docker restarted with kata-runtime support"
-        sleep 3
+    elif command -v systemctl >/dev/null 2>&1; then
+        timeout 30 systemctl daemon-reload
+        if [ "$FORCE_DOCKER_RESTART" != "true" ] && command -v docker >/dev/null 2>&1 && docker ps -q 2>/dev/null | grep -q .; then
+            echo "  WARN: daemon.json changed but containers are running — skipping live Docker restart (pass --restart-docker to apply now)"
+        else
+            timeout 120 systemctl restart docker
+            echo "  Docker restarted with kata-runtime support"
+            sleep 3
+        fi
     fi
 }
 
@@ -84,7 +100,7 @@ main() {
 
     local KATA_VERSION="${KATA_VERSION:-latest}"
     if [ "$KATA_VERSION" = "latest" ]; then
-        KATA_VERSION="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+        KATA_VERSION="$(curl -fsSL --connect-timeout 15 --max-time 60 -o /dev/null -w '%{url_effective}' \
             "https://github.com/kata-containers/kata-containers/releases/latest"  \
             | sed 's|.*/||' || true)"
         KATA_VERSION="${KATA_VERSION:-3.14.0}"
@@ -97,9 +113,39 @@ main() {
 
     cd /tmp
     echo "  Downloading ${KATA_URL}..."
-    if ! curl -fsSL "$KATA_URL" -o "$KATA_TARBALL"; then
+    if ! curl -fsSL --connect-timeout 15 --max-time 300 "$KATA_URL" -o "$KATA_TARBALL"; then
         echo "ERROR: Failed to download Kata tarball"
         echo "  URL: $KATA_URL"
+        return 1
+    fi
+
+    local KATA_SUMS_URL="https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/SHA256SUMS"
+    local _kata_verified=0
+    if [ -n "${KATA_TARBALL_SHA256:-}" ]; then
+        if echo "${KATA_TARBALL_SHA256}  ${KATA_TARBALL}" | sha256sum -c - >/dev/null 2>&1; then
+            _kata_verified=1
+        else
+            echo "ERROR: Kata tarball SHA256 verification failed against KATA_TARBALL_SHA256"
+            rm -f "$KATA_TARBALL"
+            return 1
+        fi
+    elif curl -fsSL --connect-timeout 15 --max-time 60 "$KATA_SUMS_URL" -o "${KATA_TARBALL}.sha256sums" 2>/dev/null; then
+        local _expected_sha=""
+        _expected_sha="$(grep -E "[[:space:]](\./)?${KATA_TARBALL}\$" "${KATA_TARBALL}.sha256sums" | awk '{print $1}' | head -n 1 || true)"
+        rm -f "${KATA_TARBALL}.sha256sums"
+        if [ -n "$_expected_sha" ]; then
+            if echo "${_expected_sha}  ${KATA_TARBALL}" | sha256sum -c - >/dev/null 2>&1; then
+                _kata_verified=1
+            else
+                echo "ERROR: Kata tarball SHA256 verification failed against release SHA256SUMS"
+                rm -f "$KATA_TARBALL"
+                return 1
+            fi
+        fi
+    fi
+    if [ "$_kata_verified" -ne 1 ] && [ "${SMSLY_ALLOW_UNVERIFIED_KATA:-0}" != "1" ]; then
+        echo "ERROR: Refusing unverified root tar extraction for ${KATA_TARBALL} (set KATA_TARBALL_SHA256 or SMSLY_ALLOW_UNVERIFIED_KATA=1)"
+        rm -f "$KATA_TARBALL"
         return 1
     fi
 
@@ -139,14 +185,16 @@ with open('$DAEMON_JSON', 'w') as f:
     fi
 
     if command -v systemctl ; then
-        systemctl daemon-reload
+        timeout 30 systemctl daemon-reload
         # Only restart Docker if daemon.json actually changed (avoids killing
         # containers on re-run; the old check ran after the write, so it
         # always saw the new entry and skipped the needed restart).
         if [ "$(cat "$DAEMON_JSON" 2>/dev/null || echo '')" = "$_kata_daemon_before" ]; then
             echo "  Docker already has kata-runtime registered — skipping restart"
+        elif [ "$FORCE_DOCKER_RESTART" != "true" ] && command -v docker >/dev/null 2>&1 && docker ps -q 2>/dev/null | grep -q .; then
+            echo "  WARN: daemon.json changed but containers are running — skipping live Docker restart (pass --restart-docker to apply now)"
         else
-            systemctl restart docker
+            timeout 120 systemctl restart docker
             echo "  Docker restarted with kata-runtime support"
         fi
     fi

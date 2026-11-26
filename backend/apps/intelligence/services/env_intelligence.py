@@ -88,7 +88,14 @@ class EnvironmentIntelligenceService:
     )
 
     @classmethod
-    def resolve_environment(cls, env_context: dict[str, str], stack: str = "", service_name: str = "", fill_keys: set[str] | None = None) -> dict[str, str]:
+    def resolve_environment(
+        cls,
+        env_context: dict[str, str],
+        stack: str = "",
+        service_name: str = "",
+        fill_keys: set[str] | None = None,
+        secret_keys: set[str] | None = None,
+    ) -> dict[str, str]:
         """
         Takes the full env dict and returns suggested values for vars in fill_keys.
 
@@ -97,6 +104,7 @@ class EnvironmentIntelligenceService:
             stack: Detected tech stack (e.g. "python", "node").
             service_name: Name of the service.
             fill_keys: Only fill these vars. If None, fill all vars.
+            secret_keys: Keys explicitly flagged as secret (redacted before sending to LLM).
         """
         if not env_context:
             return {}
@@ -104,7 +112,11 @@ class EnvironmentIntelligenceService:
         if fill_keys is None:
             fill_keys = set(env_context.keys())
 
-        # Prepare the committee brief — show ALL vars for context
+        from apps.cloud.services.build_constants import is_secret_env_var
+        from apps.deployments.utils.log_scrub import mask_secrets_in_text
+        explicit_secrets = set(secret_keys or ())
+
+        # Prepare the committee brief — show ALL vars for context, redacting secrets
         brief_lines = [
             f"Service Name: {service_name}",
             f"Detected Stack: {stack}\n",
@@ -112,10 +124,16 @@ class EnvironmentIntelligenceService:
         ]
         for var, val in sorted(env_context.items()):
             val_str = str(val or "").strip()
+            is_secret = var in explicit_secrets or is_secret_env_var(var)
             if var in fill_keys:
-                brief_lines.append(f"- {var}: [NEEDS VALUE] (current: {val_str or '(empty)'})")
+                display = "[REDACTED]" if (is_secret and val_str) else (mask_secrets_in_text(val_str) if val_str else "(empty)")
+                brief_lines.append(f"- {var}: [NEEDS VALUE] (current: {display})")
             else:
-                brief_lines.append(f"- {var}: {val_str or '(empty)'}")
+                if is_secret and val_str:
+                    brief_lines.append(f"- {var}: [ALREADY SET - SECRET REDACTED]")
+                else:
+                    display = mask_secrets_in_text(val_str) if val_str else "(empty)"
+                    brief_lines.append(f"- {var}: {display}")
 
         prompt = (
             "Review every environment variable below.\n"
@@ -131,7 +149,7 @@ class EnvironmentIntelligenceService:
         )
 
         try:
-            response_text, provider = _cached_ask(prompt, cls.SYSTEM_PROMPT)
+            response_text, provider = _cached_ask(prompt, cls.SYSTEM_PROMPT, cache_bypass=True)
             logger.info("Senate resolution for %s delivered by %s", service_name, provider)
 
             # Extract JSON from response — use non-greedy match to avoid capturing
@@ -293,6 +311,7 @@ class EnvironmentIntelligenceService:
         if not services_data:
             return []
 
+        from apps.deployments.utils.log_scrub import mask_secrets_in_text
         committee_brief = ["## Ecosystem Deployment Analysis Requested\n"]
         for svc in services_data:
             name = svc.get('name', 'unknown')
@@ -301,7 +320,8 @@ class EnvironmentIntelligenceService:
 
             committee_brief.append(f"### Service: {name} (Stack: {stack})")
             for var, ctxs in vars_ctx.items():
-                committee_brief.append(f"- {var}: {' | '.join(ctxs[:1])}")
+                ctx_text = mask_secrets_in_text(' | '.join(str(c) for c in ctxs[:1])) or ''
+                committee_brief.append(f"- {var}: {ctx_text}")
             committee_brief.append("")
 
         prompt = (
@@ -316,7 +336,7 @@ class EnvironmentIntelligenceService:
         )
 
         try:
-            response_text, provider = _cached_ask(prompt, cls.SYSTEM_PROMPT)
+            response_text, provider = _cached_ask(prompt, cls.SYSTEM_PROMPT, cache_bypass=True)
             logger.info("Ecosystem Senate resolution delivered by %s", provider)
 
             json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
@@ -415,9 +435,12 @@ class EnvironmentIntelligenceService:
 
         # Build the full env dict from the service model (actual stored values)
         full_env = {}
+        secret_keys = set()
         known_keys = set(scan_env_context.keys())
         for ev in service.env_vars.all():
             full_env[ev.key] = ev.value or ""
+            if getattr(ev, "is_secret", False):
+                secret_keys.add(ev.key)
             known_keys.add(ev.key)
         # Add any scan-detected vars not yet on the service
         for k in scan_env_context:
@@ -432,7 +455,13 @@ class EnvironmentIntelligenceService:
 
         suggestions = {}
         if fill_keys:
-            suggestions = cls.resolve_environment(full_env, stack, service_name, fill_keys=fill_keys)
+            suggestions = cls.resolve_environment(
+                full_env,
+                stack,
+                service_name,
+                fill_keys=fill_keys,
+                secret_keys=secret_keys,
+            )
 
         # Only accept suggestions for vars that were detected from the user's
         # code or already exist on the service with placeholder values.

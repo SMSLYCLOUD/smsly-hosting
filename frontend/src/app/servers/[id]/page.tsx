@@ -13,6 +13,7 @@ import { DashboardShell } from '@/components/layout/DashboardShell';
 import { serversApi, ManagedServer } from '@/lib/api';
 import { toast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { getSafeRedirectUrl } from '@/lib/paths';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -59,6 +60,7 @@ type TabId = 'overview' | 'services' | 'deployments' | 'dns';
 
 const STATUS_COLORS: Record<string, { color: string; bg: string; label: string }> = {
     ONLINE: { color: 'text-emerald-500', bg: 'bg-emerald-500/10', label: 'Online' },
+    DEGRADED: { color: 'text-amber-500', bg: 'bg-amber-500/10', label: 'Degraded' },
     OFFLINE: { color: 'text-red-500', bg: 'bg-red-500/10', label: 'Offline' },
     UNKNOWN: { color: 'text-zinc-500', bg: 'bg-zinc-500/10', label: 'Unknown' },
 };
@@ -389,6 +391,7 @@ export default function ServerDetailPage() {
     }
 
     const sc = STATUS_COLORS[server.status] || STATUS_COLORS.UNKNOWN;
+    const safeApiUrl = getSafeRedirectUrl(server.api_url);
 
     return (
         <DashboardShell>
@@ -530,9 +533,9 @@ export default function ServerDetailPage() {
                                     {healing ? <Loader2 size={14} className="animate-spin" /> : <Wrench size={14} />}
                                     Heal Node
                                 </button>
-                            {server.api_url && (
+                            {safeApiUrl && (
                                 <a
-                                    href={server.api_url}
+                                    href={safeApiUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="px-3 py-2 rounded-lg bg-gradient-to-r from-blue-500 to-cyan-600 text-white text-sm font-semibold flex items-center gap-2"
@@ -626,6 +629,7 @@ export default function ServerDetailPage() {
 
 function OverviewTab({ server, onRefresh }: { server: ManagedServer; onRefresh: () => void }) {
     const sc = STATUS_COLORS[server.status] || STATUS_COLORS.UNKNOWN;
+    const safeApiUrl = getSafeRedirectUrl(server.api_url);
     const StatusIcon = server.status === 'ONLINE' ? Wifi : server.status === 'OFFLINE' ? WifiOff : Globe;
     const [tlsToggling, setTlsToggling] = useState(false);
     const confirm = useConfirm();

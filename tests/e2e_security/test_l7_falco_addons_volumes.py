@@ -261,7 +261,7 @@ def test_f11_volume_crypt_script_syntax_and_integrity_script_guards():
 def test_f9_falco_uses_modern_ebpf_and_pinned_version(compose_rel):
     data = load_compose_yaml(compose_rel)
     falco = data["services"]["falco"]
-    assert "0.44.1" in falco["image"]
+    assert "0.45.2" in falco["image"]
     assert "modern_ebpf" in " ".join(falco["command"])
     assert falco["deploy"]["resources"]["limits"]["memory"] == "${FALCO_MEMORY_LIMIT:-1024M}"
 

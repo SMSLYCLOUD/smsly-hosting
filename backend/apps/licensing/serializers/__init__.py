@@ -23,35 +23,56 @@ class LicenseStatusSerializer(serializers.ModelSerializer):
         }
 
     def get_features(self, obj):
-        # All features unlocked (self-hosted mode)
+        from django.conf import settings
+        if bool(getattr(settings, 'SMSLY_DISABLE_TIER_GATES', False)):
+            return {
+                'ai_features': True,
+                'autoscaler': True,
+                'custom_domains': True,
+                'ssl_certificates': True,
+                'marketplace': True,
+                'functions': True,
+                'tunnels': True,
+                'topology': True,
+                'transfers': True,
+                'backups_automated': True,
+                'sso': True,
+                'audit_logs': True,
+                'white_label': True,
+                'rbac': True,
+                'multi_node': True,
+            }
+        is_pro = bool(getattr(obj, 'is_valid', False) and getattr(obj, 'is_pro', False))
+        is_ent = bool(getattr(obj, 'is_valid', False) and getattr(obj, 'is_enterprise', False))
         return {
-            'ai_features': True,
-            'autoscaler': True,
+            'ai_features': is_pro,
+            'autoscaler': is_pro,
             'custom_domains': True,
             'ssl_certificates': True,
             'marketplace': True,
-            'functions': True,
-            'tunnels': True,
-            'topology': True,
-            'transfers': True,
-            'backups_automated': True,
-            'sso': True,
-            'audit_logs': True,
-            'white_label': True,
-            'rbac': True,
-            'multi_node': True,
+            'functions': is_pro,
+            'tunnels': is_pro,
+            'topology': is_pro,
+            'transfers': is_pro,
+            'backups_automated': is_pro,
+            'sso': is_ent,
+            'audit_logs': is_pro,
+            'white_label': is_ent,
+            'rbac': is_pro,
+            'multi_node': is_ent,
         }
 
     def to_representation(self, instance):
+        from django.conf import settings
         data = super().to_representation(instance)
-        # Always report as enterprise with unlimited resources (self-hosted)
-        data['tier'] = 'enterprise'
-        data['is_valid'] = True
-        data['is_community'] = False
-        data['is_pro'] = True
-        data['is_enterprise'] = True
-        data['max_services'] = -1
-        data['max_team_members'] = -1
+        if bool(getattr(settings, 'SMSLY_DISABLE_TIER_GATES', False)):
+            data['tier'] = 'enterprise'
+            data['is_valid'] = True
+            data['is_community'] = False
+            data['is_pro'] = True
+            data['is_enterprise'] = True
+            data['max_services'] = -1
+            data['max_team_members'] = -1
         return data
 
 class LicenseActivationSerializer(serializers.Serializer):

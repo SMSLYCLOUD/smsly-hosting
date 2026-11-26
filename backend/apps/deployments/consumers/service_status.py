@@ -35,24 +35,36 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.user = None
+        self.api_token = None
         self.user_group_name = None
         self._periodic_auth_task = None
         self._heartbeat_task = None
         self.is_disconnected = False
+        self._accepted = False
         self._redis_healthy = True
 
     async def connect(self):
         try:
             self.user = self.scope.get('user')
+            self.api_token = self.scope.get('api_token')
             if not self.user or not getattr(self.user, 'is_authenticated', False):
                 await self.accept()
+                self._accepted = True
                 await self.send(text_data=json.dumps({'error': 'Authentication required'}))
                 await self.close(code=4001)
+                return
+
+            if self.api_token is not None and not self.api_token.has_scope('read'):
+                await self.accept()
+                self._accepted = True
+                await self.send(text_data=json.dumps({'error': 'Token lacks required read scope'}))
+                await self.close(code=4003)
                 return
 
             self.user_group_name = f"user_services_{self.user.id}"
             await self._join_group_with_retry()
             await self.accept()
+            self._accepted = True
 
             await self._send_initial_services()
 
@@ -61,8 +73,9 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             if settings.DEBUG:
                 logger.error("ServiceStatusConsumer.connect() failed: %s", e, exc_info=True)
-            with contextlib.suppress(Exception):
-                await self.send(text_data=json.dumps({'error': 'Internal error'}))
+            if self._accepted:
+                with contextlib.suppress(Exception):
+                    await self.send(text_data=json.dumps({'error': 'Internal error'}))
             await self.close(code=4000)
 
     async def disconnect(self, code):
@@ -180,7 +193,20 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
         except asyncio.CancelledError:
             pass
 
+    @database_sync_to_async
+    def _is_service_in_token_projects(self, service_id: str) -> bool:
+        api_token = getattr(self, 'api_token', None)
+        if api_token is None:
+            return True
+        proj_scope = api_token.project_scope()
+        if proj_scope is None:
+            return True
+        from apps.deployments.models import Service
+        return Service.objects.filter(id=service_id, project_id__in=proj_scope).exists()
+
     async def service_status_update(self, event):
+        if not await self._is_service_in_token_projects(event['service_id']):
+            return
         await self.send(text_data=json.dumps({
             'type': 'service_status_update',
             'service_id': event['service_id'],
@@ -191,6 +217,8 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
         }))
 
     async def deployment_status_update(self, event):
+        if not await self._is_service_in_token_projects(event['service_id']):
+            return
         await self.send(text_data=json.dumps({
             'type': 'deployment_status_update',
             'service_id': event['service_id'],
@@ -205,13 +233,20 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _get_user_services(self):
-        from django.db.models import Q
         from apps.deployments.models import Service
+        from apps.teams.permissions import get_team_q_filter
+
         services = Service.objects.filter(
-            Q(owner=self.user) | Q(project__team__members__user=self.user)
-        ).distinct().prefetch_related(
-            'deployments', 'deployments__service'
-        )
+            get_team_q_filter(self.user)
+        ).distinct()
+
+        api_token = getattr(self, 'api_token', None)
+        if api_token is not None:
+            proj_scope = api_token.project_scope()
+            if proj_scope is not None:
+                services = services.filter(project_id__in=proj_scope)
+
+        services = services.prefetch_related('deployments', 'deployments__service')
 
         services_with_status = []
         for service in services:

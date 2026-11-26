@@ -6,10 +6,14 @@ Usage:
       {{- include "smsly.podSecurityContext" . | nindent 8 }}
 */}}
 {{- define "smsly.podSecurityContext" -}}
+{{- $ctx := default (dict) . -}}
+{{- $uid := default 1000 $ctx.runAsUser -}}
+{{- $gid := default 1000 $ctx.runAsGroup -}}
+{{- $fsGroup := default $gid $ctx.fsGroup -}}
 runAsNonRoot: true
-runAsUser: 1000
-runAsGroup: 1000
-fsGroup: 1000
+runAsUser: {{ $uid }}
+runAsGroup: {{ $gid }}
+fsGroup: {{ $fsGroup }}
 seccompProfile:
   type: RuntimeDefault
 {{- end -}}
@@ -23,10 +27,11 @@ Usage:
         {{- include "smsly.containerSecurityContext" . | nindent 8 }}
 */}}
 {{- define "smsly.containerSecurityContext" -}}
+{{- $ctx := default (dict) . -}}
 allowPrivilegeEscalation: false
 readOnlyRootFilesystem: true
 runAsNonRoot: true
-runAsUser: 1000
+runAsUser: {{ default 1000 $ctx.runAsUser }}
 capabilities:
   drop:
     - ALL

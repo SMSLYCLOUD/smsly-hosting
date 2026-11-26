@@ -27,7 +27,10 @@ class BuilderContainmentTests(TestCase):
                 config_path = cmd[cmd.index('--buildkitd-config') + 1]
                 with open(config_path, 'rb') as config:
                     registry_config = tomllib.load(config)
-                self.assertEqual(registry_config, {'registry': {'registry:5000': {'insecure': True}}})
+                self.assertEqual(
+                    registry_config.get('registry'),
+                    {'registry:5000': {'insecure': True}},
+                )
             if cmd[:3] == ['docker', 'buildx', 'inspect']:
                 self.assertIn('--bootstrap', cmd)
             if cmd[:2] == ['docker', 'inspect']:

@@ -17,6 +17,7 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from apps.deployments.models.core import Deployment
+from apps.deployments.tasks.deploy.state import stamp_deployment_artifact_metadata
 from apps.deployments.models.safedeploy import (
     DeploymentApproval,
     DeploymentArtifact,
@@ -49,6 +50,7 @@ class ProductionDeploymentPipeline:
             )
             return deployment
 
+        stamp_deployment_artifact_metadata(deployment, deployment.service)
         deployment.status = Deployment.Status.MIGRATION_PLANNING
         deployment.save()
 
@@ -115,6 +117,7 @@ class ProductionDeploymentPipeline:
         if deployment.status == Deployment.Status.HEALTH_CHECK_FAILED:
             return deployment
 
+        stamp_deployment_artifact_metadata(deployment, deployment.service)
         deployment.status = Deployment.Status.ACTIVE
         deployment.save()
 
@@ -515,6 +518,7 @@ class ProductionDeploymentPipeline:
         if validation:
             approval.risk_level = validation.risk_level
         approval.save()
+        stamp_deployment_artifact_metadata(deployment, deployment.service)
         deployment.status = Deployment.Status.MIGRATION_PLANNING
         deployment.save()
         return approval

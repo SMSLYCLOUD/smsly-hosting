@@ -37,7 +37,8 @@ def health_check(request):
 
     # Check cache (Redis) — report degraded when LocMemCache fallback is active
     try:
-        _cache_backend = getattr(cache, '_cache', None)
+        from django.core.cache import caches
+        _cache_backend = caches['default']
         from config.fallback_redis_cache import FallbackRedisCache
         if isinstance(_cache_backend, FallbackRedisCache) and _cache_backend.is_degraded:
             cache_status = 'degraded'

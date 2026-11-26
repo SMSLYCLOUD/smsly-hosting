@@ -66,3 +66,15 @@ db.sqlite3
 charts
 secrets
 certs
+*.pem
+*.key
+transfer*.sh
+fix_*.sh
+auth
+caddy-config
+caddy-logs
+traefik-dynamic
+.update-backups
+cosign-keys
+.infisical.env
+treatments

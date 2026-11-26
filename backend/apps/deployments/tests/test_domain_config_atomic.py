@@ -63,7 +63,7 @@ class DomainConfigAtomicTests(TestCase):
     )
     def test_happy_path_uses_select_for_update(self, _gen, _apply, _dns):
         with patch(
-            "apps.deployments.views.PlatformConfig.objects.select_for_update",
+            "apps.domains.views.domain.PlatformConfig.objects.select_for_update",
             wraps=PlatformConfig.objects.select_for_update,
         ) as mock_lock:
             resp = self._put(

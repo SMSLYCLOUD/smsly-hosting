@@ -18,6 +18,26 @@ from .exceptions import BuildError
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_repo_symlinks(root_dir: str) -> None:
+    """Remove any symlink in *root_dir* whose resolved target escapes *root_dir*."""
+    root_real = os.path.realpath(root_dir)
+    for dirpath, dirnames, filenames in os.walk(root_real, followlinks=False):
+        for name in list(dirnames) + list(filenames):
+            full_path = os.path.join(dirpath, name)
+            if not os.path.islink(full_path):
+                continue
+            target_real = os.path.realpath(full_path)
+            if target_real != root_real and not target_real.startswith(root_real + os.sep):
+                logger.warning(
+                    "Removing escaping symlink from cloned repo: %s -> %s",
+                    full_path,
+                    target_real,
+                )
+                os.unlink(full_path)
+                if name in dirnames:
+                    dirnames.remove(name)
+
+
 class CloneMixin:
     def _clone_repo(self):
         """Step 1: Clone Repository."""
@@ -35,7 +55,7 @@ class CloneMixin:
             try:
                 parsed = parse_url(self.service.repository_url or "")
                 if (parsed.scheme in ("http", "https") and
-                        (parsed.hostname or "").lower().endswith("github.com")):
+                        (parsed.hostname or "").lower() in ("github.com", "www.github.com")):
                     service_owner = getattr(self.service, "owner", None)
                     # Use the priority chain: shipped node-build token >
                     # GitHub App token > user OAuth token > None. The
@@ -62,7 +82,10 @@ class CloneMixin:
                             (parsed.path or "").lstrip("/").rstrip(".git").split("/")[:2]
                         )
                         from apps.deployments.utils import get_github_token_for_repo
-                        repo_token = get_github_token_for_repo(service_owner, repo_full_name)
+                        allow_unscoped = getattr(self.service, "managed_by", "") in ("ECOSYSTEM", "PLATFORM")
+                        repo_token = get_github_token_for_repo(
+                            service_owner, repo_full_name, allow_unscoped=allow_unscoped
+                        )
                     if repo_token:
                         append_log(
                             self.deployment,
@@ -181,8 +204,32 @@ class CloneMixin:
         else:
             remote_url = repo_url
 
+        if not branch or branch.startswith('-') or any(c in branch for c in ('\x00', '\r', '\n')):
+            raise ValueError("Invalid git branch name.")
+        if target_commit and (target_commit.startswith('-') or any(c in target_commit for c in ('\x00', '\r', '\n'))):
+            raise ValueError("Invalid git target commit.")
+        clean_url = (repo_url or '').strip()
+        if not clean_url or clean_url.startswith('-') or clean_url.lower().startswith(('ext::', 'fd::', 'file://')):
+            raise ValueError("Invalid or unsafe git repository URL.")
+
+        from apps.core.validators import validate_ssrf
+        scp_match = re.match(r'^[a-zA-Z0-9._-]+@([a-zA-Z0-9.-]+):[^\s]+$', clean_url)
+        if scp_match:
+            validate_ssrf(scp_match.group(1), fail_closed_dns=True)
+        elif clean_url.lower().startswith('ssh://'):
+            ssh_host = parse_url(clean_url).hostname or ''
+            if not ssh_host:
+                raise ValueError("Invalid SSH git repository URL.")
+            validate_ssrf(ssh_host, fail_closed_dns=True)
+        else:
+            validate_ssrf(clean_url, fail_closed_dns=True)
+
         clone_cmd = [
-            "git", "clone", "--branch", branch, "--single-branch", remote_url, str(tmp_path)
+            "git", "clone",
+            "-c", "http.followRedirects=false",
+            "-c", "protocol.file.allow=never",
+            "-c", "protocol.allow=https,ssh",
+            "--branch", branch, "--single-branch", "--", remote_url, str(tmp_path)
         ]
         try:
             subprocess.run(
@@ -194,7 +241,7 @@ class CloneMixin:
                 env=env,
             )
             if target_commit:
-                checkout_cmd = ["git", "checkout", target_commit]
+                checkout_cmd = ["git", "checkout", "--", target_commit]
                 subprocess.run(
                     checkout_cmd,
                     cwd=str(tmp_path),
@@ -204,6 +251,7 @@ class CloneMixin:
                     timeout=60,
                     env=env,
                 )
+            _sanitize_repo_symlinks(str(tmp_path))
             # Atomically promote tmp_path → build_path
             if build_path.exists():
                 shutil.rmtree(build_path, ignore_errors=True)
@@ -265,20 +313,33 @@ class CloneMixin:
 
         # Keys we should NEVER inject from .env files (security)
         SKIP_PATTERNS = re.compile(
-            r'(SECRET|PRIVATE|TOKEN|PASSWORD|API[_-]?KEY|DSN|CREDENTIAL)',
+            r'(SECRET|PRIVATE|TOKEN|PASSWORD|API[_-]?KEY|DSN|CREDENTIAL|ENCRYPTION_KEY|DATABASE_URL|REDIS_URL|BROKER_URL|GATEWAY_SECRET|CRYPTD|NAPD)',
             re.IGNORECASE,
         )
 
         collected = {}  # key -> value (later files override)
+        root_real = os.path.realpath(self.source_dir)
 
         for subdir in SCAN_DIRS:
             scan_path = os.path.join(self.source_dir, subdir) if subdir else self.source_dir
-            if not os.path.isdir(scan_path):
+            if not os.path.isdir(scan_path) or os.path.islink(scan_path):
+                continue
+            scan_real = os.path.realpath(scan_path)
+            try:
+                if os.path.commonpath([root_real, scan_real]) != root_real:
+                    continue
+            except ValueError:
                 continue
 
             for env_file in ENV_FILES:
                 env_path = os.path.join(scan_path, env_file)
-                if not os.path.isfile(env_path):
+                if os.path.islink(env_path) or not os.path.isfile(env_path):
+                    continue
+                env_real = os.path.realpath(env_path)
+                try:
+                    if os.path.commonpath([root_real, env_real]) != root_real:
+                        continue
+                except ValueError:
                     continue
 
                 try:

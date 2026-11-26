@@ -110,8 +110,8 @@ export function TopologyView({
   const content = (
     <RequiresTier tier="pro">
       <div className={`flex flex-col ${embed ? 'h-[calc(100vh-10rem)] border border-border rounded-lg overflow-hidden' : 'h-[calc(100vh-6rem)] md:h-[calc(100vh-4rem)]'}`}>
-        <div className="border-b border-zinc-800 bg-[#04070f] px-4 py-3 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <div>
+        <div className="border-b border-zinc-800 bg-[#04070f] px-4 py-3 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3">
+          <div className="min-w-0">
             <h1 className="text-lg font-semibold text-white tracking-tight">
               {embed ? 'Service Topology' : 'Infrastructure Topology'}
             </h1>
@@ -120,11 +120,12 @@ export function TopologyView({
             </p>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full lg:w-auto min-w-0">
             <button
+              type="button"
               onClick={handlePrune}
               disabled={isPruning}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all bg-red-950/30 text-red-400 border border-red-900/30 hover:bg-red-900/40 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all bg-red-950/30 text-red-400 border border-red-900/30 hover:bg-red-900/40 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shrink-0"
             >
               {isPruning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
               {isPruning ? 'Pruning...' : 'Clear Failed'}
@@ -132,9 +133,9 @@ export function TopologyView({
 
             {/* Filters */}
             {!embed && view !== 'ecosystem' && (
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Select value={selectedProject} onValueChange={(v) => { setSelectedProject(v); setSelectedService('all'); }}>
-                  <SelectTrigger className="w-[140px] h-8 text-xs bg-black/40 border-zinc-800 text-zinc-300">
+                  <SelectTrigger aria-label="Filter by project" className="w-[130px] sm:w-[140px] h-8 text-xs bg-black/40 border-zinc-800 text-zinc-300">
                     <SelectValue placeholder="Project" />
                   </SelectTrigger>
                   <SelectContent>
@@ -146,7 +147,7 @@ export function TopologyView({
                 </Select>
                 
                 <Select value={selectedService} onValueChange={setSelectedService}>
-                  <SelectTrigger className="w-[140px] h-8 text-xs bg-black/40 border-zinc-800 text-zinc-300">
+                  <SelectTrigger aria-label="Filter by service" className="w-[130px] sm:w-[140px] h-8 text-xs bg-black/40 border-zinc-800 text-zinc-300">
                     <SelectValue placeholder="Service" />
                   </SelectTrigger>
                   <SelectContent>
@@ -159,34 +160,39 @@ export function TopologyView({
               </div>
             )}
 
-            <div className="flex bg-zinc-900/50 rounded-lg p-1 border border-zinc-800 backdrop-blur-sm">
+            <div role="group" aria-label="Topology view mode" className="flex items-center bg-zinc-900/50 rounded-lg p-1 border border-zinc-800 backdrop-blur-sm overflow-x-auto max-w-full scrollbar-hide">
               <button
+                type="button"
                 onClick={() => setView('3d')}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${view === '3d' ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/50' : 'text-zinc-400 hover:text-zinc-200'}`}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all whitespace-nowrap shrink-0 ${view === '3d' ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/50' : 'text-zinc-400 hover:text-zinc-200'}`}
               >
                 <Network className="w-3.5 h-3.5" /> 3D Graph
               </button>
               <button
+                type="button"
                 onClick={() => setView('2d')}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${view === '2d' ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/50' : 'text-zinc-400 hover:text-zinc-200'}`}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all whitespace-nowrap shrink-0 ${view === '2d' ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/50' : 'text-zinc-400 hover:text-zinc-200'}`}
               >
                 <MapIcon className="w-3.5 h-3.5" /> Schematic
               </button>
               <button
+                type="button"
                 onClick={() => setView('solar')}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${view === 'solar' ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/50' : 'text-zinc-400 hover:text-zinc-200'}`}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all whitespace-nowrap shrink-0 ${view === 'solar' ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/50' : 'text-zinc-400 hover:text-zinc-200'}`}
               >
                 <Orbit className="w-3.5 h-3.5" /> Solar System
               </button>
               <button
+                type="button"
                 onClick={() => setView('city')}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${view === 'city' ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/50' : 'text-zinc-400 hover:text-zinc-200'}`}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all whitespace-nowrap shrink-0 ${view === 'city' ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/50' : 'text-zinc-400 hover:text-zinc-200'}`}
               >
                 <Building className="w-3.5 h-3.5" /> City
               </button>
               <button
+                type="button"
                 onClick={() => setView('ecosystem')}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${view === 'ecosystem' ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/50' : 'text-zinc-400 hover:text-zinc-200'}`}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all whitespace-nowrap shrink-0 ${view === 'ecosystem' ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/50' : 'text-zinc-400 hover:text-zinc-200'}`}
               >
                 <Layers className="w-3.5 h-3.5" /> Ecosystem
               </button>

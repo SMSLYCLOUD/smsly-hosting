@@ -73,6 +73,9 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         self._start_server_health_sync(server)
 
     def perform_update(self, serializer):
+        if serializer.instance and serializer.instance.project_id:
+            from apps.teams.permissions import assert_can_write
+            assert_can_write(self.request.user, serializer.instance, action='update server')
         server = serializer.save()
         self._start_server_health_sync(server)
 
@@ -92,6 +95,9 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         server = self.get_object()
+        if server.project_id:
+            from apps.teams.permissions import assert_can_delete
+            assert_can_delete(request.user, server)
         force = str(request.query_params.get("force", "")).lower() in {
             "1", "true", "yes",
         }

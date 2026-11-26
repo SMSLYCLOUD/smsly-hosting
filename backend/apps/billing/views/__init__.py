@@ -91,8 +91,33 @@ class EmptySerializer(serializers.Serializer):
 
 
 def _base_url_from_request(request) -> str:
-    """Extract base URL from request."""
-    # build_absolute_uri("/") returns something like "https://cloud.smsly.cloud/"
+    """Extract a trusted control-plane base URL without trusting arbitrary Host headers."""
+    from urllib.parse import urlparse
+    from apps.core.patching import is_control_plane_host
+
+    frontend_url = (getattr(settings, "FRONTEND_URL", "") or "").strip().rstrip("/")
+    try:
+        req_host = request.get_host()
+    except Exception:
+        req_host = ""
+
+    if req_host:
+        hostname = req_host.split(":")[0].lower()
+        cors_hosts = {
+            urlparse(o).netloc.lower()
+            for o in getattr(settings, "CORS_ALLOWED_ORIGINS", [])
+            if o
+        }
+        if req_host.lower() in cors_hosts or is_control_plane_host(hostname):
+            base = request.build_absolute_uri("/")
+            return base[:-1] if base.endswith("/") else base
+
+    if frontend_url:
+        return frontend_url
+
+    domain = (getattr(settings, "DOMAIN", "") or "").strip()
+    if domain and domain != "localhost":
+        return f"https://{domain}"
     base = request.build_absolute_uri("/")
     return base[:-1] if base.endswith("/") else base
 
@@ -317,7 +342,7 @@ class PortalSessionView(GenericAPIView):
 class InvoicesView(GenericAPIView):
     """View for listing user invoices."""
     serializer_class = EmptySerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanViewBilling]
 
     def get(self, request):
         """List invoices."""
@@ -386,9 +411,16 @@ class StripeWebhookView(GenericAPIView):
             if event_type == "checkout.session.completed":
                 customer_id = obj.get("customer")
                 subscription_id = obj.get("subscription")
+                payment_status = (obj.get("payment_status") or "").lower().strip()
                 plan = ((obj.get("metadata") or {}).get("plan") or "").upper().strip()
 
-                if customer_id:
+                if payment_status not in {"paid", "no_payment_required"}:
+                    logger.warning(
+                        "Ignoring unpaid Stripe checkout.session.completed (payment_status=%s, customer=%s)",
+                        payment_status,
+                        customer_id,
+                    )
+                elif customer_id:
                     with transaction.atomic():
                         account = BillingAccount.objects.select_for_update().filter(
                             stripe_customer_id=customer_id
@@ -409,8 +441,8 @@ class StripeWebhookView(GenericAPIView):
                                 )
                             account.save(update_fields=["stripe_subscription_id", "plan", "current_period_end"])
                             StripeService.sync_subscription_from_stripe(account)
-                            if plan in {BillingAccount.Plan.PRO, BillingAccount.Plan.ENTERPRISE}:
-                                _activate_paid_plan(user=account.user, plan=plan, extend_period=False)
+                            if account.plan in {BillingAccount.Plan.PRO, BillingAccount.Plan.ENTERPRISE}:
+                                _activate_paid_plan(user=account.user, plan=account.plan, extend_period=False)
 
             elif event_type in {"customer.subscription.updated", "customer.subscription.deleted"}:
                 subscription_id = obj.get("id")
@@ -430,13 +462,26 @@ class StripeWebhookView(GenericAPIView):
                         ).first()
 
                     if account:
+                        update_fields = ["subscription_status", "current_period_end"]
                         if status_up:
                             account.subscription_status = status_up
                         if isinstance(period_end, int):
                             account.current_period_end = timezone.datetime.fromtimestamp(
                                 period_end, tz=timezone.get_current_timezone()
                             )
-                        account.save(update_fields=["subscription_status", "current_period_end"])
+                        if (
+                            event_type == "customer.subscription.deleted"
+                            or status_up in {"CANCELED", "CANCELLED", "UNPAID", "INCOMPLETE_EXPIRED"}
+                        ):
+                            account.plan = BillingAccount.Plan.HOBBY
+                            account.stripe_subscription_id = ""
+                            if event_type == "customer.subscription.deleted" and not status_up:
+                                account.subscription_status = BillingAccount.SubscriptionStatus.CANCELED
+                            update_fields.extend(["plan", "stripe_subscription_id"])
+                            UserSubscription.objects.filter(
+                                user=account.user, status='ACTIVE'
+                            ).update(status='CANCELLED')
+                        account.save(update_fields=update_fields)
 
             # Ignore other events (invoice.* etc) for now.
         except Exception as e: # pylint: disable=broad-exception-caught
@@ -515,6 +560,24 @@ class FlutterwaveWebhookView(GenericAPIView):
                 payment.provider_transaction_id = str(transaction_id)
 
             if fw_status in {"successful", "success"}:
+                fw_amount = data.get("charged_amount") if data.get("charged_amount") is not None else data.get("amount")
+                fw_currency = (data.get("currency") or "").upper().strip()
+                try:
+                    paid_decimal = Decimal(str(fw_amount)) if fw_amount is not None else None
+                except Exception:
+                    paid_decimal = None
+                if (
+                    paid_decimal is None
+                    or paid_decimal < payment.amount
+                    or (payment.currency and fw_currency != payment.currency.upper())
+                ):
+                    logger.error(
+                        "Flutterwave amount/currency mismatch for tx_ref=%s: got %s %s expected >= %s %s",
+                        tx_ref, fw_amount, fw_currency, payment.amount, payment.currency,
+                    )
+                    payment.status = BillingPayment.Status.FAILED
+                    payment.save()
+                    return Response({"error": "Payment amount or currency mismatch"}, status=status.HTTP_400_BAD_REQUEST)
                 payment.status = BillingPayment.Status.PAID
                 payment.save()
                 _activate_paid_plan(user=payment.user, plan=payment.plan)
@@ -586,6 +649,42 @@ class CryptomusWebhookView(GenericAPIView):
                 payment.provider_transaction_id = str(transaction_id)
 
             if cm_status in {"paid", "paid_over"}:
+                cm_currency = (payload.get("currency") or "").upper().strip()
+                expected_currency = (payment.currency or "USD").upper().strip()
+                if not cm_currency or cm_currency != expected_currency:
+                    logger.error(
+                        "Cryptomus currency mismatch for order_id=%s: got %s expected %s",
+                        order_id, cm_currency, expected_currency,
+                    )
+                    payment.status = BillingPayment.Status.FAILED
+                    payment.save()
+                    return Response({"error": "Payment currency mismatch"}, status=status.HTTP_400_BAD_REQUEST)
+                cm_amount = payload.get("amount") if payload.get("amount") is not None else payload.get("payment_amount")
+                try:
+                    paid_decimal = Decimal(str(cm_amount)) if cm_amount is not None else None
+                except Exception:
+                    paid_decimal = None
+                usd_amount_raw = payload.get("payment_amount_usd")
+                usd_decimal = None
+                if usd_amount_raw is not None:
+                    try:
+                        usd_decimal = Decimal(str(usd_amount_raw))
+                    except Exception:
+                        usd_decimal = Decimal("0")
+                if (
+                    payment.amount is None
+                    or payment.amount <= 0
+                    or paid_decimal is None
+                    or paid_decimal < payment.amount
+                    or (usd_decimal is not None and usd_decimal < payment.amount)
+                ):
+                    logger.error(
+                        "Cryptomus amount/currency mismatch for order_id=%s: got %s %s expected >= %s %s",
+                        order_id, cm_amount, cm_currency, payment.amount, payment.currency,
+                    )
+                    payment.status = BillingPayment.Status.FAILED
+                    payment.save()
+                    return Response({"error": "Payment amount or currency mismatch"}, status=status.HTTP_400_BAD_REQUEST)
                 payment.status = BillingPayment.Status.PAID
                 payment.save()
                 _activate_paid_plan(user=payment.user, plan=payment.plan)
@@ -611,7 +710,7 @@ class PricingPlanViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [AllowAny]
 
 
-class SubscriptionViewSet(viewsets.ModelViewSet):
+class SubscriptionViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = UserSubscription.objects.all()
     serializer_class = UserSubscriptionSerializer
     permission_classes = [IsAuthenticated, CanViewBilling]
@@ -634,15 +733,22 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
         sub = self.get_queryset().filter(status='ACTIVE').select_related('user__billing_account').first()
         if not sub:
             return Response({'error': 'No active subscription'}, status=status.HTTP_400_BAD_REQUEST)
-        # Cancel Stripe subscription if one exists.
+        # Cancel Stripe subscription if one exists; fail closed if Stripe rejects.
         try:
             from apps.billing.services.stripe import StripeService
-            if sub.user.billing_account.stripe_subscription_id:
-                StripeService.cancel_subscription(sub.user)
+            StripeService.cancel_subscription(sub.user)
         except Exception as e:
             logger.error("Failed to cancel Stripe subscription for %s: %s", sub.user, e)
+            return Response(
+                {'error': 'Failed to cancel subscription with payment provider.'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        BillingAccount.objects.filter(user=sub.user).update(
+            plan=BillingAccount.Plan.HOBBY,
+            subscription_status=BillingAccount.SubscriptionStatus.CANCELED,
+        )
         sub.status = 'CANCELLED'
-        sub.save()
+        sub.save(update_fields=['status'])
         return Response({'status': 'Subscription cancelled'})
 
 

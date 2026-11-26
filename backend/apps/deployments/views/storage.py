@@ -3,6 +3,7 @@ import logging
 import os
 import posixpath
 import re
+import shutil
 import uuid
 
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -621,11 +622,13 @@ class VolumeViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 ),
             },
-            local_action=lambda container, p: self._local_volume_file_write(container, p, content),
+            local_action=lambda container, p: self._local_volume_file_write(
+                container, p, content, volume=volume,
+            ),
             path=path,
         )
 
-    def _local_volume_file_write(self, container, path, content):
+    def _local_volume_file_write(self, container, path, content, volume=None):
         try:
             import io
             import tarfile
@@ -637,6 +640,21 @@ class VolumeViewSet(viewsets.ModelViewSet):
 
             # Accept bytes or str; encode str to bytes
             file_data = content.encode('utf-8') if isinstance(content, str) else content
+
+            # Finding #97: enforce disk-space safety check before writing.
+            check_dir = '/'
+            mount_path = getattr(volume, 'mount_path', None) if volume is not None else None
+            if mount_path and os.path.exists(mount_path):
+                check_dir = mount_path
+            try:
+                _total, _used, free = shutil.disk_usage(check_dir)
+                if len(file_data) > free * 0.9:
+                    return Response(
+                        {'error': 'Insufficient disk space to write file safely'},
+                        status=status.HTTP_507_INSUFFICIENT_STORAGE,
+                    )
+            except OSError:
+                pass
 
             tar_stream = io.BytesIO()
             with tarfile.open(fileobj=tar_stream, mode='w') as tar:

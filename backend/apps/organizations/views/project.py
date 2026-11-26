@@ -5,17 +5,23 @@ Views for Project CRUD and nested service management.
 from __future__ import annotations
 
 import logging
+from smtplib import SMTPException
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.mail import send_mail
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework import permissions, status, viewsets
 from rest_framework import serializers as drf_serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 
 from apps.permissions.codes import MEMBER_INVITE, MEMBER_REMOVE, MEMBER_ROLE_CHANGE
-from apps.permissions.utils import has_permission
+from apps.permissions.utils import has_permission, validate_custom_permissions
+from apps.teams.permissions import assert_can_delete, assert_can_write, user_can_write
 
 from apps.deployments.models import Service  # type: ignore[attr-defined]
 from ..models.project import Project, ProjectMember  # type: ignore[attr-defined]
@@ -55,7 +61,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         class Meta:
             model = Project
             fields = [
-                'id', 'name', 'slug', 'description',
+                'id', 'name', 'slug', 'description', 'team',
                 'icon_emoji', 'color', 'is_default', 'is_ephemeral',
                 'services_count', 'latest_deploy_status', 'latest_deploy_at',
                 'created_at', 'updated_at',
@@ -107,7 +113,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         @classmethod
         def prefetch_for_list(cls, queryset):
             """Attach bulk-fetched data to avoid N+1 in list views."""
-            from django.db.models import Count, Max
+            from django.db.models import Count, OuterRef, Subquery
             from apps.deployments.models import Deployment
             from apps.deployments.models import Service
 
@@ -120,16 +126,21 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 .values_list('project_id', 'cnt')
             )
 
+            latest_dep = Deployment.objects.filter(
+                service__project_id=OuterRef('pk')
+            ).order_by('-created_at')
             latest_deps_qs = list(
-                Deployment.objects.filter(service__project_id__in=project_ids)
-                .values('service__project_id')
-                .annotate(latest_status=Max('status'), latest_at=Max('created_at'))
-                .values_list('service__project_id', 'latest_status', 'latest_at')
+                Project.objects.filter(id__in=project_ids)
+                .annotate(
+                    latest_status=Subquery(latest_dep.values('status')[:1]),
+                    latest_at=Subquery(latest_dep.values('created_at')[:1]),
+                )
+                .values_list('id', 'latest_status', 'latest_at')
             )
 
             instance = cls()
             instance._service_counts = service_counts
-            instance._latest_statuses = {pid: status for pid, status, _ in latest_deps_qs}
+            instance._latest_statuses = {pid: st for pid, st, _ in latest_deps_qs}
             instance._latest_times = {
                 pid: at.isoformat() if at else None
                 for pid, _, at in latest_deps_qs
@@ -152,7 +163,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         return Response(data)
 
     def get_queryset(self):
-        """Owner and Team scoped: users see their own projects and team projects.
+        """Owner and Team scoped: users see their own projects and active/unexpired team projects.
 
         All projects (including ephemeral) are shown by default.
         Pass ``?include_ephemeral=false`` to hide ephemeral projects.
@@ -161,9 +172,26 @@ class ProjectViewSet(viewsets.ModelViewSet):
         if self.request.user.is_superuser:
             qs = qs
         else:
+            now = timezone.now()
             qs = qs.filter(
-                Q(owner=self.request.user) |
-                Q(team__members__user=self.request.user)
+                Q(owner=self.request.user)
+                | (
+                    Q(
+                        team__members__user=self.request.user,
+                        team__members__is_active=True,
+                    )
+                    & (
+                        Q(team__members__expires_at__isnull=True)
+                        | Q(team__members__expires_at__gt=now)
+                    )
+                )
+                | (
+                    Q(project_members__user=self.request.user)
+                    & (
+                        Q(project_members__expires_at__isnull=True)
+                        | Q(project_members__expires_at__gt=now)
+                    )
+                )
             ).distinct().order_by('id')
 
         # Include all projects by default; optionally exclude ephemeral
@@ -173,7 +201,33 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
         return qs
 
+    def _validate_team_assignment(self, team):
+        if team is None or self.request.user.is_superuser:
+            return
+        if team.owner_id == self.request.user.id:
+            return
+        from apps.teams.models import TeamMember
+        now = timezone.now()
+        if TeamMember.objects.filter(
+            team=team, user=self.request.user, is_active=True,
+        ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now)).exists():
+            return
+        from rest_framework.exceptions import PermissionDenied
+        raise PermissionDenied("You do not belong to the target team.")
+
+    def perform_update(self, serializer):
+        assert_can_write(self.request.user, serializer.instance, action='update project')
+        if 'team' in serializer.validated_data:
+            self._validate_team_assignment(serializer.validated_data.get('team'))
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        assert_can_delete(self.request.user, instance)
+        instance.delete()
+
     def perform_create(self, serializer):
+        if 'team' in serializer.validated_data:
+            self._validate_team_assignment(serializer.validated_data.get('team'))
         project = serializer.save(owner=self.request.user)
         # Every project needs its own ScopedRegistry row so manual
         # (non-ecosystem) deploys inherit project-scoped credentials
@@ -208,6 +262,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         """
         from django.db.models import Q
         project = self.get_object()
+        assert_can_write(request.user, project, action='move service into project')
         service_id = request.data.get('service_id')
         if not service_id:
             return Response(
@@ -215,16 +270,31 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        now = timezone.now()
         try:
-            service = Service.objects.get(
-                Q(owner=request.user) | Q(project__team__members__user=request.user),
-                id=service_id
-            )
+            if request.user.is_superuser:
+                service = Service.objects.get(id=service_id)
+            else:
+                service = Service.objects.filter(
+                    Q(owner=request.user)
+                    | (
+                        Q(
+                            project__team__members__user=request.user,
+                            project__team__members__is_active=True,
+                        )
+                        & (
+                            Q(project__team__members__expires_at__isnull=True)
+                            | Q(project__team__members__expires_at__gt=now)
+                        )
+                    ),
+                    id=service_id,
+                ).distinct().get()
         except Service.DoesNotExist:
             return Response(
                 {'error': 'Service not found or access denied'},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        assert_can_write(request.user, service, action='move service')
 
         from apps.deployments.services.project_membership import (
             move_service_to_project,
@@ -281,14 +351,34 @@ class ProjectViewSet(viewsets.ModelViewSet):
         replacement_project_id = serializer.validated_data['replacement_project_id']
 
         project = self.get_object()
+        assert_can_write(request.user, project, action='remove service from project')
 
+        now = timezone.now()
         try:
             with transaction.atomic():
-                service = Service.objects.select_for_update().get(
-                    Q(owner=request.user)
-                    | Q(project__team__members__user=request.user),
-                    id=service_id,
-                )
+                if request.user.is_superuser:
+                    service = Service.objects.select_for_update().get(id=service_id)
+                else:
+                    service = (
+                        Service.objects.select_for_update()
+                        .filter(
+                            Q(owner=request.user)
+                            | (
+                                Q(
+                                    project__team__members__user=request.user,
+                                    project__team__members__is_active=True,
+                                )
+                                & (
+                                    Q(project__team__members__expires_at__isnull=True)
+                                    | Q(project__team__members__expires_at__gt=now)
+                                )
+                            ),
+                            id=service_id,
+                        )
+                        .distinct()
+                        .get()
+                    )
+                assert_can_write(request.user, service, action='remove service')
                 if service.project_id != project.id:
                     return Response(
                         {'error': 'Service is not in this project'},
@@ -299,13 +389,24 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 if not request.user.is_superuser:
                     replacement_qs = replacement_qs.filter(
                         Q(owner=request.user)
-                        | Q(team__members__user=request.user)
+                        | (
+                            Q(
+                                team__members__user=request.user,
+                                team__members__is_active=True,
+                            )
+                            & (
+                                Q(team__members__expires_at__isnull=True)
+                                | Q(team__members__expires_at__gt=now)
+                            )
+                        )
                     )
-                if not replacement_qs.exists():
+                replacement_project = replacement_qs.distinct().first()
+                if not replacement_project:
                     return Response(
                         {'error': 'Replacement project not found or access denied'},
                         status=status.HTTP_404_NOT_FOUND,
                     )
+                assert_can_write(request.user, replacement_project, action='move service into replacement project')
 
                 service.project_id = replacement_project_id
                 service.save(update_fields=['project', 'updated_at'])
@@ -361,7 +462,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         from django.contrib.contenttypes.models import ContentType
 
         from apps.deployments.models.registry_scope import ScopedRegistry
-        from ..serializers_registry_scope import (
+        from apps.deployments.serializers.registry_scope import (
             ScopedRegistryReadSerializer,
             ScopedRegistrySerializer,
         )
@@ -369,6 +470,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         project = self.get_object()
 
         if request.method == 'POST':
+            assert_can_write(request.user, project, action='configure project registry')
             data = {**request.data, 'scope_type': 'project', 'scope_id': str(project.id)}
             serializer = ScopedRegistrySerializer(data=data)
             if not serializer.is_valid():
@@ -426,17 +528,21 @@ class ProjectViewSet(viewsets.ModelViewSet):
             'hierarchy': ['project', 'team', 'organization', 'platform'],
         }
         if creds_display:
-            # Auth details for the project page. SECURITY: this is the
-            # project-scoped (or platform-fallback) credential — visible
-            # ONLY to the project owner/members (this viewset's queryset
-            # already restricts access).
-            resp['auth'] = {
+            # Auth details for the project page.
+            # SECURITY: omit password unless caller has write permission on the project;
+            # never expose the global platform fallback password to non-superusers.
+            can_write = user_can_write(request.user, project)
+            is_per_project = bool(creds_display.get('per_project'))
+            show_password = can_write and (is_per_project or request.user.is_superuser)
+            auth_payload = {
                 'username': creds_display['username'],
-                'password': creds_display['password'],
-                'per_project': creds_display['per_project'],
+                'per_project': is_per_project,
                 'urls': creds_display['urls'],
                 'node_url': creds_display['node_url'],
             }
+            if show_password:
+                auth_payload['password'] = creds_display['password']
+            resp['auth'] = auth_payload
         return Response(resp)
 
     @action(detail=True, methods=['post'], url_path='registry/rotate')
@@ -453,6 +559,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         )
 
         project = self.get_object()
+        assert_can_write(request.user, project, action='rotate project registry credentials')
         result = rotate_project_registry_credentials(project)
         if not result.get('ok'):
             return Response({'error': result.get('error', 'rotation failed')},
@@ -566,6 +673,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             return _state_response('ok')
 
         # POST: provision
+        assert_can_write(request.user, project, action='provision project internal network')
         if scoped:
             # Already exists — attach any running containers that aren't on
             # it yet (idempotent backfill).
@@ -654,8 +762,9 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 except Exception as exc:
                     logger.debug("Platform-bridge backfill skipped: %s", exc)
             except Exception as exc:
+                logger.exception("Failed to backfill bridge attachment for project %s: %s", project.id, exc)
                 return Response(
-                    {'error': f'Failed to backfill bridge attachment: {exc}'},
+                    {'error': 'Failed to backfill bridge attachment.'},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
             logger.info(
@@ -664,6 +773,12 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 scoped.network_name, project.id,
                 attached_services, attached_addons, platform_services, platform_addons,
             )
+            if attached_services or attached_addons:
+                try:
+                    from apps.deployments.services.mesh_dns import sync_dns_now
+                    sync_dns_now(client=client)
+                except Exception:
+                    pass
             return _state_response(
                 'existing'
                 if attached_services == 0 and attached_addons == 0
@@ -800,12 +915,18 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 attached_services, attached_addons,
                 platform_services, platform_addons,
             )
+            if attached_services or attached_addons:
+                try:
+                    from apps.deployments.services.mesh_dns import sync_dns_now
+                    sync_dns_now(client=client)
+                except Exception:
+                    pass
             return _state_response('created', status.HTTP_201_CREATED)
 
         except Exception as exc:
             logger.exception("Failed to provision internal network for project %s", project.id)
             return Response(
-                {'error': str(exc)},
+                {'error': 'Failed to provision internal network.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -878,6 +999,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         Deterministic linking of Intelligence, Security, and Core services.
         """
         project = self.get_object()
+        assert_can_write(request.user, project, action='sync project environment variables')
         from apps.deployments.services.ecosystem import sync_ecosystem_envs
 
         try:
@@ -887,7 +1009,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.exception("Ecosystem sync failed for project %s", project.id)
             return Response(
-                {"error": f"Sync failed: {e!s}"},
+                {"error": "Project environment sync failed."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -910,7 +1032,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
         return Response(ProjectMemberSerializer(members, many=True).data)
 
-    @action(detail=True, methods=['post'], url_path='members/invite')
+    @action(detail=True, methods=['post'], url_path='members/invite', throttle_classes=[UserRateThrottle])
     def invite_project_member(self, request, pk=None):
         """POST /api/v1/projects/{id}/members/invite/ — add a member to this project."""
         project = self.get_object()
@@ -918,10 +1040,22 @@ class ProjectViewSet(viewsets.ModelViewSet):
         if not has_permission(request.user, project, MEMBER_INVITE):
             return Response({'error': 'You do not have permission to invite project members'}, status=status.HTTP_403_FORBIDDEN)
 
-        email = request.data.get('email', '').strip()
+        email = str(request.data.get('email') or '').strip()
         role = request.data.get('role', ProjectMember.Role.MEMBER)
         expires_at = request.data.get('expires_at')
         permissions_override = request.data.get('permissions')
+
+        cleaned_perms: list[str] = []
+        if permissions_override is not None:
+            ok_perms, cleaned_perms = validate_custom_permissions(permissions_override)
+            if not ok_perms:
+                return Response(
+                    {'error': 'Invalid or disallowed permission override codes.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        if role not in dict(ProjectMember.Role.choices):
+            return Response({'error': 'Invalid role.'}, status=status.HTTP_400_BAD_REQUEST)
 
         User = get_user_model()
         try:
@@ -929,16 +1063,39 @@ class ProjectViewSet(viewsets.ModelViewSet):
         except User.DoesNotExist:
             return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
 
-        if ProjectMember.objects.filter(project=project, user=invitee).exists():
-            return Response({'error': 'User already a project member'}, status=status.HTTP_400_BAD_REQUEST)
+        def _send_project_invite_email(proj_id, proj_name: str, username: str, to_email: str, assigned_role: str) -> None:
+            try:
+                send_mail(
+                    subject=f"You've been added to project {proj_name} on SMSLY",
+                    message=(
+                        f"Hello {username},\n\n"
+                        f"You have been added to project '{proj_name}' as {assigned_role}.\n\n"
+                        f"Log in to view: {getattr(settings, 'SITE_URL', 'http://localhost:3000')}"
+                    ),
+                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@smsly.com'),
+                    recipient_list=[to_email],
+                    fail_silently=False,
+                )
+            except (SMTPException, OSError, ConnectionError, TimeoutError, Exception) as mail_exc:
+                logger.error("project invite email failed for project=%s invitee=%s: %s", proj_id, to_email, mail_exc)
 
-        member = ProjectMember.objects.create(
-            project=project,
-            user=invitee,
-            role=role if role in dict(ProjectMember.Role.choices) else ProjectMember.Role.MEMBER,
-            expires_at=expires_at if expires_at else None,
-            permissions=permissions_override if isinstance(permissions_override, list) else [],
-        )
+        with transaction.atomic():
+            if ProjectMember.objects.select_for_update().filter(project=project, user=invitee).exists():
+                return Response({'error': 'User already a project member'}, status=status.HTTP_400_BAD_REQUEST)
+
+            member = ProjectMember.objects.create(
+                project=project,
+                user=invitee,
+                role=role,
+                expires_at=expires_at if expires_at else None,
+                permissions=cleaned_perms,
+            )
+            proj_id = project.id
+            proj_name = project.name
+            invitee_username = invitee.username
+            transaction.on_commit(
+                lambda: _send_project_invite_email(proj_id, proj_name, invitee_username, email, role)
+            )
 
         class ProjectMemberSerializer(drf_serializers.ModelSerializer):
             username = drf_serializers.CharField(source='user.username', read_only=True)
@@ -975,21 +1132,35 @@ class ProjectViewSet(viewsets.ModelViewSet):
         if not has_permission(request.user, project, MEMBER_ROLE_CHANGE):
             return Response({'error': 'You do not have permission to change project member roles'}, status=status.HTTP_403_FORBIDDEN)
 
-        try:
-            member = ProjectMember.objects.get(project=project, id=member_id)
-        except ProjectMember.DoesNotExist:
-            return Response({'error': 'Member not found'}, status=status.HTTP_404_NOT_FOUND)
-
         new_role = request.data.get('role')
         expires_at = request.data.get('expires_at')
         permissions_override = request.data.get('permissions')
 
-        if new_role and new_role in dict(ProjectMember.Role.choices):
-            member.role = new_role
-        if expires_at is not None:
-            member.expires_at = expires_at if expires_at else None
-        if permissions_override is not None:
-            member.permissions = permissions_override if isinstance(permissions_override, list) else []
+        if new_role is not None and new_role not in dict(ProjectMember.Role.choices):
+            return Response({'error': 'Invalid role.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        member.save(update_fields=[f for f in ('role', 'expires_at', 'permissions') if f in request.data])
+        cleaned_perms = None
+        if permissions_override is not None:
+            ok_perms, cleaned_perms = validate_custom_permissions(permissions_override)
+            if not ok_perms:
+                return Response(
+                    {'error': 'Invalid or disallowed permission override codes.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        with transaction.atomic():
+            try:
+                member = ProjectMember.objects.select_for_update().get(project=project, id=member_id)
+            except ProjectMember.DoesNotExist:
+                return Response({'error': 'Member not found'}, status=status.HTTP_404_NOT_FOUND)
+
+            if new_role:
+                member.role = new_role
+            if expires_at is not None:
+                member.expires_at = expires_at if expires_at else None
+            if permissions_override is not None:
+                member.permissions = cleaned_perms
+
+            update_fields = [f for f in ('role', 'expires_at', 'permissions') if f in request.data]
+            member.save(update_fields=update_fields or None)
         return Response({'status': 'updated'})

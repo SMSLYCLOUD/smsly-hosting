@@ -16,19 +16,17 @@ from datetime import timedelta
 from celery import shared_task
 from django.utils import timezone
 
-from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
+from apps.deployments.constants import TASK_TIME_LIMIT_MEDIUM
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1])
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1])
 def check_autoscale_task(self) -> None:
-    """Check CPU usage for all services and scale replicas if needed.
+    """Check CPU usage for all active services and scale replicas if needed.
 
-    Delegates to the unified engine so the two Celery beat tasks
-    (``check_autoscale_task`` and ``tasks_autoscale.analyze_all_services_task``)
-    cannot double-spawn replicas for the same service — the engine
-    uses a per-service lock inside ``Reconciler``.
+    Retained as a manual/compat entrypoint; periodic scaling runs via
+    ``analyze_all_services_task`` on the unified engine.
     """
     from django.db.models import Q
 
@@ -36,6 +34,8 @@ def check_autoscale_task(self) -> None:
     from apps.deployments.models import Service
 
     services = Service.objects.filter(
+        status__in=['ACTIVE', 'RUNNING'],
+    ).filter(
         Q(autoscale_enabled=True) | Q(autoscale_enabled__isnull=True),
         max_replicas__gt=1,
     )

@@ -12,7 +12,7 @@ import logging
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 @permission_classes([IsAuthenticated])
 def github_app_install_url(request) -> Response:
     """Return the URL to redirect the user to for GitHub App installation."""
+    import time
+    from urllib.parse import urlencode
+
+    from django.conf import settings
+    import jwt as pyjwt
+
     from apps.deployments.services.github_app import get_github_app_service
 
     svc = get_github_app_service()
@@ -38,7 +44,20 @@ def github_app_install_url(request) -> Response:
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
-    return Response({"url": f"https://github.com/apps/{slug}/installations/new"})
+    state_payload = {
+        "user_id": str(request.user.id),
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 600,
+    }
+    state_token = pyjwt.encode(
+        state_payload,
+        settings.SECRET_KEY,
+        algorithm="HS256",
+    )
+
+    return Response({
+        "url": f"https://github.com/apps/{slug}/installations/new?{urlencode({'state': state_token})}"
+    })
 
 
 @api_view(["GET"])
@@ -92,7 +111,7 @@ def github_app_install_with_oauth(request) -> Response:
 
 
 @api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def github_app_callback(request) -> Response:
     """Process a GitHub App installation callback.
 
@@ -122,18 +141,42 @@ def github_app_callback(request) -> Response:
         or request.query_params.get("state")
     )
 
-    # If state token is present, resolve user from JWT
+    # If state token is present, ALWAYS verify signature and match user_id
     target_user = request.user
-    if state and not target_user.is_authenticated:
+    if state:
         try:
             payload = pyjwt.decode(state, dj_settings.SECRET_KEY, algorithms=["HS256"])
-            user_id = payload.get("user_id")
-            if user_id:
-                from django.contrib.auth import get_user_model
-                User = get_user_model()
-                target_user = User.objects.filter(id=user_id).first() or target_user
         except Exception:
-            pass
+            return Response(
+                {"error": "Invalid or expired OAuth state."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        state_user_id = payload.get("user_id")
+        if not state_user_id:
+            return Response(
+                {"error": "Invalid OAuth state payload."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if target_user.is_authenticated and str(target_user.id) != str(state_user_id):
+            return Response(
+                {"error": "OAuth state does not match authenticated user."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if not target_user.is_authenticated:
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            target_user = User.objects.filter(id=state_user_id, is_active=True).first()
+            if not target_user:
+                return Response(
+                    {"error": "Authenticated user not found for state."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+    if not target_user or not target_user.is_authenticated:
+        return Response(
+            {"error": "Authentication or signed OAuth state is required."},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
 
     if not installation_id:
         return Response(
@@ -171,10 +214,6 @@ def github_app_callback(request) -> Response:
 
     account = inst_data.get("account", {})
 
-    # Fetch accessible repositories
-    repos_data = svc.list_installation_repos(installation_id)
-    repositories = [{"id": r["id"], "name": r["full_name"]} for r in repos_data]
-
     # Prevent ownership hijack: if installation already linked to a different user, reject
     from apps.cloud.models.github_app import GitHubAppInstallation as GHAI
     existing = GHAI.objects.filter(installation_id=installation_id).first()
@@ -183,6 +222,83 @@ def github_app_callback(request) -> Response:
             {"error": "This installation is already linked to another account."},
             status=status.HTTP_409_CONFLICT,
         )
+
+    # Verify installation ownership via GitHub SocialAccount UID or user/installations API
+    import requests as http_requests
+    from allauth.socialaccount.models import SocialAccount, SocialToken
+
+    inst_id_int = int(installation_id)
+    inst_account_id = account.get("id")
+    social_account = (
+        SocialAccount.objects.filter(user=target_user, provider="github")
+        .order_by("-id")
+        .first()
+    )
+    ownership_verified = False
+    if social_account and inst_account_id and str(social_account.uid) == str(inst_account_id):
+        ownership_verified = True
+    else:
+        social_token = None
+        if social_account:
+            social_token = (
+                SocialToken.objects.filter(account=social_account)
+                .order_by("-id")
+                .first()
+            )
+        if not social_token:
+            social_token = (
+                SocialToken.objects.filter(
+                    account__user=target_user,
+                    account__provider="github",
+                )
+                .order_by("-id")
+                .first()
+            )
+        token_val = getattr(social_token, "token", None) if social_token else None
+        if token_val:
+            try:
+                page = 1
+                while page <= 10:
+                    resp = http_requests.get(
+                        "https://api.github.com/user/installations",
+                        headers={
+                            "Authorization": f"token {token_val}",
+                            "Accept": "application/vnd.github+json",
+                            "X-GitHub-Api-Version": "2022-11-28",
+                        },
+                        params={"per_page": 100, "page": page},
+                        timeout=10,
+                    )
+                    if resp.status_code != 200:
+                        break
+                    data = resp.json() or {}
+                    installations = data.get("installations") or []
+                    if any(int(i.get("id", 0)) == inst_id_int for i in installations):
+                        ownership_verified = True
+                        break
+                    total_count = data.get("total_count")
+                    if len(installations) < 100 or (
+                        total_count is not None and page * 100 >= total_count
+                    ):
+                        break
+                    page += 1
+            except Exception as exc:
+                logger.warning(
+                    "GitHub installation ownership check failed for user=%s installation_id=%s: %s",
+                    target_user.id,
+                    inst_id_int,
+                    exc,
+                )
+
+    if not ownership_verified:
+        return Response(
+            {"error": "Could not verify ownership of this GitHub App installation."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    # Fetch accessible repositories
+    repos_data = svc.list_installation_repos(installation_id)
+    repositories = [{"id": r["id"], "name": r["full_name"]} for r in repos_data]
 
     # Create or update the installation record
     installation, created = GitHubAppInstallation.objects.update_or_create(

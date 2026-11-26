@@ -42,6 +42,7 @@ import { Switch } from '@/components/ui/switch';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
+import { usePermissions } from '@/hooks/usePermissions';
 import {
   securityCenterApi,
   type ComplianceControlItem,
@@ -151,6 +152,8 @@ export const SecurityIntelWorkspace = React.memo(function SecurityIntelWorkspace
 }: SecurityIntelWorkspaceProps) {
   const { toast } = useToast();
   const confirm = useConfirm();
+  const { isStaff, isSuperuser } = usePermissions();
+  const isAdmin = isStaff || isSuperuser;
 
   const [subTab, setSubTab] = useState<SecuritySubTab>('overview');
   const [streamMode, setStreamMode] = useState<StreamMode>('live');
@@ -550,21 +553,23 @@ export const SecurityIntelWorkspace = React.memo(function SecurityIntelWorkspace
               </>
             )}
 
-            <Button
-              onClick={() => {
-                setSubTab('overview');
-                onRunSecurityAnalysis();
-              }}
-              disabled={securityAnalyzing}
-              className="min-h-11 sm:min-h-9 bg-primary hover:bg-primary/90 text-primary-foreground"
-            >
-              {securityAnalyzing ? (
-                <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
-              ) : (
-                <Sparkles className="w-4 h-4 mr-1.5" />
-              )}
-              Run AI Threat Assessment
-            </Button>
+            {isAdmin && (
+              <Button
+                onClick={() => {
+                  setSubTab('overview');
+                  onRunSecurityAnalysis();
+                }}
+                disabled={securityAnalyzing}
+                className="min-h-11 sm:min-h-9 bg-primary hover:bg-primary/90 text-primary-foreground"
+              >
+                {securityAnalyzing ? (
+                  <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
+                ) : (
+                  <Sparkles className="w-4 h-4 mr-1.5" />
+                )}
+                Run AI Threat Assessment
+              </Button>
+            )}
 
             <Button
               variant="outline"
@@ -928,16 +933,18 @@ export const SecurityIntelWorkspace = React.memo(function SecurityIntelWorkspace
                     </p>
                   </div>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={onRunSecurityAnalysis}
-                  disabled={securityAnalyzing}
-                  className="min-h-11 sm:min-h-8 shrink-0"
-                >
-                  {securityAnalyzing ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <Brain className="w-3.5 h-3.5 mr-1.5" />}
-                  Generate Assessment
-                </Button>
+                {isAdmin && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={onRunSecurityAnalysis}
+                    disabled={securityAnalyzing}
+                    className="min-h-11 sm:min-h-8 shrink-0"
+                  >
+                    {securityAnalyzing ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <Brain className="w-3.5 h-3.5 mr-1.5" />}
+                    Generate Assessment
+                  </Button>
+                )}
               </CardContent>
             )}
           </Card>
@@ -987,42 +994,44 @@ export const SecurityIntelWorkspace = React.memo(function SecurityIntelWorkspace
                     </div>
                   </div>
                 </div>
-                <div className="pt-2 border-t border-border/60 flex items-center justify-between gap-2 flex-wrap">
-                  <span className="text-[11px] text-muted-foreground uppercase tracking-wider">Policy Mode</span>
-                  <div className="flex items-center gap-1.5">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="min-h-11 sm:min-h-8 text-xs"
-                      disabled={domainUpdating === 'openappsec-enabled'}
-                      onClick={onOpenAppSecToggle}
-                    >
-                      {domainUpdating === 'openappsec-enabled' ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      ) : securityStatus?.openappsec?.enabled ? (
-                        'Disable'
-                      ) : (
-                        'Enable'
-                      )}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="min-h-11 sm:min-h-8 text-xs"
-                      disabled={domainUpdating?.startsWith('openappsec-mode-') || !securityStatus?.openappsec?.enabled}
-                      onClick={onOpenAppSecModeSwitch}
-                      title={securityStatus?.openappsec?.enabled ? undefined : 'Enable the stack first'}
-                    >
-                      {domainUpdating?.startsWith('openappsec-mode-') ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      ) : (securityStatus?.openappsec?.mode_configured || 'prevent') === 'prevent' ? (
-                        'Demote to shadow'
-                      ) : (
-                        'Promote to prevent'
-                      )}
-                    </Button>
+                {isAdmin && (
+                  <div className="pt-2 border-t border-border/60 flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-[11px] text-muted-foreground uppercase tracking-wider">Policy Mode</span>
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="min-h-11 sm:min-h-8 text-xs"
+                        disabled={domainUpdating === 'openappsec-enabled'}
+                        onClick={onOpenAppSecToggle}
+                      >
+                        {domainUpdating === 'openappsec-enabled' ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : securityStatus?.openappsec?.enabled ? (
+                          'Disable'
+                        ) : (
+                          'Enable'
+                        )}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="min-h-11 sm:min-h-8 text-xs"
+                        disabled={domainUpdating?.startsWith('openappsec-mode-') || !securityStatus?.openappsec?.enabled}
+                        onClick={onOpenAppSecModeSwitch}
+                        title={securityStatus?.openappsec?.enabled ? undefined : 'Enable the stack first'}
+                      >
+                        {domainUpdating?.startsWith('openappsec-mode-') ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (securityStatus?.openappsec?.mode_configured || 'prevent') === 'prevent' ? (
+                          'Demote to shadow'
+                        ) : (
+                          'Promote to prevent'
+                        )}
+                      </Button>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
 
               {/* Coraza WAF (Caddy) */}
@@ -1191,24 +1200,26 @@ export const SecurityIntelWorkspace = React.memo(function SecurityIntelWorkspace
                     </div>
                   </div>
                 </div>
-                <div className="pt-2 border-t border-border/60 flex items-center justify-between">
-                  <span className="text-[11px] text-muted-foreground uppercase tracking-wider">Control</span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="min-h-11 sm:min-h-8 text-xs"
-                    disabled={domainUpdating === 'crowdsec-enabled'}
-                    onClick={onCrowdSecToggle}
-                  >
-                    {domainUpdating === 'crowdsec-enabled' ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : securityStatus?.crowdsec?.enabled ? (
-                      'Disable IPS'
-                    ) : (
-                      'Enable IPS'
-                    )}
-                  </Button>
-                </div>
+                {isAdmin && (
+                  <div className="pt-2 border-t border-border/60 flex items-center justify-between">
+                    <span className="text-[11px] text-muted-foreground uppercase tracking-wider">Control</span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="min-h-11 sm:min-h-8 text-xs"
+                      disabled={domainUpdating === 'crowdsec-enabled'}
+                      onClick={onCrowdSecToggle}
+                    >
+                      {domainUpdating === 'crowdsec-enabled' ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : securityStatus?.crowdsec?.enabled ? (
+                        'Disable IPS'
+                      ) : (
+                        'Enable IPS'
+                      )}
+                    </Button>
+                  </div>
+                )}
               </div>
 
               {/* Fail2ban Host Defense */}
@@ -1395,58 +1406,60 @@ export const SecurityIntelWorkspace = React.memo(function SecurityIntelWorkspace
                   </div>
                 </div>
 
-                <div className="pt-2 border-t border-border/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <label htmlFor="trivy-cve-gate-select" className="text-[11px] text-muted-foreground uppercase tracking-wider">
-                      CVE Gate
-                    </label>
-                    <select
-                      id="trivy-cve-gate-select"
-                      aria-label="Trivy CVE gate severity threshold"
-                      className="min-h-11 sm:min-h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      value={(securityStatus?.trivy?.fail_on_severity || 'CRITICAL').split(',')[0]}
-                      disabled={domainUpdating === 'trivy-severity' || !securityStatus?.trivy?.enabled}
-                      onChange={(e) => onTrivySeverityChange(e.target.value)}
-                    >
-                      {['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].map((sev) => (
-                        <option key={sev} value={sev}>
-                          {sev}+
-                        </option>
-                      ))}
-                    </select>
+                {isAdmin && (
+                  <div className="pt-2 border-t border-border/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <label htmlFor="trivy-cve-gate-select" className="text-[11px] text-muted-foreground uppercase tracking-wider">
+                        CVE Gate
+                      </label>
+                      <select
+                        id="trivy-cve-gate-select"
+                        aria-label="Trivy CVE gate severity threshold"
+                        className="min-h-11 sm:min-h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        value={(securityStatus?.trivy?.fail_on_severity || 'CRITICAL').split(',')[0]}
+                        disabled={domainUpdating === 'trivy-severity' || !securityStatus?.trivy?.enabled}
+                        onChange={(e) => onTrivySeverityChange(e.target.value)}
+                      >
+                        {['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].map((sev) => (
+                          <option key={sev} value={sev}>
+                            {sev}+
+                          </option>
+                        ))}
+                      </select>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="min-h-11 sm:min-h-8 text-xs"
+                        disabled={domainUpdating === 'trivy-enabled'}
+                        onClick={onTrivyToggle}
+                      >
+                        {domainUpdating === 'trivy-enabled' ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : securityStatus?.trivy?.enabled ? (
+                          'Disable Trivy'
+                        ) : (
+                          'Enable Trivy'
+                        )}
+                      </Button>
+                    </div>
+
                     <Button
                       variant="outline"
                       size="sm"
                       className="min-h-11 sm:min-h-8 text-xs"
-                      disabled={domainUpdating === 'trivy-enabled'}
-                      onClick={onTrivyToggle}
+                      disabled={domainUpdating === 'device-trust'}
+                      onClick={onDeviceTrustToggle}
                     >
-                      {domainUpdating === 'trivy-enabled' ? (
+                      {domainUpdating === 'device-trust' ? (
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      ) : securityStatus?.trivy?.enabled ? (
-                        'Disable Trivy'
+                      ) : securityStatus?.device_trust?.enabled ? (
+                        'Disable Device Trust'
                       ) : (
-                        'Enable Trivy'
+                        'Enforce Device Trust (Beta)'
                       )}
                     </Button>
                   </div>
-
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="min-h-11 sm:min-h-8 text-xs"
-                    disabled={domainUpdating === 'device-trust'}
-                    onClick={onDeviceTrustToggle}
-                  >
-                    {domainUpdating === 'device-trust' ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : securityStatus?.device_trust?.enabled ? (
-                      'Disable Device Trust'
-                    ) : (
-                      'Enforce Device Trust (Beta)'
-                    )}
-                  </Button>
-                </div>
+                )}
               </div>
 
               {/* grid-cryptd Vault & LUKS2 */}
@@ -1501,7 +1514,7 @@ export const SecurityIntelWorkspace = React.memo(function SecurityIntelWorkspace
           </div>
 
           {/* Aegis Enforcement Gates Strip (Admin Policy Switches) */}
-          {overview?.compliance_frameworks !== undefined && overview?.policy && (
+          {isAdmin && overview?.compliance_frameworks !== undefined && overview?.policy && (
             <Card className="border-border bg-card">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-semibold flex items-center gap-2">
@@ -1805,7 +1818,7 @@ export const SecurityIntelWorkspace = React.memo(function SecurityIntelWorkspace
                             <span className="font-mono tabular-nums text-[11px]">
                               {new Date(evt.timestamp).toLocaleString()}
                             </span>
-                            {targetIp && isCrowdSecBan && (
+                            {isAdmin && targetIp && isCrowdSecBan && (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -1817,7 +1830,7 @@ export const SecurityIntelWorkspace = React.memo(function SecurityIntelWorkspace
                                 Unban IP
                               </Button>
                             )}
-                            {targetIp && isF2bBan && (
+                            {isAdmin && targetIp && isF2bBan && (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -2297,14 +2310,16 @@ export const SecurityIntelWorkspace = React.memo(function SecurityIntelWorkspace
                     Live posture control verification backed by immutable SHA-256 evidence bundles.
                   </CardDescription>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="min-h-11 sm:min-h-8 text-xs self-start sm:self-auto"
-                  onClick={handleExportGrc}
-                >
-                  <Download className="w-3.5 h-3.5 mr-1.5" /> Export Evidence
-                </Button>
+                {isAdmin && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="min-h-11 sm:min-h-8 text-xs self-start sm:self-auto"
+                    onClick={handleExportGrc}
+                  >
+                    <Download className="w-3.5 h-3.5 mr-1.5" /> Export Evidence
+                  </Button>
+                )}
               </div>
             </CardHeader>
             <CardContent className="p-0">

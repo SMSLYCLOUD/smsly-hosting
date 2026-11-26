@@ -32,9 +32,15 @@ class ResolveUserTests(TestCase):
 
 class ListServicesTests(TestCase):
     def test_list_services_empty(self):
-        result = list_services()
+        user = User.objects.create_user(username="mcplist", email="mcplist@example.com", password="pass")
+        result = list_services(user_id=str(user.id))
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 0)
+
+    def test_list_services_requires_user(self):
+        result = list_services()
+        self.assertEqual(len(result), 1)
+        self.assertIn("error", result[0])
 
 class ToolDiscoveryTests(TestCase):
     EXPECTED_TOOLS = {
@@ -62,36 +68,39 @@ class ToolDiscoveryTests(TestCase):
 
 
 class NewToolsEmptyDbTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="mcpempty", email="mcpempty@example.com", password="pass")
+
     def test_search_services_empty(self):
         from apps.mcp.tools import search_services
-        self.assertEqual(search_services("nothing-here"), [])
+        self.assertEqual(search_services("nothing-here", user_id=str(self.user.id)), [])
 
     def test_failed_deployments_empty(self):
         from apps.mcp.tools import get_failed_deployments
-        self.assertEqual(get_failed_deployments(), [])
+        self.assertEqual(get_failed_deployments(user_id=str(self.user.id)), [])
 
     def test_list_all_addons_empty(self):
         from apps.mcp.tools import list_all_addons
-        self.assertEqual(list_all_addons(), [])
+        self.assertEqual(list_all_addons(user_id=str(self.user.id)), [])
 
     def test_cancel_unknown_deployment(self):
         from apps.mcp.tools import cancel_deployment
-        result = cancel_deployment("00000000-0000-0000-0000-000000000000")
+        result = cancel_deployment("00000000-0000-0000-0000-000000000000", user_id=str(self.user.id))
         self.assertIn("error", result)
 
     def test_retry_unknown_deployment(self):
         from apps.mcp.tools import retry_deployment
-        result = retry_deployment("00000000-0000-0000-0000-000000000000")
+        result = retry_deployment("00000000-0000-0000-0000-000000000000", user_id=str(self.user.id))
         self.assertIn("error", result)
 
     def test_service_domains_unknown_service(self):
         from apps.mcp.tools import get_service_domains
-        result = get_service_domains("00000000-0000-0000-0000-000000000000")
+        result = get_service_domains("00000000-0000-0000-0000-000000000000", user_id=str(self.user.id))
         self.assertIn("error", result)
 
     def test_addon_details_unknown_addon(self):
         from apps.mcp.tools import get_addon_details
-        result = get_addon_details("00000000-0000-0000-0000-000000000000")
+        result = get_addon_details("00000000-0000-0000-0000-000000000000", user_id=str(self.user.id))
         self.assertIn("error", result)
 
 
@@ -267,13 +276,20 @@ class McpTransportAuthTests(TestCase):
         )
 
     def test_stdio_passthrough(self):
-        self.assertEqual(
-            self.auth("list_services", None, "u1", "a@b.c"), ("u1", "a@b.c", None)
-        )
-        self.assertEqual(
-            self.auth("set_service_env_var", self._ctx(request=False), "u1", None),
-            ("u1", None, None),
-        )
+        with patch("apps.mcp.server._STDIO_MODE", True):
+            self.assertEqual(
+                self.auth("list_services", None, "u1", "a@b.c"), ("u1", "a@b.c", None)
+            )
+            self.assertEqual(
+                self.auth("set_service_env_var", self._ctx(request=False), "u1", None),
+                ("u1", None, None),
+            )
+
+    def test_headers_none_fails_closed_by_default(self):
+        with self.assertRaises(self.ToolError):
+            self.auth("list_services", None, "u1", "a@b.c")
+        with self.assertRaises(self.ToolError):
+            self.auth("set_service_env_var", self._ctx(request=False), "u1", None)
 
     def test_http_without_token_denied(self):
         with self.assertRaises(self.ToolError):

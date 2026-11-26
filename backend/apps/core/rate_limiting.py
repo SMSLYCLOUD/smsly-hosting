@@ -86,20 +86,36 @@ def is_trusted_proxy_peer(request, *, allow_private_when_unset: bool = False) ->
     return False
 
 
+def _is_cloudflare_proxy_enabled() -> bool:
+    """Return True only when Cloudflare proxy mode is explicitly enabled."""
+    from django.conf import settings
+
+    explicit = getattr(settings, "TRUST_CLOUDFLARE_HEADERS", None)
+    if explicit is True:
+        return True
+    try:
+        from apps.deployments.models.core import PlatformConfig
+        cfg = PlatformConfig.load()
+        return bool(getattr(cfg, "edge_proxy_records", False))
+    except Exception:
+        return False
+
+
 def get_trusted_client_ip(request, *, default: str = "0.0.0.0", use_xff: bool = True) -> str:
     """Resolve client IP without trusting spoofed headers from untrusted peers.
 
     Only direct peers listed in ``TRUSTED_PROXY_IPS`` (with CIDR support) may
-    assert ``CF-Connecting-IP``, ``X-Real-IP``, or right-to-left untrusted
-    ``X-Forwarded-For`` hops. When ``TRUSTED_PROXY_IPS`` is unset, only
-    loopback/private reverse-proxy bridge peers may forward ``CF-Connecting-IP``.
+    assert ``X-Real-IP``, or right-to-left untrusted ``X-Forwarded-For`` hops.
+    ``CF-Connecting-IP`` is ONLY trusted when Cloudflare proxy mode is explicitly
+    enabled (``settings.TRUST_CLOUDFLARE_HEADERS`` or
+    ``PlatformConfig.edge_proxy_records``) AND the direct peer is a trusted proxy.
     """
     from django.conf import settings
 
     remote_addr = (request.META.get("REMOTE_ADDR") or "").strip()
     trusted_proxies = getattr(settings, "TRUSTED_PROXY_IPS", None) or []
 
-    if is_trusted_proxy_peer(request, allow_private_when_unset=True):
+    if _is_cloudflare_proxy_enabled() and is_trusted_proxy_peer(request, allow_private_when_unset=True):
         cf_ip = (request.META.get("HTTP_CF_CONNECTING_IP") or "").strip()
         if cf_ip:
             return cf_ip

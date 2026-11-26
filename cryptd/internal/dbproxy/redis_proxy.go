@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,11 +21,14 @@ import (
 
 // RedisProxyConfig configures the RESP2/RESP3 cryptographic point-of-contact Redis proxy.
 type RedisProxyConfig struct {
-	ListenAddr         string
-	DefaultUpstream    string
-	DefaultServiceID   string
-	DialTimeout        time.Duration
-	TransparentEncrypt bool // When true and service is opted-in, encrypts stored values with SEK_{s,w}
+	ListenAddr          string
+	DefaultUpstream     string
+	DefaultServiceID    string
+	DialTimeout         time.Duration
+	TransparentEncrypt  bool        // When true and service is opted-in, encrypts stored values with SEK_{s,w}
+	UpstreamTLS         *tls.Config // Optional TLS config when dialing UpstreamTLS / rediss:// targets
+	UpstreamTLSOptional bool        // When true ("auto"), permits self-signed TLS on private/loopback endpoints if no ExplicitCA
+	ExplicitCA          bool        // True when an explicit upstream CA file was configured
 }
 
 // RedisProxy gates Redis TCP connections at the point of contact, enforces lease/epoch lock
@@ -89,13 +94,15 @@ const (
 )
 
 type pendingCmd struct {
-	serviceID  string
-	projectID  string
-	optedIn    bool
-	shape      decryptShape
-	pubsub     bool
-	authDone   chan bool
-	execShapes []pendingCmd
+	serviceID     string
+	projectID     string
+	optedIn       bool
+	shape         decryptShape
+	pubsub        bool
+	authDone      chan bool
+	execShapes    []pendingCmd
+	localReply    *respValue
+	overrideReply *respValue
 }
 
 type respAttrBlock struct {
@@ -115,6 +122,29 @@ type mutableConnPair struct {
 	client   net.Conn
 	upstream net.Conn
 	closed   bool
+}
+
+func resolveRedisDialTarget(raw string, explicitTLS bool) (dialAddr string, serverName string, useTLS bool) {
+	s := strings.TrimSpace(raw)
+	useTLS = explicitTLS
+	lower := strings.ToLower(s)
+	if strings.HasPrefix(lower, "rediss://") {
+		useTLS = true
+	}
+	if strings.Contains(s, "://") {
+		if u, err := url.Parse(s); err == nil && u.Host != "" {
+			s = u.Host
+			if u.Port() == "" && u.Hostname() != "" {
+				s = net.JoinHostPort(u.Hostname(), "6379")
+			}
+		}
+	}
+	if host, _, err := net.SplitHostPort(s); err == nil && host != "" {
+		if net.ParseIP(host) == nil {
+			serverName = host
+		}
+	}
+	return s, serverName, useTLS
 }
 
 func (m *mutableConnPair) SetUpstream(u net.Conn) {
@@ -182,89 +212,290 @@ func (p *RedisProxy) handleConn(ctx context.Context, client net.Conn) {
 	var (
 		upstream     net.Conn
 		upstreamAddr string
+		upstreamTLS  bool
 		uReader      *bufio.Reader
 		uWriter      *bufio.Writer
 	)
 
+	type uRespMsg struct {
+		val respValue
+		err error
+	}
+
 	pendingCh := make(chan pendingCmd, 1024)
-	pubsubMode := make(chan struct{}, 1)
+	uRespCh := make(chan uRespMsg)
 	upstreamClosed := make(chan struct{})
 	errCh := make(chan error, 2)
 
-	startUpstream := func(targetAddr string) error {
-		addr := targetAddr
-		if addr == "" {
-			addr = initialTarget.UpstreamRedis
+	var (
+		inflightMu sync.Mutex
+		inflight   int
+		drainedCh  chan struct{}
+	)
+	incInflight := func() {
+		inflightMu.Lock()
+		inflight++
+		inflightMu.Unlock()
+	}
+	decInflight := func() {
+		inflightMu.Lock()
+		if inflight > 0 {
+			inflight--
 		}
-		if addr == "" {
-			addr = p.cfg.DefaultUpstream
+		if inflight == 0 && drainedCh != nil {
+			close(drainedCh)
+			drainedCh = nil
 		}
+		inflightMu.Unlock()
+	}
+	waitInflight := func() {
+		inflightMu.Lock()
+		if inflight == 0 {
+			inflightMu.Unlock()
+			return
+		}
+		ch := drainedCh
+		if ch == nil {
+			ch = make(chan struct{})
+			drainedCh = ch
+		}
+		inflightMu.Unlock()
+		select {
+		case <-ch:
+		case <-upstreamClosed:
+		case <-ctx.Done():
+		}
+	}
+	flushAndWaitInflight := func() error {
+		if uWriter != nil && uWriter.Buffered() > 0 {
+			if ferr := uWriter.Flush(); ferr != nil {
+				return ferr
+			}
+		}
+		waitInflight()
+		return nil
+	}
+
+	startUpstream := func(targetAddr string, targetTLS bool) error {
+		rawAddr := targetAddr
+		wantTLS := targetTLS
+		if rawAddr == "" {
+			rawAddr = initialTarget.UpstreamRedis
+			wantTLS = wantTLS || initialTarget.UpstreamTLS
+		}
+		if rawAddr == "" {
+			rawAddr = p.cfg.DefaultUpstream
+		}
+		if rawAddr == "" {
+			return errors.New("upstream Redis address not configured")
+		}
+		dialAddr, serverName, useTLS := resolveRedisDialTarget(rawAddr, wantTLS)
 		if upstream != nil {
-			if addr != "" && addr != upstreamAddr {
+			if dialAddr != upstreamAddr || useTLS != upstreamTLS {
 				return errors.New("CROSS_UPSTREAM_REAUTH reconnect and authenticate immediately when targeting dedicated upstream")
 			}
 			return nil
 		}
-		if addr == "" {
-			return errors.New("upstream Redis address not configured")
+		dialer := &net.Dialer{Timeout: p.cfg.DialTimeout}
+		var (
+			conn net.Conn
+			derr error
+		)
+		if useTLS {
+			var tlsCfg *tls.Config
+			if p.cfg.UpstreamTLS != nil {
+				tlsCfg = p.cfg.UpstreamTLS.Clone()
+			} else {
+				tlsCfg = &tls.Config{
+					MinVersion: tls.VersionTLS12,
+				}
+			}
+			if p.cfg.UpstreamTLSOptional && !p.cfg.ExplicitCA && isLoopbackOrPrivateEndpoint(dialAddr) {
+				tlsCfg.InsecureSkipVerify = true // #nosec G402 -- internal docker/loopback Redis TLS without public IP SAN
+			}
+			if tlsCfg.ServerName == "" && serverName != "" {
+				tlsCfg.ServerName = serverName
+			}
+			conn, derr = tls.DialWithDialer(dialer, "tcp", dialAddr, tlsCfg)
+		} else {
+			conn, derr = dialer.DialContext(ctx, "tcp", dialAddr)
 		}
-		conn, derr := (&net.Dialer{Timeout: p.cfg.DialTimeout}).DialContext(ctx, "tcp", addr)
 		if derr != nil {
 			return fmt.Errorf("upstream Redis dial failed: %w", derr)
 		}
 		upstream = conn
-		upstreamAddr = addr
+		upstreamAddr = dialAddr
+		upstreamTLS = useTLS
 		pair.SetUpstream(conn)
 		uReader = bufio.NewReaderSize(conn, 64*1024)
 		uWriter = bufio.NewWriterSize(conn, 64*1024)
 
-		// Upstream -> Client response loop
+		// Reader goroutine: owns uReader exclusively and feeds uRespCh.
+		go func() {
+			for {
+				val, rerr := readRESP(uReader)
+				select {
+				case uRespCh <- uRespMsg{val: val, err: rerr}:
+				case <-upstreamClosed:
+					return
+				}
+				if rerr != nil {
+					return
+				}
+			}
+		}()
+
+		// Ordered reply loop: processes local errors and upstream replies in strict FIFO order.
 		go func() {
 			defer close(upstreamClosed)
-			for {
-				select {
-				case <-pubsubMode:
-					// PubSub switches to asynchronous push messages; relay directly.
-					_, cerr := io.Copy(client, uReader)
-					errCh <- cerr
-					return
-				default:
-				}
+			inPubSub := false
 
-				val, rerr := readRESP(uReader)
-				if rerr != nil {
-					errCh <- rerr
-					return
+			writeLocal := func(meta pendingCmd) error {
+				cWriteMu.Lock()
+				werr := writeRESP(cWriter, meta.localReply)
+				if werr == nil && len(pendingCh) == 0 {
+					werr = cWriter.Flush()
 				}
-				var meta pendingCmd
-				select {
-				case meta = <-pendingCh:
-				default:
-					meta = pendingCmd{}
+				cWriteMu.Unlock()
+				decInflight()
+				return werr
+			}
+
+			writePush := func(val *respValue) error {
+				cWriteMu.Lock()
+				werr := writeRESP(cWriter, val)
+				if werr == nil {
+					werr = cWriter.Flush()
 				}
+				cWriteMu.Unlock()
+				return werr
+			}
+
+			processMatchedReply := func(meta pendingCmd, val respValue) error {
 				if meta.authDone != nil {
 					ok := val.kind != '-' && val.kind != '!'
 					meta.authDone <- ok
 				}
 				if meta.pubsub {
-					select {
-					case pubsubMode <- struct{}{}:
-					default:
-					}
+					inPubSub = true
 				}
-
-				if p.cfg.TransparentEncrypt && (len(meta.execShapes) > 0 || (meta.optedIn && meta.shape != shapeNone)) {
+				if meta.overrideReply != nil {
+					val = *meta.overrideReply
+				} else if p.cfg.TransparentEncrypt && (len(meta.execShapes) > 0 || (meta.optedIn && meta.shape != shapeNone)) {
 					if derr := p.decryptReply(&val, meta); derr != nil {
 						val = respValue{kind: '-', str: []byte("ERR LOCKED trulay-grid decryption failed: " + derr.Error())}
 					}
 				}
 				cWriteMu.Lock()
 				werr := writeRESP(cWriter, &val)
-				if werr == nil && uReader.Buffered() == 0 {
+				if werr == nil && (inPubSub || len(pendingCh) == 0) {
 					werr = cWriter.Flush()
 				}
 				cWriteMu.Unlock()
-				if werr != nil {
+				decInflight()
+				return werr
+			}
+
+			for {
+				if inPubSub {
+					select {
+					case msg := <-uRespCh:
+						if msg.err != nil {
+							errCh <- msg.err
+							return
+						}
+						if werr := writePush(&msg.val); werr != nil {
+							errCh <- werr
+							return
+						}
+					case <-ctx.Done():
+						return
+					}
+					continue
+				}
+
+				var meta pendingCmd
+				haveMeta := false
+				select {
+				case meta = <-pendingCh:
+					haveMeta = true
+				default:
+					select {
+					case meta = <-pendingCh:
+						haveMeta = true
+					case msg := <-uRespCh:
+						if msg.err != nil {
+							errCh <- msg.err
+							return
+						}
+						if msg.val.kind == '>' {
+							if werr := writePush(&msg.val); werr != nil {
+								errCh <- werr
+								return
+							}
+							continue
+						}
+						// Normal upstream reply arrived concurrently with pendingCh:
+						// drain preceding localReply entries and match the FIFO pendingCmd.
+						for {
+							select {
+							case m := <-pendingCh:
+								if m.localReply != nil {
+									if werr := writeLocal(m); werr != nil {
+										errCh <- werr
+										return
+									}
+									continue
+								}
+								if werr := processMatchedReply(m, msg.val); werr != nil {
+									errCh <- werr
+									return
+								}
+							case <-ctx.Done():
+								return
+							}
+							break
+						}
+						continue
+					case <-ctx.Done():
+						return
+					}
+				}
+
+				if !haveMeta {
+					continue
+				}
+				if meta.localReply != nil {
+					if werr := writeLocal(meta); werr != nil {
+						errCh <- werr
+						return
+					}
+					continue
+				}
+
+				var msg uRespMsg
+				for {
+					select {
+					case msg = <-uRespCh:
+					case <-ctx.Done():
+						return
+					}
+					if msg.err != nil {
+						errCh <- msg.err
+						return
+					}
+					if msg.val.kind == '>' {
+						// RESP3 out-of-band push frame: forward without consuming pendingCmd.
+						if werr := writePush(&msg.val); werr != nil {
+							errCh <- werr
+							return
+						}
+						continue
+					}
+					break
+				}
+
+				if werr := processMatchedReply(meta, msg.val); werr != nil {
 					errCh <- werr
 					return
 				}
@@ -276,7 +507,9 @@ func (p *RedisProxy) handleConn(ctx context.Context, client net.Conn) {
 	// Client -> Upstream request loop
 	go func() {
 		var aclTarget *ServiceTarget
+		var stickyTarget *ServiceTarget
 		var inMulti bool
+		var multiDirty bool
 		var multiQueue []pendingCmd
 		for {
 			args, inline, rerr := readRESPCommand(cReader)
@@ -291,12 +524,43 @@ func (p *RedisProxy) handleConn(ctx context.Context, client net.Conn) {
 
 			cmd := strings.ToUpper(string(args[0]))
 
+			if cmd == "RESET" {
+				if upstream == nil {
+					writeClientError("RESET is not supported on cryptographic proxy")
+					continue
+				}
+				if uWriter.Buffered() > 0 {
+					if ferr := uWriter.Flush(); ferr != nil {
+						errCh <- ferr
+						return
+					}
+				}
+				incInflight()
+				select {
+				case pendingCh <- pendingCmd{
+					localReply: &respValue{kind: '-', str: []byte("ERR RESET is not supported on cryptographic proxy")},
+				}:
+				case <-upstreamClosed:
+					decInflight()
+					return
+				case <-ctx.Done():
+					decInflight()
+					return
+				}
+				continue
+			}
+
 			// Determine auth candidate WITHOUT activating until upstream validates credentials.
 			var authCandidate *ServiceTarget
 			hasAuthArg := false
 			if cmd == "AUTH" && len(args) >= 3 {
 				hasAuthArg = true
 				if tgt, ok := p.router.ResolveRedisUser(string(args[1])); ok {
+					authCandidate = &tgt
+				}
+			} else if cmd == "AUTH" && len(args) == 2 {
+				hasAuthArg = true
+				if tgt, ok := p.router.ResolveRedisUser("default"); ok {
 					authCandidate = &tgt
 				}
 			} else if cmd == "HELLO" {
@@ -311,18 +575,48 @@ func (p *RedisProxy) handleConn(ctx context.Context, client net.Conn) {
 				}
 			}
 
-			// Determine per-command effective service target (ACL user > Key prefix > Connection default)
+			// Determine per-command effective service target (ACL user > Connection default; unauthenticated prefix hopping rejected).
 			effTarget := initialTarget
+			if stickyTarget != nil {
+				effTarget = *stickyTarget
+			}
 			if authCandidate != nil {
 				effTarget = *authCandidate
 			} else if aclTarget != nil {
 				effTarget = *aclTarget
-			} else if len(args) >= 2 && keyBearingCommand(cmd) {
-				if resolved, multiErr := p.resolveMultiKeyTarget(cmd, args, initialTarget); multiErr != nil {
+			}
+			if authCandidate == nil && len(args) >= 2 && keyBearingCommand(cmd) {
+				if resolved, multiErr := p.resolveMultiKeyTarget(cmd, args, effTarget); multiErr != nil {
+					if ferr := flushAndWaitInflight(); ferr != nil {
+						errCh <- ferr
+						return
+					}
 					writeClientError(multiErr.Error())
 					errCh <- multiErr
 					return
-				} else if resolved.ServiceID != initialTarget.ServiceID {
+				} else if resolved.ServiceID != effTarget.ServiceID {
+					if aclTarget != nil {
+						hopErr := errors.New("CROSS_SERVICE_ACCESS authenticated connection cannot access another service key prefix")
+						if ferr := flushAndWaitInflight(); ferr != nil {
+							errCh <- ferr
+							return
+						}
+						writeClientError(hopErr.Error())
+						errCh <- hopErr
+						return
+					}
+					if stickyTarget != nil {
+						hopErr := errors.New("AUTHENTICATION_REQUIRED cross-service key prefix access requires AUTH")
+						if ferr := flushAndWaitInflight(); ferr != nil {
+							errCh <- ferr
+							return
+						}
+						writeClientError(hopErr.Error())
+						errCh <- hopErr
+						return
+					}
+					copySticky := resolved
+					stickyTarget = &copySticky
 					effTarget = resolved
 					bindMu.Lock()
 					if boundService != resolved.ServiceID {
@@ -335,12 +629,16 @@ func (p *RedisProxy) handleConn(ctx context.Context, client net.Conn) {
 
 			optedIn, projectID, authErr := p.epochs.AuthorizeDBAccess(effTarget.ServiceID)
 			if authErr != nil {
+				if ferr := flushAndWaitInflight(); ferr != nil {
+					errCh <- ferr
+					return
+				}
 				writeClientError(fmt.Sprintf("LOCKED trulay-grid encryption controller blocked Redis access: %v", authErr))
 				errCh <- authErr
 				return
 			}
 
-			if uerr := startUpstream(effTarget.UpstreamRedis); uerr != nil {
+			if uerr := startUpstream(effTarget.UpstreamRedis, effTarget.UpstreamTLS); uerr != nil {
 				writeClientError(uerr.Error())
 				errCh <- uerr
 				return
@@ -348,10 +646,35 @@ func (p *RedisProxy) handleConn(ctx context.Context, client net.Conn) {
 
 			encryptActive := p.cfg.TransparentEncrypt && optedIn && effTarget.EncryptRedisVals
 			if encryptActive && isUnsupportedEncryptedRedisCmd(cmd) {
-				writeClientError(fmt.Sprintf("ENCRYPTED_KEY_UNSUPPORTED %s cannot operate on transparently encrypted values", cmd))
+				if inMulti {
+					multiDirty = true
+				}
+				if uWriter.Buffered() > 0 {
+					if ferr := uWriter.Flush(); ferr != nil {
+						errCh <- ferr
+						return
+					}
+				}
+				errMsg := fmt.Sprintf("ERR ENCRYPTED_KEY_UNSUPPORTED %s cannot operate on transparently encrypted values", cmd)
+				incInflight()
+				select {
+				case pendingCh <- pendingCmd{
+					localReply: &respValue{kind: '-', str: []byte(errMsg)},
+				}:
+				case <-upstreamClosed:
+					decInflight()
+					return
+				case <-ctx.Done():
+					decInflight()
+					return
+				}
 				continue
 			}
 			if err := p.encryptCommandArgs(cmd, args, encryptActive, effTarget.ServiceID, projectID); err != nil {
+				if ferr := flushAndWaitInflight(); ferr != nil {
+					errCh <- ferr
+					return
+				}
 				writeClientError(fmt.Sprintf("LOCKED encryption unavailable: %v", err))
 				errCh <- err
 				return
@@ -359,17 +682,28 @@ func (p *RedisProxy) handleConn(ctx context.Context, client net.Conn) {
 
 			shape := expectedDecryptShape(cmd, args)
 			var execShapes []pendingCmd
+			var overrideReply *respValue
 			if cmd == "MULTI" {
-				inMulti = true
-				multiQueue = nil
+				if !inMulti {
+					inMulti = true
+					multiDirty = false
+					multiQueue = nil
+				}
 				shape = shapeNone
 			} else if cmd == "DISCARD" {
 				inMulti = false
+				multiDirty = false
 				multiQueue = nil
 				shape = shapeNone
 			} else if cmd == "EXEC" {
-				execShapes = multiQueue
+				if inMulti && multiDirty {
+					args = [][]byte{[]byte("DISCARD")}
+					overrideReply = &respValue{kind: '-', str: []byte("EXECABORT Transaction discarded because of previous errors.")}
+				} else {
+					execShapes = multiQueue
+				}
 				inMulti = false
+				multiDirty = false
 				multiQueue = nil
 				shape = shapeNone
 			} else if inMulti && cmd != "AUTH" && cmd != "HELLO" && cmd != "QUIT" {
@@ -388,21 +722,31 @@ func (p *RedisProxy) handleConn(ctx context.Context, client net.Conn) {
 				authDoneCh = make(chan bool, 1)
 			}
 
-			pendingCh <- pendingCmd{
-				serviceID:  effTarget.ServiceID,
-				projectID:  projectID,
-				optedIn:    optedIn,
-				shape:      shape,
-				pubsub:     isPubSub,
-				authDone:   authDoneCh,
-				execShapes: execShapes,
+			incInflight()
+			select {
+			case pendingCh <- pendingCmd{
+				serviceID:     effTarget.ServiceID,
+				projectID:     projectID,
+				optedIn:       optedIn,
+				shape:         shape,
+				pubsub:        isPubSub,
+				authDone:      authDoneCh,
+				execShapes:    execShapes,
+				overrideReply: overrideReply,
+			}:
+			case <-upstreamClosed:
+				decInflight()
+				return
+			case <-ctx.Done():
+				decInflight()
+				return
 			}
 
 			if werr := writeRESPArrayArgs(uWriter, args); werr != nil {
 				errCh <- werr
 				return
 			}
-			if authDoneCh != nil || cReader.Buffered() == 0 {
+			if authDoneCh != nil || cReader.Buffered() == 0 || len(pendingCh) >= 512 {
 				if ferr := uWriter.Flush(); ferr != nil {
 					errCh <- ferr
 					return
@@ -413,12 +757,20 @@ func (p *RedisProxy) handleConn(ctx context.Context, client net.Conn) {
 				case authOK := <-authDoneCh:
 					if authOK && authCandidate != nil {
 						aclTarget = authCandidate
+						copySticky := *authCandidate
+						stickyTarget = &copySticky
 						bindMu.Lock()
 						p.router.RebindConn(boundService, authCandidate.ServiceID, pair)
 						boundService = authCandidate.ServiceID
 						bindMu.Unlock()
 					} else if !authOK && isAuthCmd {
-						aclTarget = nil
+						// Fail closed: never clear stickyTarget or aclTarget on failed AUTH
+						// so a bound connection cannot hop to another tenant prefix.
+						if stickyTarget != nil || aclTarget != nil {
+							waitInflight()
+							errCh <- errors.New("AUTHENTICATION_FAILED failed AUTH on bound connection")
+							return
+						}
 					}
 				case <-upstreamClosed:
 					return
@@ -433,7 +785,10 @@ func (p *RedisProxy) handleConn(ctx context.Context, client net.Conn) {
 		}
 	}()
 
-	<-errCh
+	select {
+	case <-errCh:
+	case <-ctx.Done():
+	}
 }
 
 func (p *RedisProxy) resolveMultiKeyTarget(cmd string, args [][]byte, fallback ServiceTarget) (ServiceTarget, error) {
@@ -447,7 +802,7 @@ func (p *RedisProxy) resolveMultiKeyTarget(cmd string, args [][]byte, fallback S
 		for i := 1; i+1 < len(args); i++ {
 			keyIndices = append(keyIndices, i)
 		}
-	case "RENAME", "RENAMENX", "COPY", "RPOPLPUSH", "LMOVE", "SMOVE":
+	case "RENAME", "RENAMENX", "COPY", "RPOPLPUSH", "BRPOPLPUSH", "LMOVE", "BLMOVE", "SMOVE":
 		keyIndices = []int{1, 2}
 	case "MSET", "MSETNX":
 		for i := 1; i < len(args); i += 2 {
@@ -490,7 +845,7 @@ func keyBearingCommand(cmd string) bool {
 		"RENAME", "RENAMENX", "COPY", "TYPE", "DUMP", "RESTORE",
 		"HSET", "HGET", "HMSET", "HMGET", "HGETALL", "HVALS", "HKEYS", "HLEN", "HEXISTS", "HSETNX", "HDEL",
 		"LPUSH", "RPUSH", "LPUSHX", "RPUSHX", "LPOP", "RPOP", "BLPOP", "BRPOP",
-		"LRANGE", "LINDEX", "LSET", "LLEN", "LTRIM", "LREM", "RPOPLPUSH", "LMOVE",
+		"LRANGE", "LINDEX", "LSET", "LLEN", "LTRIM", "LREM", "RPOPLPUSH", "BRPOPLPUSH", "LMOVE", "BLMOVE",
 		"SADD", "SREM", "SMEMBERS", "SCARD", "SISMEMBER", "SMOVE", "SDIFF", "SINTER", "SUNION",
 		"ZADD", "ZREM", "ZRANGE", "ZCARD", "ZSCORE",
 		"PFADD", "PFCOUNT", "PFMERGE":
@@ -511,7 +866,7 @@ func isUnsupportedEncryptedRedisCmd(cmd string) bool {
 
 func expectedDecryptShape(cmd string, args [][]byte) decryptShape {
 	switch cmd {
-	case "GET", "GETSET", "GETDEL", "GETEX", "HGET", "LINDEX", "RPOPLPUSH", "LMOVE":
+	case "GET", "GETSET", "GETDEL", "GETEX", "HGET", "LINDEX", "RPOPLPUSH", "BRPOPLPUSH", "LMOVE", "BLMOVE":
 		return shapeSingleBulk
 	case "SET":
 		for i := 3; i < len(args); i++ {
@@ -579,9 +934,6 @@ func (p *RedisProxy) encryptCommandArgs(cmd string, args [][]byte, active bool, 
 	defer crypto.ZeroBytes(redisKEK)
 
 	for _, idx := range valIndices {
-		if bytes.HasPrefix(args[idx], []byte(crypto.RedisValuePrefix)) {
-			continue
-		}
 		enc, err := crypto.EncryptRedisValue(redisKEK, 0, serviceID, args[idx])
 		if err != nil {
 			return err
@@ -691,9 +1043,16 @@ func readRESPCommand(r *bufio.Reader) ([][]byte, bool, error) {
 			continue
 		}
 		if b[0] == '*' {
-			v, err := readRESP(r)
+			lim := respLimits{
+				maxElements: maxRESPElements,
+				maxBytes:    maxRESPCommandBytes,
+			}
+			v, err := readRESPDepth(r, 0, &lim)
 			if err != nil {
 				return nil, false, err
+			}
+			if len(v.arr) > maxRESPElements {
+				return nil, false, fmt.Errorf("RESP array count %d exceeds %d limit", len(v.arr), maxRESPElements)
 			}
 			args := make([][]byte, 0, len(v.arr))
 			for _, elem := range v.arr {
@@ -710,6 +1069,9 @@ func readRESPCommand(r *bufio.Reader) ([][]byte, bool, error) {
 			return nil, true, err
 		}
 		fields := strings.Fields(string(line))
+		if len(fields) > maxRESPElements {
+			return nil, true, fmt.Errorf("RESP inline argument count %d exceeds %d limit", len(fields), maxRESPElements)
+		}
 		args := make([][]byte, len(fields))
 		for i, f := range fields {
 			args[i] = []byte(f)
@@ -718,31 +1080,96 @@ func readRESPCommand(r *bufio.Reader) ([][]byte, bool, error) {
 	}
 }
 
+const (
+	maxRESPLineBytes    = 64 * 1024
+	maxRESPElements     = 65536
+	maxRESPCommandBytes = 64 * 1024 * 1024
+	maxRESPDepth        = 8
+)
+
+type respLimits struct {
+	maxElements int
+	maxBytes    int
+}
+
+func (l *respLimits) consumeBytes(n int) error {
+	if l == nil {
+		return nil
+	}
+	if n < 0 || n > l.maxBytes {
+		return errors.New("RESP command exceeds 64 MiB limit")
+	}
+	l.maxBytes -= n
+	return nil
+}
+
+func (l *respLimits) consumeElements(n int) error {
+	if l == nil {
+		return nil
+	}
+	if n < 0 || n > l.maxElements {
+		return fmt.Errorf("RESP element count %d exceeds %d limit", n, maxRESPElements)
+	}
+	l.maxElements -= n
+	return nil
+}
+
 func readRESPLine(r *bufio.Reader) ([]byte, error) {
-	line, err := r.ReadBytes('\n')
+	var buf []byte
+	for {
+		frag, err := r.ReadSlice('\n')
+		if len(buf)+len(frag) > maxRESPLineBytes {
+			return nil, errors.New("RESP line exceeds 64 KiB limit")
+		}
+		buf = append(buf, frag...)
+		if err == nil {
+			break
+		}
+		if err != bufio.ErrBufferFull {
+			return nil, err
+		}
+	}
+	if len(buf) >= 2 && buf[len(buf)-2] == '\r' {
+		return buf[:len(buf)-2], nil
+	}
+	if len(buf) >= 1 && buf[len(buf)-1] == '\n' {
+		return buf[:len(buf)-1], nil
+	}
+	return buf, nil
+}
+
+func readRESPLineLimited(r *bufio.Reader, lim *respLimits) ([]byte, error) {
+	line, err := readRESPLine(r)
 	if err != nil {
 		return nil, err
 	}
-	if len(line) >= 2 && line[len(line)-2] == '\r' {
-		return line[:len(line)-2], nil
-	}
-	if len(line) >= 1 && line[len(line)-1] == '\n' {
-		return line[:len(line)-1], nil
+	if err := lim.consumeBytes(len(line) + 2); err != nil {
+		return nil, err
 	}
 	return line, nil
 }
 
 func readRESP(r *bufio.Reader) (respValue, error) {
+	return readRESPDepth(r, 0, nil)
+}
+
+func readRESPDepth(r *bufio.Reader, depth int, lim *respLimits) (respValue, error) {
+	if depth > maxRESPDepth {
+		return respValue{}, fmt.Errorf("RESP nesting depth exceeds %d limit", maxRESPDepth)
+	}
 	prefix, err := r.ReadByte()
 	if err != nil {
 		return respValue{}, err
 	}
+	if err := lim.consumeBytes(1); err != nil {
+		return respValue{}, err
+	}
 	switch prefix {
 	case '+', '-', ':', '_', ',', '#', '(':
-		line, err := readRESPLine(r)
+		line, err := readRESPLineLimited(r, lim)
 		return respValue{kind: prefix, str: line}, err
 	case '$', '!', '=':
-		line, err := readRESPLine(r)
+		line, err := readRESPLineLimited(r, lim)
 		if err != nil {
 			return respValue{}, err
 		}
@@ -756,13 +1183,16 @@ func readRESP(r *bufio.Reader) (respValue, error) {
 		if n > 64*1024*1024 {
 			return respValue{}, errors.New("RESP bulk string exceeds 64MB limit")
 		}
+		if err := lim.consumeBytes(n + 2); err != nil {
+			return respValue{}, err
+		}
 		buf := make([]byte, n+2)
 		if _, err := io.ReadFull(r, buf); err != nil {
 			return respValue{}, err
 		}
 		return respValue{kind: prefix, str: buf[:n]}, nil
 	case '*', '~', '>':
-		line, err := readRESPLine(r)
+		line, err := readRESPLineLimited(r, lim)
 		if err != nil {
 			return respValue{}, err
 		}
@@ -773,17 +1203,27 @@ func readRESP(r *bufio.Reader) (respValue, error) {
 		if n < 0 {
 			return respValue{kind: prefix, isNil: true}, nil
 		}
-		arr := make([]respValue, n)
+		if n > maxRESPElements {
+			return respValue{}, fmt.Errorf("RESP array count %d exceeds %d limit", n, maxRESPElements)
+		}
+		if err := lim.consumeElements(n); err != nil {
+			return respValue{}, err
+		}
+		initCap := n
+		if initCap > 1024 {
+			initCap = 1024
+		}
+		arr := make([]respValue, 0, initCap)
 		for i := 0; i < n; i++ {
-			elem, err := readRESP(r)
+			elem, err := readRESPDepth(r, depth+1, lim)
 			if err != nil {
 				return respValue{}, err
 			}
-			arr[i] = elem
+			arr = append(arr, elem)
 		}
 		return respValue{kind: prefix, arr: arr}, nil
 	case '|':
-		line, err := readRESPLine(r)
+		line, err := readRESPLineLimited(r, lim)
 		if err != nil {
 			return respValue{}, err
 		}
@@ -791,22 +1231,33 @@ func readRESP(r *bufio.Reader) (respValue, error) {
 		if err != nil || n < 0 {
 			return respValue{}, fmt.Errorf("invalid RESP3 attribute count %q: %w", line, err)
 		}
-		pairs := make([]respValue, n*2)
-		for i := 0; i < n*2; i++ {
-			elem, err := readRESP(r)
+		if n > maxRESPElements/2 {
+			return respValue{}, fmt.Errorf("RESP3 attribute count %d exceeds %d limit", n, maxRESPElements/2)
+		}
+		total := n * 2
+		if err := lim.consumeElements(total); err != nil {
+			return respValue{}, err
+		}
+		initCap := total
+		if initCap > 1024 {
+			initCap = 1024
+		}
+		pairs := make([]respValue, 0, initCap)
+		for i := 0; i < total; i++ {
+			elem, err := readRESPDepth(r, depth+1, lim)
 			if err != nil {
 				return respValue{}, err
 			}
-			pairs[i] = elem
+			pairs = append(pairs, elem)
 		}
-		inner, err := readRESP(r)
+		inner, err := readRESPDepth(r, depth+1, lim)
 		if err != nil {
 			return respValue{}, err
 		}
 		inner.attrs = append([]respAttrBlock{{pairs: pairs}}, inner.attrs...)
 		return inner, nil
 	case '%':
-		line, err := readRESPLine(r)
+		line, err := readRESPLineLimited(r, lim)
 		if err != nil {
 			return respValue{}, err
 		}
@@ -817,18 +1268,29 @@ func readRESP(r *bufio.Reader) (respValue, error) {
 		if n < 0 {
 			return respValue{kind: prefix, isNil: true}, nil
 		}
-		arr := make([]respValue, n*2)
-		for i := 0; i < n*2; i++ {
-			elem, err := readRESP(r)
+		if n > maxRESPElements/2 {
+			return respValue{}, fmt.Errorf("RESP map count %d exceeds %d limit", n, maxRESPElements/2)
+		}
+		total := n * 2
+		if err := lim.consumeElements(total); err != nil {
+			return respValue{}, err
+		}
+		initCap := total
+		if initCap > 1024 {
+			initCap = 1024
+		}
+		arr := make([]respValue, 0, initCap)
+		for i := 0; i < total; i++ {
+			elem, err := readRESPDepth(r, depth+1, lim)
 			if err != nil {
 				return respValue{}, err
 			}
-			arr[i] = elem
+			arr = append(arr, elem)
 		}
 		return respValue{kind: prefix, arr: arr}, nil
 	default:
 		// Unexpected non-prefixed line fallback
-		rest, err := readRESPLine(r)
+		rest, err := readRESPLineLimited(r, lim)
 		if err != nil {
 			return respValue{}, err
 		}

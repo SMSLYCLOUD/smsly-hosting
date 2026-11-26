@@ -46,14 +46,18 @@ BUNDLE_SERVICE_LABEL = "grid.addon.service"
 BUNDLE_MANAGED_LABEL = "grid.addon.managed"
 COMPOSE_FILE_NAME = "grid-addons-compose.yml"
 
-# Keys that the provisioner controls — extra must not overwrite them
-_CONTROLLED_COMPOSE_KEYS = frozenset({
-    "image", "ports", "volumes", "environment", "healthcheck",
-    "cap_add", "cap_drop", "security_opt", "pids_limit", "init",
-    "privileged", "network_mode", "pid", "ipc", "uts", "userns_mode",
-    "cgroup", "devices", "runtime", "dns", "extra_hosts",
-    "command", "restart", "networks", "labels", "depends_on",
+# Strict allowlist of safe extra keys a bundle service may supply.
+_ALLOWED_BUNDLE_EXTRA_KEYS = frozenset({
+    "command", "entrypoint", "working_dir", "user",
+    "healthcheck", "depends_on", "expose", "tmpfs", "ulimits",
 })
+_DANGEROUS_BUNDLE_EXTRA_KEYS = frozenset({
+    "privileged", "network_mode", "pid", "ipc", "uts", "userns_mode",
+    "cgroup", "cgroup_parent", "devices", "runtime", "cap_add", "cap_drop",
+    "security_opt", "ports", "volumes",
+})
+_NAMED_BUNDLE_VOLUME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_FORBIDDEN_BUNDLE_LABEL_PREFIXES = ("traefik.", "com.paas.", "smsly.", "grid.addon.")
 
 _DANGEROUS_BUNDLE_CAPS = frozenset({
     "ALL", "SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE",
@@ -73,6 +77,18 @@ class BundleProvisioner:
     Lifecycle methods mirror :class:`AddonProvisioner` so that bundle
     components appear and behave like standard addons in the dashboard.
     """
+
+    _SCRIPT_PATH_RE = re.compile(r"^/[A-Za-z0-9/_.-]+$")
+
+    @classmethod
+    def _validate_script_path(cls, script_path: Any) -> str:
+        raw = str(script_path or "").strip()
+        if not raw or ".." in raw or not cls._SCRIPT_PATH_RE.fullmatch(raw):
+            raise ValueError(
+                f"Unsafe bundle script path {script_path!r}: must match "
+                "^/[A-Za-z0-9/_.-]+$ without '..'."
+            )
+        return raw
 
     # -------------------------------------------------------------------
     # Provision
@@ -369,19 +385,24 @@ class BundleProvisioner:
             backup_dir, f"{bundle_name}_{component_name}_{timestamp}.tar.gz",
         )
 
-        # Try user-provided backup script first
+        # Try user-provided backup script first (runs inside container, never on host)
         if backup_config and backup_config.get("backup_script"):
-            script_path = backup_config["backup_script"]
+            script_path = self._validate_script_path(backup_config["backup_script"])
             try:
                 result = subprocess.run(
-                    ["bash", script_path, container_name, backup_path],
-                    capture_output=True, text=True, timeout=300,
+                    ["docker", "exec", container_name, "sh", script_path],
+                    capture_output=True, timeout=300,
                 )
-                if result.returncode == 0 and os.path.isfile(backup_path):
-                    return backup_path
+                if result.returncode == 0:
+                    if result.stdout:
+                        with open(backup_path, "wb") as fh:
+                            fh.write(result.stdout)
+                    if os.path.isfile(backup_path):
+                        return backup_path
                 logger.warning(
                     "Backup script failed for %s/%s: %s",
-                    bundle_name, component_name, result.stderr,
+                    bundle_name, component_name,
+                    (result.stderr or b"").decode(errors="replace"),
                 )
             except Exception as exc:
                 logger.warning(
@@ -449,12 +470,12 @@ class BundleProvisioner:
         """Restore a backup to a bundle component."""
         container_name = self._container_name(bundle_name, service_id, component_name)
 
-        # Try user-provided restore script first
+        # Try user-provided restore script first (runs inside container, never on host)
         if backup_config and backup_config.get("restore_script"):
-            script_path = backup_config["restore_script"]
+            script_path = self._validate_script_path(backup_config["restore_script"])
             try:
                 result = subprocess.run(
-                    ["bash", script_path, container_name, backup_path],
+                    ["docker", "exec", container_name, "sh", script_path],
                     capture_output=True, text=True, timeout=300,
                 )
                 if result.returncode == 0:
@@ -469,8 +490,27 @@ class BundleProvisioner:
                     bundle_name, component_name, exc,
                 )
 
-        # Fallback: docker cp restore with proper error checking
+        # Fallback: extract archive via a short-lived alpine helper container
+        # while the target container is stopped (never `docker exec` on a stopped container).
         try:
+            real_backup = os.path.realpath(backup_path)
+            if not os.path.isfile(real_backup):
+                logger.error("Restore archive not found: %s", backup_path)
+                return False
+
+            import tarfile
+            with tarfile.open(real_backup, "r:gz") as tf:
+                for member in tf.getmembers():
+                    mname = member.name.lstrip("/")
+                    if ".." in mname.split("/"):
+                        logger.error("Unsafe tar member in bundle backup: %s", member.name)
+                        return False
+                    if member.issym() or member.islnk():
+                        target = member.linkname or ""
+                        if target.startswith("/") or ".." in target.split("/"):
+                            logger.error("Unsafe link in bundle backup: %s -> %s", member.name, target)
+                            return False
+
             result = subprocess.run(
                 ["docker", "stop", container_name],
                 capture_output=True, timeout=30,
@@ -478,26 +518,20 @@ class BundleProvisioner:
             if result.returncode != 0:
                 logger.error("docker stop failed for %s: %s", container_name, result.stderr)
 
+            backup_dir = os.path.dirname(real_backup)
+            backup_file = os.path.basename(real_backup)
             result = subprocess.run(
-                ["docker", "cp", backup_path, f"{container_name}:/tmp/restore.tar.gz"],
-                capture_output=True, timeout=60,
-            )
-            if result.returncode != 0:
-                logger.error("docker cp failed for %s: %s", container_name, result.stderr)
-                # Restart the container even though restore failed
-                subprocess.run(
-                    ["docker", "start", container_name],
-                    capture_output=True, timeout=30,
-                )
-                return False
-
-            result = subprocess.run(
-                ["docker", "exec", container_name, "tar", "xzf", "/tmp/restore.tar.gz"],
+                [
+                    "docker", "run", "--rm",
+                    "--volumes-from", container_name,
+                    "-v", f"{backup_dir}:/backup:ro",
+                    "alpine:latest",
+                    "tar", "xzf", f"/backup/{backup_file}", "-C", "/",
+                ],
                 capture_output=True, timeout=300,
             )
             if result.returncode != 0:
                 logger.error("tar restore failed for %s: %s", container_name, result.stderr)
-                # Still try to start the container
                 subprocess.run(
                     ["docker", "start", container_name],
                     capture_output=True, timeout=30,
@@ -641,9 +675,24 @@ class BundleProvisioner:
 
     def _compose_path(self, bundle_name: str, service_id: str) -> str:
         """Path to the generated docker-compose file."""
-        return os.path.join(
-            "/app", "bundles", service_id, bundle_name, COMPOSE_FILE_NAME,
+        b_name = str(bundle_name or "")
+        s_id = str(service_id or "")
+        if (
+            not b_name
+            or not s_id
+            or any(bad in val for val in (b_name, s_id) for bad in ("/", "\\", "..", "\x00"))
+        ):
+            raise ValueError("Invalid bundle_name or service_id for compose path.")
+        bundles_root = os.path.realpath(os.path.join("/app", "bundles"))
+        candidate = os.path.realpath(
+            os.path.join(bundles_root, s_id, b_name, COMPOSE_FILE_NAME)
         )
+        try:
+            if os.path.commonpath([candidate, bundles_root]) != bundles_root or candidate == bundles_root:
+                raise ValueError("Bundle compose path escapes /app/bundles.")
+        except ValueError as exc:
+            raise ValueError("Bundle compose path escapes /app/bundles.") from exc
+        return candidate
 
     def _project_name(self, bundle_name: str, service_id: str) -> str:
         """Isolated compose project name for a bundle stack.
@@ -736,21 +785,28 @@ class BundleProvisioner:
                 bundle_resolv_path = None
 
         for svc in services:
-            # Merge managed labels with user-defined labels
-            labels = {
+            # Build labels: user labels first (excluding platform namespaces), then platform labels
+            labels: dict[str, str] = {}
+            if svc.labels:
+                for lbl in svc.labels:
+                    if ":" in lbl:
+                        k, v = lbl.split(":", 1)
+                        k_clean = k.strip()
+                        v_clean = v.strip()
+                    else:
+                        k_clean = lbl.strip()
+                        v_clean = ""
+                    k_lower = k_clean.lower()
+                    if k_lower == "managed_by" or k_lower.startswith(_FORBIDDEN_BUNDLE_LABEL_PREFIXES):
+                        continue
+                    labels[k_clean] = v_clean
+            labels.update({
                 BUNDLE_MANAGED_LABEL: "true",
                 BUNDLE_LABEL_PREFIX: bundle.name,
                 BUNDLE_COMPONENT_LABEL: svc.name,
                 BUNDLE_SERVICE_LABEL: service_name,
                 "smsly.service_id": service_id,
-            }
-            if svc.labels:
-                for lbl in svc.labels:
-                    if ":" in lbl:
-                        k, v = lbl.split(":", 1)
-                        labels[k.strip()] = v.strip()
-                    else:
-                        labels[lbl.strip()] = ""
+            })
 
             svc_def: dict[str, Any] = {
                 "networks": [network_alias],
@@ -782,33 +838,37 @@ class BundleProvisioner:
                 # Repo service that wasn't built (shouldn't happen)
                 continue
 
-            # Ports
+            # Strip host port mappings on tenant bundle services (internal expose only)
             if svc.ports:
-                svc_def["ports"] = list(svc.ports)
+                logger.warning(
+                    "Stripping host port mappings %s on bundle service '%s' (internal expose only)",
+                    svc.ports,
+                    svc.name,
+                )
+                exposed_ports: list[str] = []
+                for p in svc.ports:
+                    cport = str(p).split(":")[-1].split("/")[0].strip()
+                    if cport and cport not in exposed_ports:
+                        exposed_ports.append(cport)
+                if exposed_ports:
+                    svc_def["expose"] = exposed_ports
 
-            # Volumes (validate against sensitive host binds)
+            # Volumes (reject ALL host bind mounts; allow named Docker volumes only)
             vols_list: list[str] = []
             if svc.volumes:
                 for vol in svc.volumes:
                     v_str = str(vol).strip()
-                    parts = v_str.split(":")
-                    src = parts[0].strip().replace("\\", "/") if len(parts) >= 2 else ""
-                    if "docker.sock" in src.lower():
-                        raise ValueError(
-                            f"Bundle service '{svc.name}' mounts docker.sock which is forbidden."
-                        )
-                    if ".." in src.split("/"):
-                        raise ValueError(
-                            f"Bundle service '{svc.name}' uses parent traversal in volume '{v_str}'."
-                        )
-                    if src.startswith("/"):
-                        norm = os.path.normpath(src).replace("\\", "/")
-                        if norm in ("/", "/var") or any(
-                            norm == p or norm.startswith(p + "/")
-                            for p in _FORBIDDEN_BUNDLE_BIND_PREFIXES
+                    if ":" in v_str:
+                        src = v_str.split(":", 1)[0].strip().replace("\\", "/")
+                        if (
+                            not src
+                            or src.startswith(("/", "./", "../", "~", "$"))
+                            or "/" in src
+                            or not _NAMED_BUNDLE_VOLUME_RE.match(src)
                         ):
                             raise ValueError(
-                                f"Bundle service '{svc.name}' mounts sensitive host path '{src}'."
+                                f"Bundle service '{svc.name}' uses host bind mount '{v_str}' "
+                                "which is forbidden; use named Docker volumes only."
                             )
                     vols_list.append(v_str)
             if bundle_resolv_path and os.path.isfile(bundle_resolv_path):
@@ -855,24 +915,15 @@ class BundleProvisioner:
             else:
                 svc_def["restart"] = "unless-stopped"
 
-            # Extra keys (ulimits, sysctls, etc.) — guard against overwriting
+            # Extra keys — reject dangerous security directives explicitly, allowlist safe keys
             for k, v in svc.extra.items():
-                if k == "privileged" and v is True:
+                if k in _DANGEROUS_BUNDLE_EXTRA_KEYS:
                     raise ValueError(
-                        f"Bundle service '{svc.name}' sets privileged: true which is forbidden."
+                        f"Bundle service '{svc.name}' cannot set restricted directive '{k}'."
                     )
-                if k in ("network_mode", "pid", "ipc", "uts", "userns_mode", "cgroup") and str(v).strip().lower() == "host":
-                    raise ValueError(
-                        f"Bundle service '{svc.name}' sets {k}: host which is forbidden."
-                    )
-                if k == "devices" and v:
-                    raise ValueError(
-                        f"Bundle service '{svc.name}' declares host devices which is forbidden."
-                    )
-                if k in _CONTROLLED_COMPOSE_KEYS:
+                if k not in _ALLOWED_BUNDLE_EXTRA_KEYS:
                     logger.warning(
-                        "Ignoring extra key '%s' for service '%s' "
-                        "(overwrites a controlled compose key)",
+                        "Ignoring disallowed extra key '%s' for bundle service '%s'",
                         k, svc.name,
                     )
                     continue
@@ -980,11 +1031,29 @@ class BundleProvisioner:
 
         repo_dir = os.path.join(work_dir, svc.name)
 
-        # Clone
-        clone_cmd = ["git", "clone", "--depth", "1"]
+        # Clone (enforce HTTPS-only public Git URLs)
+        repo_raw = str(svc.repo or '').strip()
+        if not repo_raw or repo_raw.startswith('-') or repo_raw.lower().startswith(('ext::', 'fd::')):
+            raise ValueError("Invalid or unsafe bundle repository URL.")
+        from urllib.parse import urlparse
+        from apps.core.validators import validate_ssrf
+        parsed_repo = urlparse(repo_raw)
+        if parsed_repo.scheme.lower() != "https" or not parsed_repo.hostname:
+            raise ValueError("Bundle repository URL must use https:// with a public hostname.")
+        validate_ssrf(repo_raw, fail_closed_dns=True)
+
+        clone_cmd = [
+            "git", "clone",
+            "-c", "http.followRedirects=false",
+            "-c", "protocol.file.allow=never",
+            "--depth", "1",
+        ]
         if svc.branch:
-            clone_cmd.extend(["--branch", svc.branch])
-        clone_cmd.extend([svc.repo, repo_dir])
+            branch_str = str(svc.branch).strip()
+            if branch_str.startswith('-') or any(c in branch_str for c in ('\x00', '\r', '\n')):
+                raise ValueError("Invalid bundle branch name.")
+            clone_cmd.extend(["--branch", branch_str])
+        clone_cmd.extend(["--", repo_raw, repo_dir])
 
         result = subprocess.run(
             clone_cmd, capture_output=True, text=True, timeout=120,
@@ -992,8 +1061,14 @@ class BundleProvisioner:
         if result.returncode != 0:
             raise RuntimeError(f"git clone failed: {result.stderr}")
 
-        # Build context
-        context = os.path.join(repo_dir, svc.context or ".")
+        from apps.deployments.services.pipeline.clone import _sanitize_repo_symlinks
+        _sanitize_repo_symlinks(repo_dir)
+
+        # Build context (must stay inside repo_dir)
+        repo_real = os.path.realpath(repo_dir)
+        context = os.path.realpath(os.path.join(repo_real, svc.context or "."))
+        if context != repo_real and not context.startswith(repo_real + os.sep):
+            raise ValueError(f"Bundle service '{svc.name}' context escapes cloned repository.")
 
         # Detect build strategy
         build_type = svc.build or "dockerfile"
@@ -1003,14 +1078,21 @@ class BundleProvisioner:
             if not dockerfile:
                 # Auto-detect Dockerfile
                 for candidate in ("Dockerfile", "dockerfile", "Containerfile"):
-                    if os.path.isfile(os.path.join(context, candidate)):
+                    cand_path = os.path.join(context, candidate)
+                    if os.path.isfile(cand_path) and not os.path.islink(cand_path):
                         dockerfile = candidate
                         break
+
+            dockerfile_path = os.path.realpath(
+                os.path.join(context, dockerfile) if dockerfile else os.path.join(context, "Dockerfile")
+            )
+            if not dockerfile_path.startswith(repo_real + os.sep):
+                raise ValueError(f"Bundle service '{svc.name}' Dockerfile path escapes cloned repository.")
 
             build_cmd = [
                 "docker", "build",
                 "-t", tag,
-                "-f", os.path.join(context, dockerfile) if dockerfile else os.path.join(context, "Dockerfile"),
+                "-f", dockerfile_path,
                 context,
             ]
         else:

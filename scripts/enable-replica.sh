@@ -155,9 +155,9 @@ set_replica_env() {
     if [ -z "$existing" ]; then
         merged="$entry"
     else
-        # De-dupe while preserving order.
-        merged="$(printf '%s\n%s\n' "$existing" "$entry" \
-            | awk '!seen[$0]++' \
+        # Split comma-separated entries and de-dupe while preserving order.
+        merged="$(printf '%s\n%s\n' "${existing//,/$'\n'}" "$entry" \
+            | awk 'NF && !seen[$0]++' \
             | paste -sd, -)"
     fi
     env_set "DB_REPLICA_HOSTS" "$merged"
@@ -230,6 +230,13 @@ main() {
     require_env_file
 
     cd "$INSTALL_DIR"
+
+    POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(env_get POSTGRES_PASSWORD)}"
+    local _env_pg_user="" _env_pg_db=""
+    _env_pg_user="$(env_get POSTGRES_USER)"
+    _env_pg_db="$(env_get POSTGRES_DB)"
+    [ -n "$_env_pg_user" ] && PG_USER="$_env_pg_user"
+    [ -n "$_env_pg_db" ] && PG_DB="$_env_pg_db"
 
     bold "SMSLY Hosting — Enable PostgreSQL Read Replica"
     echo

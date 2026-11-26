@@ -9,6 +9,7 @@ import { firstApiError } from '@/lib/apiErrors';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Card } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Save, AlertTriangle, Check, Loader2, Search, FileText, Code2, Trash2 } from 'lucide-react';
@@ -295,33 +296,37 @@ export function AdvancedTab({ service, onUpdated }: { service: Service; onUpdate
                     </div>
                 )}
 
-                <div className="grid grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                     <div className="space-y-2">
-                        <label className="text-sm font-medium">Docker Image</label>
+                        <Label htmlFor="adv-docker-image" className="text-sm font-medium">Docker Image</Label>
                         <Input
+                            id="adv-docker-image"
                             value={config.docker_image}
                             onChange={(e) => setConfig(prev => ({ ...prev, docker_image: e.target.value }))}
                         />
                     </div>
                     <div className="space-y-2">
-                        <label className="text-sm font-medium">Image Tag</label>
+                        <Label htmlFor="adv-image-tag" className="text-sm font-medium">Image Tag</Label>
                         <Input
+                            id="adv-image-tag"
                             value={config.image_tag}
                             onChange={(e) => setConfig(prev => ({ ...prev, image_tag: e.target.value }))}
                             placeholder="latest"
                         />
                     </div>
-                    <div className="col-span-2 space-y-2">
-                        <label className="text-sm font-medium">Command Override</label>
+                    <div className="col-span-1 sm:col-span-2 space-y-2">
+                        <Label htmlFor="adv-start-command" className="text-sm font-medium">Command Override</Label>
                         <Input
+                            id="adv-start-command"
                             placeholder="/bin/sh -c '...'"
                             value={config.start_command}
                             onChange={(e) => setConfig(prev => ({ ...prev, start_command: e.target.value }))}
                         />
                     </div>
                     <div className="space-y-2">
-                        <label className="text-sm font-medium">Restart Policy</label>
+                        <Label htmlFor="adv-restart-policy" className="text-sm font-medium">Restart Policy</Label>
                         <select
+                            id="adv-restart-policy"
                             value={config.restart_policy}
                             onChange={(e) => setConfig(prev => ({ ...prev, restart_policy: e.target.value }))}
                             className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
@@ -353,9 +358,9 @@ export function AdvancedTab({ service, onUpdated }: { service: Service; onUpdate
                 </div>
                 <div className="space-y-4">
                     <div className="space-y-2">
-                        <label className="text-sm font-medium">Scan Depth</label>
+                        <Label htmlFor="adv-scan-depth" className="text-sm font-medium">Scan Depth</Label>
                         <Select value={scanDepth} onValueChange={(value) => setScanDepth(value as 'shallow' | 'standard' | 'deep')}>
-                            <SelectTrigger className="w-[250px]">
+                            <SelectTrigger id="adv-scan-depth" className="w-full sm:w-[250px]">
                                 <SelectValue placeholder="Select scan depth" />
                             </SelectTrigger>
                             <SelectContent>
@@ -430,9 +435,9 @@ export function AdvancedTab({ service, onUpdated }: { service: Service; onUpdate
                 </div>
                 <div className="space-y-4">
                     <div className="space-y-2">
-                        <label className="text-sm font-medium">Deploy Mode</label>
+                        <Label htmlFor="adv-fast-deploy" className="text-sm font-medium">Deploy Mode</Label>
                         <Select value={fastDeploy === null ? 'inherit' : fastDeploy ? 'fast' : 'standard'} onValueChange={(value) => setFastDeploy(value === 'inherit' ? null : value === 'fast')}>
-                            <SelectTrigger className="w-[320px]">
+                            <SelectTrigger id="adv-fast-deploy" className="w-full sm:w-[320px]">
                                 <SelectValue placeholder="Select deploy mode" />
                             </SelectTrigger>
                             <SelectContent>
@@ -484,7 +489,7 @@ export function AdvancedTab({ service, onUpdated }: { service: Service; onUpdate
             </Card>
 
             {/* Promotion Policy (STAGED → ACTIVE overrides) */}
-            <PromotionPolicyCard service={service} />
+            <PromotionPolicyCard service={service} onUpdated={onUpdated} />
 
             {/* Danger Zone */}
             <Card className="p-6 border-red-200/50 bg-red-50/10 dark:bg-red-900/10">
@@ -549,7 +554,7 @@ function firstPromotionError(data: any, fallback: string): string {
     return fallback;
 }
 
-function PromotionPolicyCard({ service }: { service: Service }) {
+function PromotionPolicyCard({ service, onUpdated }: { service: Service; onUpdated?: (updated: Partial<Service>) => void }) {
     // Only explicitly set keys are sent — missing keys inherit the
     // platform default (Settings → Pipeline). Sending explicit false
     // RELAXES a platform-true default, so "Inherit" omits the key.
@@ -592,7 +597,8 @@ function PromotionPolicyCard({ service }: { service: Service }) {
             setStrategy(s.strategy);
             setCanaryPct(s.canaryPct);
         }
-    }, [service]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- AGENTS.md #21
+    }, [service.id]);
 
     const markDirty = (fn: () => void) => { dirtyRef.current = true; setSaved(false); fn(); };
 
@@ -632,7 +638,8 @@ function PromotionPolicyCard({ service }: { service: Service }) {
                 setTimeout(() => setSaved(false), 3000);
                 return;
             }
-            await servicesApi.update(service.id, payload as any);
+            const updated = await servicesApi.update(service.id, payload as any);
+            onUpdated?.(updated);
             dirtyRef.current = false;
             setSaved(true);
             setTimeout(() => setSaved(false), 3000);
@@ -667,9 +674,9 @@ function PromotionPolicyCard({ service }: { service: Service }) {
             )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                    <label className="text-sm font-medium">Deploy strategy</label>
+                    <Label htmlFor="adv-deploy-strategy" className="text-sm font-medium">Deploy strategy</Label>
                     <Select value={strategy} onValueChange={(v) => markDirty(() => setStrategy(v))}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectTrigger id="adv-deploy-strategy"><SelectValue /></SelectTrigger>
                         <SelectContent>
                             <SelectItem value="ROLLING">Rolling update</SelectItem>
                             <SelectItem value="BLUE_GREEN">Blue/Green (staged → promote)</SelectItem>
@@ -678,8 +685,9 @@ function PromotionPolicyCard({ service }: { service: Service }) {
                     </Select>
                 </div>
                 <div className="space-y-2">
-                    <label className="text-sm font-medium">Canary weight % {strategy !== 'CANARY' && <span className="text-muted-foreground font-normal">(only used by CANARY)</span>}</label>
+                    <Label htmlFor="adv-canary-weight" className="text-sm font-medium">Canary weight % {strategy !== 'CANARY' && <span className="text-muted-foreground font-normal">(only used by CANARY)</span>}</Label>
                     <Input
+                        id="adv-canary-weight"
                         type="number" min={0} max={100} placeholder={String(service.canary_percentage ?? 10)}
                         value={canaryPct} onChange={(e) => markDirty(() => setCanaryPct(e.target.value))}
                     />
@@ -690,13 +698,13 @@ function PromotionPolicyCard({ service }: { service: Service }) {
             </div>
             <div className="mt-6 space-y-4">
                 {PROMOTION_BOOL_KEYS.map(({ key, label, desc }) => (
-                    <div key={key} className="flex items-center justify-between gap-4 rounded-lg border p-4">
-                        <div className="space-y-0.5">
-                            <p className="text-sm font-medium">{label}</p>
+                    <div key={key} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border p-4">
+                        <div className="space-y-0.5 min-w-0">
+                            <Label htmlFor={`adv-promo-${key}`} className="text-sm font-medium">{label}</Label>
                             <p className="text-xs text-muted-foreground">{desc}</p>
                         </div>
                         <Select value={triValue(bools[key] ?? null)} onValueChange={(v) => markDirty(() => setBools((p) => ({ ...p, [key]: v === 'inherit' ? null : v === 'on' })))}>
-                            <SelectTrigger className="w-[180px]"><SelectValue /></SelectTrigger>
+                            <SelectTrigger id={`adv-promo-${key}`} className="w-full sm:w-[180px] shrink-0"><SelectValue /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="inherit">Inherit platform</SelectItem>
                                 <SelectItem value="on">On — enforce</SelectItem>
@@ -705,13 +713,14 @@ function PromotionPolicyCard({ service }: { service: Service }) {
                         </Select>
                     </div>
                 ))}
-                <div className="flex items-center justify-between gap-4 rounded-lg border p-4">
-                    <div className="space-y-0.5">
-                        <p className="text-sm font-medium">Staging soak seconds</p>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border p-4">
+                    <div className="space-y-0.5 min-w-0">
+                        <Label htmlFor="adv-min-staging" className="text-sm font-medium">Staging soak seconds</Label>
                         <p className="text-xs text-muted-foreground">Minimum seconds STAGED before promotion. Empty inherits the platform default.</p>
                     </div>
                     <Input
-                        type="number" min={0} max={86400} className="w-[180px]"
+                        id="adv-min-staging"
+                        type="number" min={0} max={86400} className="w-full sm:w-[180px] shrink-0"
                         placeholder="Inherit" value={minStaging}
                         onChange={(e) => markDirty(() => setMinStaging(e.target.value))}
                     />

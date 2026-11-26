@@ -2,11 +2,16 @@ import uuid
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.utils import timezone
 from rest_framework import status as http_status
 from rest_framework.test import APITestCase
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, Service
+
+def _err_code(data):
+    return data.get('code') or (data.get('error') or {}).get('code')
+
 
 # pylint: disable=invalid-name
 """
@@ -101,7 +106,7 @@ class RollbackTests(APITestCase):
 
         self.assertEqual(response.status_code, http_status.HTTP_400_BAD_REQUEST)
         self.assertEqual(
-            response.data.get('code'),
+            _err_code(response.data),
             'ROLLBACK_TARGET_NOT_SUCCESSFUL',
         )
         # No new deployment should have been created.
@@ -154,7 +159,7 @@ class RollbackTests(APITestCase):
 
         # 400 because _error_response returns 400 with code ROLLBACK_NOOP.
         self.assertEqual(response.status_code, http_status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data.get('code'), 'ROLLBACK_NOOP')
+        self.assertEqual(_err_code(response.data), 'ROLLBACK_NOOP')
         # No new deployment should have been created.
         self.assertEqual(
             Deployment.objects.filter(service=self.service).count(),
@@ -172,7 +177,7 @@ class RollbackTests(APITestCase):
         response = self.client.post(url, data={'confirm': True}, format='json')
 
         self.assertEqual(response.status_code, http_status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data.get('code'), 'ROLLBACK_IN_PROGRESS')
+        self.assertEqual(_err_code(response.data), 'ROLLBACK_IN_PROGRESS')
 
     def test_rollback_to_cancelled_returns_error(self):
         """Rollback to a CANCELLED deployment must be rejected."""
@@ -186,7 +191,7 @@ class RollbackTests(APITestCase):
 
         self.assertEqual(response.status_code, http_status.HTTP_400_BAD_REQUEST)
         self.assertEqual(
-            response.data.get('code'),
+            _err_code(response.data),
             'ROLLBACK_TARGET_NOT_SUCCESSFUL',
         )
 
@@ -195,13 +200,14 @@ class RollbackTests(APITestCase):
         blank = Deployment.objects.create(
             service=self.service,
             status=Deployment.Status.INACTIVE,
-            commit_hash='',
+            commit_hash='temp',
         )
+        Deployment.objects.filter(pk=blank.pk).update(commit_hash='')
         url = f'/api/v1/deployments/{blank.id}/rollback/'
         response = self.client.post(url, data={'confirm': True}, format='json')
 
         self.assertEqual(response.status_code, http_status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data.get('code'), 'ROLLBACK_ARTIFACT_MISSING')
+        self.assertEqual(_err_code(response.data), 'ROLLBACK_ARTIFACT_MISSING')
 
     def test_rollback_without_provider_returns_error(self):
         """Rollback should fail if no cloud provider is available."""
@@ -213,7 +219,7 @@ class RollbackTests(APITestCase):
         response = self.client.post(url, data={'confirm': True}, format='json')
 
         self.assertEqual(response.status_code, http_status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data.get('code'), 'ROLLBACK_PERMISSION_DENIED')
+        self.assertEqual(_err_code(response.data), 'ROLLBACK_PERMISSION_DENIED')
 
     def test_rollback_requires_authentication(self):
         """Unauthenticated users cannot trigger rollback."""
@@ -268,7 +274,7 @@ class InstantRollbackTests(APITestCase):
         url = f'/api/v1/services/{self.service.id}/instant-rollback/'
         response = self.client.post(url, data={}, format='json')
         self.assertEqual(response.status_code, http_status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data.get('code'), 'ROLLBACK_CONFIRMATION_REQUIRED')
+        self.assertEqual(_err_code(response.data), 'ROLLBACK_CONFIRMATION_REQUIRED')
 
     def test_instant_rollback_to_only_active_is_noop(self):
         """If the latest deployment is already ACTIVE, instant-rollback is a no-op."""
@@ -281,7 +287,7 @@ class InstantRollbackTests(APITestCase):
         response = self.client.post(url, data={'confirm': True}, format='json')
 
         self.assertEqual(response.status_code, http_status.HTTP_409_CONFLICT)
-        self.assertEqual(response.data.get('code'), 'ROLLBACK_NOOP')
+        self.assertEqual(_err_code(response.data), 'ROLLBACK_NOOP')
         self.assertEqual(
             Deployment.objects.filter(service=self.service).count(),
             1,
@@ -295,6 +301,7 @@ class InstantRollbackTests(APITestCase):
             service=self.service,
             status=Deployment.Status.INACTIVE,
             commit_hash='priorgood',
+            finished_at=timezone.now(),
         )
         latest_failed = Deployment.objects.create(
             service=self.service,
@@ -318,6 +325,7 @@ class InstantRollbackTests(APITestCase):
             service=self.service,
             status=Deployment.Status.INACTIVE,
             commit_hash='priorgood',
+            finished_at=timezone.now(),
         )
         Deployment.objects.create(
             service=self.service,
@@ -342,6 +350,7 @@ class InstantRollbackTests(APITestCase):
             service=self.service,
             status=Deployment.Status.INACTIVE,
             commit_hash='priorgood',
+            finished_at=timezone.now(),
         )
         Deployment.objects.create(
             service=self.service,
@@ -357,7 +366,7 @@ class InstantRollbackTests(APITestCase):
         response = self.client.post(url, data={'confirm': True}, format='json')
 
         self.assertEqual(response.status_code, http_status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data.get('code'), 'ROLLBACK_PERMISSION_DENIED')
+        self.assertEqual(_err_code(response.data), 'ROLLBACK_PERMISSION_DENIED')
         # The queued rollback should have been marked FAILED on disk.
         new_deploy = Deployment.objects.exclude(commit_hash='priorgood').first()
         self.assertIsNotNone(new_deploy)

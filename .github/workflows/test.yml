@@ -66,13 +66,13 @@ jobs:
         DJANGO_SETTINGS_MODULE: config.settings
       run: |
         cd backend
-        coverage run -m pytest --cov=apps --cov=config --cov-report=xml --cov-report=term-missing -m "not slow and not e2e"
+        pytest --cov=apps --cov=config --cov-report=xml --cov-report=term-missing -m "not slow and not e2e"
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v7
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
+      continue-on-error: true  # Don't fail CI on first run
       with:
         file: backend/coverage.xml
         fail_ci_if_error: false
-        continue-on-error: true  # Don't fail CI on first run
 
   typecheck:
     name: TypeScript typecheck

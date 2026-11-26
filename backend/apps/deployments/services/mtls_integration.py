@@ -44,9 +44,9 @@ PLATFORM_SPIFFE_TRUST_DOMAIN = os.getenv("SPIFFE_TRUST_DOMAIN", "platform.local"
 SPIRE_SOCKET_CONTAINER_PATH = "/opt/spire/run"
 SPIRE_SVIDS_CONTAINER_PATH = "/opt/spire/svids"
 
-# Both trust domains are valid. Ecosystem-managed services belong to
-# the ecosystem domain; every other service belongs to the platform
-# domain (separate SPIRE server/trust bundle).
+# Both trust domains are valid. Only PLATFORM-managed services belong to
+# platform.local; ECOSYSTEM and USER services (all other workloads) belong
+# to ecosystem.local (separate SPIRE server/trust bundle).
 ALLOWED_TRUST_DOMAINS = {ECOSYSTEM_SPIFFE_TRUST_DOMAIN, PLATFORM_SPIFFE_TRUST_DOMAIN}
 # Back-compat alias: historical callers only knew the ecosystem domain.
 ALLOWED_ECOSYSTEM_TRUST_DOMAINS = {ECOSYSTEM_SPIFFE_TRUST_DOMAIN}
@@ -140,9 +140,9 @@ def get_service_trust_domain(service) -> str:
     """Get the trust domain for a specific service.
 
     Honors the service's configured domain when it is a known platform
-    domain. Ecosystem-managed services default to ecosystem.local;
-    every other service defaults to platform.local (each backed by its
-    own SPIRE server/trust bundle).
+    domain. Only PLATFORM-managed services default to platform.local;
+    ECOSYSTEM and USER services (everything else) default to
+    ecosystem.local (each backed by its own SPIRE server/trust bundle).
     """
     try:
         td = str(service.mtls_config.trust_domain or "").strip()
@@ -157,11 +157,11 @@ def get_service_trust_domain(service) -> str:
         pass
 
     try:
-        if str(getattr(service, "managed_by", "") or "").upper() == "ECOSYSTEM":
-            return ECOSYSTEM_SPIFFE_TRUST_DOMAIN
+        if str(getattr(service, "managed_by", "") or "").upper() == "PLATFORM":
+            return PLATFORM_SPIFFE_TRUST_DOMAIN
     except Exception:
         pass
-    return PLATFORM_SPIFFE_TRUST_DOMAIN
+    return ECOSYSTEM_SPIFFE_TRUST_DOMAIN
 
 
 def get_mtls_labels(service) -> dict:
@@ -221,23 +221,25 @@ def _spire_volume_names(service) -> tuple[str, str]:
 
 
 def get_mtls_volumes(service=None) -> list:
-    """Get volume mounts for SPIRE socket and SVIDs.
+    """Get volume mounts for SPIRE socket (and read-only SVIDs for platform).
 
     Returns list of (host_volume, container_path, mode) tuples for the
-    service's own trust domain (platform or ecosystem agent volumes).
-    The svids dir is read-write: workloads fetch their own SVID files
-    via `spire-agent api fetch x509 -write` (the agent never writes
-    files itself). The socket stays read-only.
+    service's own trust domain. User/ecosystem workloads mount ONLY the
+    SPIRE agent socket read-only (never shared ``/opt/spire/svids:rw``,
+    which would expose every tenant's SVIDs across containers).
     """
     if service is None:
         return [
             (ECOSYSTEM_SPIRE_SOCKET_HOST_PATH, SPIRE_SOCKET_CONTAINER_PATH, "ro"),
-            (ECOSYSTEM_SPIRE_SVIDS_HOST_PATH, SPIRE_SVIDS_CONTAINER_PATH, "rw"),
         ]
     socket_vol, svids_vol = _spire_volume_names(service)
+    if str(getattr(service, "managed_by", "") or "").upper() == "PLATFORM":
+        return [
+            (socket_vol, SPIRE_SOCKET_CONTAINER_PATH, "ro"),
+            (svids_vol, SPIRE_SVIDS_CONTAINER_PATH, "ro"),
+        ]
     return [
         (socket_vol, SPIRE_SOCKET_CONTAINER_PATH, "ro"),
-        (svids_vol, SPIRE_SVIDS_CONTAINER_PATH, "rw"),
     ]
 
 
@@ -246,12 +248,10 @@ def get_mtls_docker_run_args(service) -> str:
     if not is_mtls_enabled(service):
         return ""
 
-    socket_vol, svids_vol = _spire_volume_names(service)
-    args = (
-        f"-v {socket_vol}:{SPIRE_SOCKET_CONTAINER_PATH}:ro "
-        f"-v {svids_vol}:{SPIRE_SVIDS_CONTAINER_PATH}:rw "
+    return "".join(
+        f"-v {vol}:{path}:{mode} "
+        for vol, path, mode in get_mtls_volumes(service)
     )
-    return args
 
 
 def get_mtls_docker_run_volumes(service) -> dict:
@@ -259,10 +259,9 @@ def get_mtls_docker_run_volumes(service) -> dict:
     if not is_mtls_enabled(service):
         return {}
 
-    socket_vol, svids_vol = _spire_volume_names(service)
     return {
-        socket_vol: {"bind": SPIRE_SOCKET_CONTAINER_PATH, "mode": "ro"},
-        svids_vol: {"bind": SPIRE_SVIDS_CONTAINER_PATH, "mode": "rw"},
+        vol: {"bind": path, "mode": mode}
+        for vol, path, mode in get_mtls_volumes(service)
     }
 
 

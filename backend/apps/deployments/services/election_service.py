@@ -85,7 +85,7 @@ class ElectionService:
         if not local_peer:
             return
 
-        remote_peers = mesh.peers.filter(is_active=True).exclude(is_local=True)
+        remote_peers = list(mesh.peers.filter(is_active=True).exclude(is_local=True))
 
         # Get local gateway_secret for HMAC signing
         local_server = local_peer.server if local_peer else None
@@ -96,6 +96,7 @@ class ElectionService:
             local_gateway_secret = str(getattr(settings, "GATEWAY_SECRET", ""))
         local_wg = local_peer.wg_address if local_peer else ""
 
+        ack_count = 1  # local leader counts toward quorum
         for peer in remote_peers:
             start = time.monotonic()
             success = False
@@ -122,6 +123,7 @@ class ElectionService:
                 latency = (time.monotonic() - start) * 1000
                 success = resp.status_code == 200
                 if success:
+                    ack_count += 1
                     reply_term = resp.json().get("term")
                     if type(reply_term) is int and reply_term > cluster.term:
                         cls.demote_to_follower(cluster, reply_term)
@@ -133,15 +135,18 @@ class ElectionService:
                 error_msg = str(e)[:500]
 
             # Log heartbeat
-            HeartbeatLog.objects.create(
-                cluster=cluster,
-                source_server=None,  # local
-                target_server=peer.server,
-                term=cluster.term,
-                latency_ms=latency,
-                success=success,
-                error_message=error_msg,
-            )
+            try:
+                HeartbeatLog.objects.create(
+                    cluster=cluster,
+                    source_server=None,  # local
+                    target_server=peer.server,
+                    term=cluster.term,
+                    latency_ms=latency,
+                    success=success,
+                    error_message=error_msg,
+                )
+            except Exception as log_exc:
+                logger.warning("Failed to record HeartbeatLog (DB error): %s", log_exc)
 
             if success:
                 logger.debug(
@@ -152,9 +157,48 @@ class ElectionService:
                     f"Heartbeat to {peer.wg_address} FAILED: {error_msg}"
                 )
 
-        # Update last heartbeat timestamp
-        cluster.last_heartbeat = timezone.now()
-        cluster.save(update_fields=["last_heartbeat"])
+        # Quorum-based split-brain guard: only refresh last_heartbeat when a
+        # majority (and at least cluster.min_quorum) of nodes acknowledged.
+        # If an isolated leader loses quorum continuously for
+        # election_timeout_ms (or cannot persist state to DB), step down.
+        total_nodes = len(remote_peers) + 1
+        majority_quorum = (total_nodes // 2) + 1
+        required_quorum = max(getattr(cluster, "min_quorum", 1) or 1, majority_quorum)
+
+        if len(remote_peers) > 0 and ack_count < required_quorum:
+            last_hb = getattr(cluster, "last_heartbeat", None)
+            elapsed_ms = (
+                (timezone.now() - last_hb).total_seconds() * 1000
+                if last_hb is not None
+                else float(cluster.election_timeout_ms)
+            )
+            logger.warning(
+                "Leader heartbeat quorum not met (acks=%d < required=%d, elapsed=%.0fms/%dms)",
+                ack_count,
+                required_quorum,
+                elapsed_ms,
+                cluster.election_timeout_ms,
+            )
+            if elapsed_ms >= cluster.election_timeout_ms:
+                cls.step_down_to_follower(
+                    cluster,
+                    reason=(
+                        f"lost quorum ({ack_count}/{total_nodes} acks, "
+                        f"required={required_quorum}, elapsed={elapsed_ms:.0f}ms)"
+                    ),
+                )
+            return
+
+        # Update last heartbeat timestamp only when quorum holds
+        try:
+            cluster.last_heartbeat = timezone.now()
+            cluster.save(update_fields=["last_heartbeat"])
+        except Exception as db_exc:
+            logger.error(
+                "Leader failed to persist heartbeat to DB (%s) — stepping down local role",
+                db_exc,
+            )
+            cls._set_local_role("FOLLOWER", None)
 
     # ── Heartbeat Receive ────────────────────────────────────────────────
 
@@ -367,6 +411,38 @@ class ElectionService:
 
         logger.info(
             f"Demoted to FOLLOWER (new term: {new_leader_term})"
+        )
+
+    @classmethod
+    def step_down_to_follower(cls, cluster, reason: str = "quorum lost"):
+        """
+        Step down from LEADER to FOLLOWER in the current term when quorum or
+        backing state is lost so partitioned nodes cannot stay dual-leader.
+        """
+        try:
+            with transaction.atomic():
+                locked = type(cluster).objects.select_for_update().get(pk=cluster.pk)
+                if locked.local_role != "LEADER":
+                    return
+                locked.state = "STABLE"
+                locked.leader = None
+                locked.leader_wg_address = None
+                locked.save(update_fields=["state", "leader", "leader_wg_address"])
+                cls._set_local_role("FOLLOWER", locked)
+                cluster.local_role = locked.local_role
+                cluster.state = locked.state
+                cluster.leader = locked.leader
+                cluster.leader_wg_address = locked.leader_wg_address
+        except Exception as exc:
+            logger.error(
+                "DB step-down failed (%s); forcing local FOLLOWER role (%s)",
+                reason, exc,
+            )
+            cls._set_local_role("FOLLOWER", None)
+        logger.warning(
+            "Leader stepped down to FOLLOWER (term=%s, reason=%s)",
+            getattr(cluster, "term", "?"),
+            reason,
         )
 
     # ── Vote Handling ────────────────────────────────────────────────────

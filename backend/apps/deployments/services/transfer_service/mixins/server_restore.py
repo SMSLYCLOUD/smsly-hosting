@@ -432,7 +432,7 @@ else:
                     try:
                         subprocess.run(["docker", "volume", "create", vname], check=True)
                     except Exception as exc:
-                        logger.warning("Failed to create docker volume %s during restore: %s", vname, exc)
+                        print(f"WARNING: Failed to create docker volume {{vname}} during restore: {{exc}}")
                     subprocess.run([
                         "docker", "run", "--rm", "-i",
                         "-v", f"{{vname}}:/dest",

@@ -9,35 +9,77 @@ from __future__ import annotations
 from django.db.models import Q
 from django.utils import timezone
 
-from .codes import ALL_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS
+from .codes import (
+    ADMIN_ACCESS,
+    ALL_PERMISSIONS,
+    BILLING_ADMIN,
+    BILLING_MANAGE,
+    DEFAULT_ROLE_PERMISSIONS,
+)
+
+# Custom per-member overrides may never grant platform-admin or account-billing privileges.
+ALLOWED_CUSTOM_PERMISSIONS: frozenset[str] = frozenset(
+    ALL_PERMISSIONS - {ADMIN_ACCESS, BILLING_ADMIN, BILLING_MANAGE}
+)
+
+
+def validate_custom_permissions(perms) -> tuple[bool, list[str]]:
+    """Validate a caller-supplied custom permission override list against the allowlist."""
+    if not isinstance(perms, list):
+        return False, []
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for p in perms:
+        if not isinstance(p, str) or p not in ALLOWED_CUSTOM_PERMISSIONS:
+            return False, []
+        if p not in seen:
+            seen.add(p)
+            cleaned.append(p)
+    return True, cleaned
+
+
+def sanitize_custom_permissions(perms) -> list[str]:
+    """Filter stored custom permission codes down to the explicit allowlist."""
+    if not isinstance(perms, list):
+        return []
+    return [p for p in perms if isinstance(p, str) and p in ALLOWED_CUSTOM_PERMISSIONS]
 
 
 def _resolve_team(service_or_project):
     """Resolve the Team from a Service, Project, or Deployment."""
+    from django.db import models
+    if not isinstance(service_or_project, models.Model):
+        return None
     project = getattr(service_or_project, 'project', None)
-    if project:
+    if project and isinstance(project, models.Model):
         team = getattr(project, 'team', None)
-        if team:
+        if team and isinstance(team, models.Model):
             return team
     if hasattr(service_or_project, 'team'):
-        return service_or_project.team
+        team = service_or_project.team
+        if isinstance(team, models.Model):
+            return team
     # Walk deployment → service → project → team
     service = getattr(service_or_project, 'service', None)
-    if service:
+    if service and isinstance(service, models.Model):
         return _resolve_team(service)
     return None
 
 
 def _resolve_project(service_or_project):
     """Resolve the Project from a Service, Project, or Deployment."""
+    from django.db import models
+    if not isinstance(service_or_project, models.Model):
+        return None
     project = getattr(service_or_project, 'project', None)
-    if project:
+    if project and isinstance(project, models.Model):
         return project
     if hasattr(service_or_project, 'pk') and service_or_project.__class__.__name__ == 'Project':
         return service_or_project
     service = getattr(service_or_project, 'service', None)
-    if service:
-        return getattr(service, 'project', None)
+    if service and isinstance(service, models.Model):
+        proj = getattr(service, 'project', None)
+        return proj if isinstance(proj, models.Model) else None
     return None
 
 
@@ -107,9 +149,13 @@ def _get_team_member_permissions(user, team) -> list[str] | None:
     """Return custom permission overrides from TeamMember, or None if not set."""
     try:
         from apps.teams.models import TeamMember
-        membership = TeamMember.objects.filter(team=team, user=user).first()
-        if membership and membership.permissions:
-            return membership.permissions
+        membership = TeamMember.objects.filter(
+            team=team, user=user, is_active=True,
+        ).exclude(
+            expires_at__isnull=False, expires_at__lt=timezone.now(),
+        ).first()
+        if membership and isinstance(membership.permissions, list) and len(membership.permissions) > 0:
+            return sanitize_custom_permissions(membership.permissions)
     except (ImportError, Exception):
         pass
     return None
@@ -124,8 +170,8 @@ def _get_project_member_permissions(user, project) -> list[str] | None:
             return None
         if pm and pm.expires_at and pm.expires_at < timezone.now():
             return None
-        if pm and pm.permissions:
-            return pm.permissions
+        if pm and isinstance(pm.permissions, list) and len(pm.permissions) > 0:
+            return sanitize_custom_permissions(pm.permissions)
     except (ImportError, Exception):
         pass
     return None
@@ -142,36 +188,142 @@ def _is_org_owner(user, service_or_project) -> bool:
     org = getattr(team, 'organization', None)
     if not org:
         return False
+    if getattr(org, 'owner_id', None) == getattr(user, 'id', None):
+        return True
     try:
         from apps.organizations.models import OrganizationMembership
-        return OrganizationMembership.objects.filter(
-            organization=org, user=user, role='OWNER',
-        ).exists()
+        return (
+            OrganizationMembership.objects.filter(
+                organization=org, user=user, role='OWNER', is_active=True,
+            )
+            .exclude(expires_at__isnull=False, expires_at__lt=timezone.now())
+            .exists()
+        )
     except (ImportError, Exception):
         return False
 
 
 def _has_billing_flag(user, team, org) -> bool:
-    """Check billing-management flags on memberships."""
-    # Org OWNER always has billing.
+    """Check billing-management flags on active memberships."""
+    # Org OWNER or org member with explicit billing permission.
     try:
         from apps.organizations.models import OrganizationMembership
         if org:
-            om = OrganizationMembership.objects.filter(
-                organization=org, user=user,
-            ).first()
-            if om and om.can_manage_billing:
+            if getattr(org, 'owner_id', None) == getattr(user, 'id', None):
+                return True
+            om = (
+                OrganizationMembership.objects.filter(
+                    organization=org, user=user, is_active=True,
+                )
+                .exclude(expires_at__isnull=False, expires_at__lt=timezone.now())
+                .first()
+            )
+            if om and (om.role == 'OWNER' or om.can_manage_billing):
                 return True
     except (ImportError, Exception):
         pass
 
-    # Team member with can_manage_billing flag.
+    # Active, unexpired team member with admin/billing flag.
     try:
         from apps.teams.models import TeamMember
         if team:
-            tm = TeamMember.objects.filter(team=team, user=user).first()
+            tm = TeamMember.objects.filter(
+                team=team, user=user, is_active=True,
+            ).exclude(
+                expires_at__isnull=False, expires_at__lt=timezone.now(),
+            ).first()
             if tm and tm.can_manage_billing:
                 return True
+    except (ImportError, Exception):
+        pass
+
+    return False
+
+
+def _get_user_permissions(user, obj=None) -> set[str]:
+    """Return project-scoped permission codes for *user* relative to *obj*."""
+    project = _resolve_project(obj) if obj is not None else None
+    if project is None:
+        return set()
+    return set(get_user_permissions(user, project))
+
+
+def user_can_manage_billing(user) -> bool:
+    """Determine account-level billing management permission for *user*."""
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+
+    has_any_org_or_team = False
+    try:
+        from apps.organizations.models import Organization, OrganizationMembership
+        if Organization.objects.filter(owner=user).exists():
+            return True
+        now = timezone.now()
+        active_orgs = OrganizationMembership.objects.filter(
+            user=user, is_active=True,
+        ).exclude(
+            expires_at__isnull=False, expires_at__lt=now,
+        )
+        if active_orgs.filter(Q(role='OWNER') | Q(can_manage_billing=True)).exists():
+            return True
+        if active_orgs.filter(role__in=['ADMIN', 'MEMBER']).exists():
+            has_any_org_or_team = True
+    except (ImportError, Exception):
+        pass
+
+    try:
+        from apps.teams.models import Team, TeamMember
+        if Team.objects.filter(owner=user).exists():
+            return True
+        now = timezone.now()
+        active_tm = TeamMember.objects.filter(
+            user=user, is_active=True,
+        ).exclude(
+            expires_at__isnull=False, expires_at__lt=now,
+        )
+        if active_tm.filter(Q(role='ADMIN') | Q(can_manage_billing=True)).exists():
+            return True
+        # Only non-VIEWER active memberships put an account under managed billing;
+        # dummy/VIEWER external invites must not lock out personal account billing.
+        if active_tm.filter(role='MEMBER').exists():
+            has_any_org_or_team = True
+    except (ImportError, Exception):
+        pass
+
+    # Standalone personal accounts (not scoped to any team/org) manage their own billing.
+    return not has_any_org_or_team
+
+
+def user_can_view_billing(user) -> bool:
+    """Determine account-level billing view permission for *user*."""
+    if user_can_manage_billing(user):
+        return True
+    if not user or not user.is_authenticated:
+        return False
+
+    try:
+        from apps.organizations.models import OrganizationMembership
+        if (
+            OrganizationMembership.objects.filter(
+                user=user, is_active=True, role__in=['OWNER', 'ADMIN'],
+            )
+            .exclude(expires_at__isnull=False, expires_at__lt=timezone.now())
+            .exists()
+        ):
+            return True
+    except (ImportError, Exception):
+        pass
+
+    try:
+        from apps.teams.models import TeamMember
+        if TeamMember.objects.filter(
+            user=user, is_active=True, role__in=['ADMIN', 'MEMBER'],
+        ).exclude(
+            expires_at__isnull=False, expires_at__lt=timezone.now(),
+        ).exists():
+            return True
     except (ImportError, Exception):
         pass
 
@@ -220,6 +372,9 @@ def has_permission(user, obj, code: str) -> bool:
         if _has_billing_flag(user, team, org):
             return True
         return False
+    if code == 'billing.view':
+        if _has_billing_flag(user, team, org):
+            return True
 
     # ── Project-level permissions ───────────────────────────────────
     if project:
@@ -228,11 +383,19 @@ def has_permission(user, obj, code: str) -> bool:
             # Project member override set explicitly — use it directly.
             return code in pm_perms
 
-        # Project member with no custom override: use project role defaults.
-        project_role = get_effective_role(user, obj)
-        if project_role:
-            defaults = get_permissions_for_role(project_role)
-            return code in defaults
+        from django.utils import timezone as _tz
+        from apps.organizations.models.project import ProjectMember
+        has_pm = ProjectMember.objects.filter(
+            project=project, user=user,
+        ).exclude(
+            expires_at__isnull=False, expires_at__lt=_tz.now(),
+        ).exists()
+        if has_pm:
+            # Project member with no custom override: use project role defaults.
+            project_role = get_effective_role(user, obj)
+            if project_role:
+                defaults = get_permissions_for_role(project_role)
+                return code in defaults
 
     # ── Team-level permissions ──────────────────────────────────────
     if team:
@@ -244,6 +407,9 @@ def has_permission(user, obj, code: str) -> bool:
     if role:
         defaults = get_permissions_for_role(role)
         return code in defaults
+
+    if obj is not None and code in _get_user_permissions(user, obj):
+        return True
 
     return False
 
@@ -281,6 +447,8 @@ def get_user_permissions(user, project=None) -> list[str]:
                 from apps.organizations.models.project import ProjectMember
                 pm = ProjectMember.objects.filter(
                     project=project, user=user,
+                ).exclude(
+                    expires_at__isnull=False, expires_at__lt=timezone.now(),
                 ).first()
                 if pm:
                     permissions.update(get_permissions_for_role(pm.role))
@@ -296,8 +464,8 @@ def get_user_permissions(user, project=None) -> list[str]:
                 expires_at__isnull=False, expires_at__lt=timezone.now(),
             )
             for m in memberships:
-                if m.permissions:
-                    permissions.update(m.permissions)
+                if isinstance(m.permissions, list) and len(m.permissions) > 0:
+                    permissions.update(sanitize_custom_permissions(m.permissions))
                 else:
                     permissions.update(get_permissions_for_role(m.role))
         except (ImportError, Exception):
@@ -335,7 +503,7 @@ def get_accessible_q(user) -> Q:
     try:
         from apps.organizations.models.project import ProjectMember
         project_ids = list(
-            ProjectMember.objects.filter(user=user, is_active=True).exclude(
+            ProjectMember.objects.filter(user=user).exclude(
                 expires_at__isnull=False, expires_at__lt=timezone.now(),
             ).values_list('project_id', flat=True)
         )

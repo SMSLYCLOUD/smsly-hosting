@@ -54,6 +54,7 @@ _SELF_TARGET_PATH_DENYLIST = (
     '/api/v1/auth/node-token-exchange',
     '/api/v1/servers/bootstrap/',
     '/api/v1/transfers/register-incoming/',
+    '/api/v1/media/',
 )
 
 # DNS resolution cap: a webhook URL that fails to resolve is fine to
@@ -90,7 +91,7 @@ def _check_ip_text(text: str) -> None:
         raise ValidationError(reason)
 
 
-def _resolve_and_check(hostname: str) -> None:
+def _resolve_and_check(hostname: str, *, fail_closed: bool = False) -> None:
     """Resolve *hostname* and require EVERY address to be public.
 
     DNS-BASED SSRF BYPASS: the old validator only inspected the literal
@@ -104,11 +105,14 @@ def _resolve_and_check(hostname: str) -> None:
         infos = socket.getaddrinfo(
             hostname, None, proto=socket.IPPROTO_TCP,
         )
-    except (socket.gaierror, UnicodeError):
-        # Unresolvable names are allowed at validation time (may be a
+    except (socket.gaierror, UnicodeError) as exc:
+        if fail_closed:
+            raise ValidationError(
+                f"Hostname '{hostname}' could not be resolved safely: {exc}"
+            )
+        # Unresolvable names are allowed at config-validation time (may be a
         # future/internal-only name the operator controls) — the fetch
-        # itself will fail. Resolvable-but-private is the dangerous
-        # case and that we catch below.
+        # itself will fail. Resolvable-but-private is caught below.
         return
 
     seen: set[str] = set()
@@ -132,22 +136,23 @@ def _resolve_and_check(hostname: str) -> None:
             )
 
 
-def validate_ssrf(value: Any) -> None:
+def validate_ssrf(value: Any, *, fail_closed_dns: bool = False) -> None:
     """
     Validate a URL or domain to prevent SSRF attacks.
 
     Defense layers (in order):
-      1. Literal-host blocklist (metadata services, loopback, Docker
+      1. Scheme allowlist (`http` / `https` only when a scheme is given).
+      2. Literal-host blocklist (metadata services, loopback, Docker
          internal service names — 'backend' resolves inside the
          dispatcher container!).
-      2. Path denylist when the URL targets THIS platform: any
+      3. Path denylist when the URL targets THIS platform: any
          hostname/port combination is checked against the zero-trust
          exempt routes, so a self-pointing webhook cannot reach the
          unauthenticated endpoints.
-      3. IP-literal checks in every textual encoding — decimal
+      4. IP-literal checks in every textual encoding — decimal
          ('2130706433'), hex ('0x7f000001'), and octal ('0177.0.0.1')
          forms all parse via ipaddress after normalization attempts.
-      4. DNS RESOLUTION: every address the hostname resolves to must
+      5. DNS RESOLUTION: every address the hostname resolves to must
          be public. Defeats hostname-based bypasses and round-robin
          rebinding (public + private records).
     """
@@ -160,8 +165,12 @@ def validate_ssrf(value: Any) -> None:
     if '://' in value:
         try:
             parsed = urllib.parse.urlparse(value)
+            if (parsed.scheme or '').lower() not in ('http', 'https'):
+                raise ValidationError("Only http and https URLs are permitted.")
             hostname = parsed.hostname
             parsed_path = parsed.path or ''
+        except ValidationError:
+            raise
         except ValueError:
             raise ValidationError("Invalid URL.")
     else:
@@ -190,15 +199,17 @@ def validate_ssrf(value: Any) -> None:
                 "self-referential webhooks are not allowed."
             )
 
-    # 3. IP literal checks (v4/v6, incl. alternate decimal/hex forms)
+    # 3. IP literal checks (v4/v6, incl. alternate decimal/hex/octal forms)
     try:
         # Non-standard encodings: ipaddress only parses dotted/IPv6, so
-        # convert integer forms first.
+        # convert integer/hex/octal dotted forms first.
         if hostname.isdigit() and hostname != '':
             hostname = str(ipaddress.ip_address(int(hostname)))
+        elif hostname.startswith('0x') and all(c in '0123456789abcdef' for c in hostname[2:]):
+            hostname = str(ipaddress.ip_address(int(hostname, 16)))
     except (ValueError, OverflowError):
         pass
     _check_ip_text(hostname)
 
     # 4. Resolve and require ALL addresses public
-    _resolve_and_check(hostname)
+    _resolve_and_check(hostname, fail_closed=fail_closed_dns)

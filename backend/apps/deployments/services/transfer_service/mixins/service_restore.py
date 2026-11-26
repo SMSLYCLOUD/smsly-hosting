@@ -124,7 +124,7 @@ class SingleServiceRestoreMixin:
             deploy_body['dual_home'] = True
 
         self._node_api_request('incoming/deploy', body=deploy_body)
-        self._seed_target_deployment_record(metadata)
+        self._seed_target_deployment_record(metadata=metadata, container_id=name)
 
     def _detect_transferred_health_path(self, container_name, port):
         """Probe the target's running container for a health path that answers.

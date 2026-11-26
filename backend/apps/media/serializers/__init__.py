@@ -78,6 +78,14 @@ class MediaNodeProfileSerializer(serializers.ModelSerializer):
             "script_repo_token": {"write_only": True}
         }
 
+    def validate_livekit_host(self, value):
+        host = str(value or "").strip()
+        if not host:
+            return host
+        from apps.core.validators import validate_ssrf
+        validate_ssrf(f"http://{host}:7880")
+        return host
+
 
 class MediaRoomSerializer(serializers.ModelSerializer):
     node_server = serializers.CharField(source="node.server.host", read_only=True)

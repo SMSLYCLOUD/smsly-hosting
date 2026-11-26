@@ -2,7 +2,7 @@
 if command -v trivy ; then
     echo -e "${BLUE}  → Scanning rebuilt images for vulnerabilities...${NC}"
     for _trivy_img in backend frontend; do
-        _trivy_tag="smsly/${_trivy_img}:latest"
+        _trivy_tag="smsly-hosting-${_trivy_img}:latest"
         if docker image inspect "$_trivy_tag" ; then
             echo -e "${BLUE}    ↳ Scanning $_trivy_tag...${NC}"
             trivy image --scanners vuln --severity CRITICAL,HIGH --exit-code 0 --no-progress "$_trivy_tag"  || \
@@ -73,8 +73,8 @@ if not created and not cp.is_active:
     docker container prune -f --filter "label=com.docker.compose.project" --filter "status=exited"  || true
     # Prune BuildKit build cache (saves significant disk space)
     docker builder prune -f --filter "until=24h"  || true
-    # Prune stale rollback backup containers left from failed blue-green promotions
-    docker container prune -f --filter "status=exited"  || true
+    # Prune ephemeral / rollback containers only (preserve stopped addons, sleeping tiers, and Sablier apps)
+    docker container prune -f --filter "label=com.smsly.ephemeral=true" --filter "status=exited"  || true
     # Prune dangling images left over after the new images were tagged
     docker image prune -f  || true
     for ctr in $(docker ps -a --filter "status=exited" --filter "name=-rollback-" --format '{{.Names}}'  || true); do
@@ -166,234 +166,39 @@ SMSLY_SYNC_EOF
 
     # ─── Caddy: Generate self-signed cert + regenerate Caddyfile ──
     if should_manage_caddy; then
-    ensure_selfsigned_cert
-    if command -v caddy ; then
-        echo -e "${BLUE}  → Regenerating Caddyfile with current service domains...${NC}"
-
-        # ── Step 1: Find the Cloudflare token FIRST (before generating Caddyfile) ──
-        CF_TOKEN=""
-
-        # Priority: .env file > PlatformConfig DB
-        if [ -z "$CF_TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
-            CF_TOKEN="$(grep -m1 '^CLOUDFLARE_API_TOKEN=' "$INSTALL_DIR/.env"  | cut -d= -f2- || true)"
-        fi
-        # Fallback: read from PlatformConfig in the database (set via Settings UI)
-        if [ -z "$CF_TOKEN" ] || [ "$CF_TOKEN" = "fake" ]; then
-            DB_TOKEN="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+        ensure_selfsigned_cert
+        if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
+            echo -e "${BLUE}  → Regenerating Caddyfile from Django caddy_manager...${NC}"
+            if timeout -k 5 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
-config = PlatformConfig.load()
-token = (getattr(config, 'cloudflare_api_token', '') or '').strip()
-if token and token.lower() not in ('fake', 'changeme', 'test', ''):
-    print(token)
-"  || true)"
-            DB_TOKEN="$(echo "$DB_TOKEN" | tr -d '[:space:]')"
-            if [ -n "$DB_TOKEN" ]; then
-                CF_TOKEN="$DB_TOKEN"
-                echo -e "${GREEN}  ✓ Cloudflare token found in Settings DB${NC}"
-                # Sync back to .env so it persists
-                if grep -q 'CLOUDFLARE_API_TOKEN' "$INSTALL_DIR/.env" ; then
-                    sed -i "s/CLOUDFLARE_API_TOKEN=.*/CLOUDFLARE_API_TOKEN=$CF_TOKEN/" "$INSTALL_DIR/.env"
-                else
-                    echo "CLOUDFLARE_API_TOKEN=$CF_TOKEN" >> "$INSTALL_DIR/.env"
-                fi
-            fi
-        fi
-
-        # ── Step 2: Generate Caddyfile WITH dns cloudflare if token exists ──
-        if [ -n "$CF_TOKEN" ] && [ "$CF_TOKEN" != "fake" ]; then
-            echo -e "${GREEN}  ✓ Cloudflare token available — generating Caddyfile with wildcard SSL${NC}"
-
-
-            # Discover domain
-            cf_domain=""
-            cf_domain="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
-from apps.deployments.models import PlatformConfig
-c = PlatformConfig.load()
-d = (c.domain or '').strip()
-if d and d != 'localhost':
-    print(d)
-"  | tr -d '[:space:]' || true)"
-            if [ -z "$cf_domain" ]; then
-                cf_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env"  | cut -d= -f2- || true)"
-            fi
-
-            cf_server_ip="$(detect_public_ip)"
-
-            # Discover wildcard-covered hosts and non-wildcard service blocks.
-            # - Wildcard-covered hosts route through Traefik via matcher.
-            # - Unknown wildcard hosts route to /notice on frontend.
-            # - External custom domains keep explicit direct on-demand TLS blocks with Host rewrite.
-            cf_wildcard_known_hosts=""
-            cf_wildcard_known_hosts="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
-from apps.deployments.models import Service
-from apps.domains.models import Domain, DomainStatus
-from django.db.models import Q
-suffix = '.${cf_domain}'.lower().strip()
-hosts = set()
-for svc in Service.objects.all():
-    d = (svc.public_domain or '').strip().lower()
-    if d and suffix and d.endswith(suffix):
-        hosts.add(d)
-for domain in Domain.objects.filter(
-    status__in=[DomainStatus.ACTIVE, DomainStatus.DNS_VERIFIED, DomainStatus.SSL_PROVISIONING],
-).filter(Q(verified=True) | Q(status=DomainStatus.ACTIVE)):
-    cd = (domain.domain_name or '').strip().lower()
-    if cd and suffix and cd.endswith(suffix):
-        hosts.add(cd)
-print(' '.join(sorted(hosts)))
-"  | tr -d '\r' | tr -d '\n' || true)"
-
-            cf_svc_blocks=""
-            cf_svc_blocks="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
-import os
-upstream = os.environ.get('SMSLY_SERVICE_PROXY_UPSTREAM', 'traefik:80')
-from apps.deployments.models import Service
-from apps.domains.models import Domain, DomainStatus
-from django.db.models import Q
-suffix = '.${cf_domain}'.lower().strip()
-seen = set()
-for svc in Service.objects.all():
-    public_domain = (svc.public_domain or '').strip().lower()
-    if public_domain and (not suffix or not public_domain.endswith(suffix)) and public_domain not in seen:
-        seen.add(public_domain)
-        print(f'{public_domain} {{\n    reverse_proxy {upstream}\n    encode gzip\n}}\n')
-
-for domain in Domain.objects.select_related('service').filter(
-    status__in=[DomainStatus.ACTIVE, DomainStatus.DNS_VERIFIED, DomainStatus.SSL_PROVISIONING],
-).filter(Q(verified=True) | Q(status=DomainStatus.ACTIVE)):
-    custom_domain = (domain.domain_name or '').strip().lower()
-    svc = domain.service
-    public_domain = (svc.public_domain or '').strip().lower() if svc else ''
-    if not custom_domain:
-        continue
-    if suffix and custom_domain.endswith(suffix):
-        continue
-    if custom_domain in seen:
-        continue
-    seen.add(custom_domain)
-
-    if public_domain and public_domain != custom_domain:
-        print(f'{custom_domain} {{\n    tls {{\n        on_demand\n    }}\n    reverse_proxy {upstream} {{\n        header_up Host {public_domain}\n    }}\n    encode gzip\n}}\n')
-    else:
-        print(f'{custom_domain} {{\n    tls {{\n        on_demand\n    }}\n    reverse_proxy {upstream}\n    encode gzip\n}}\n')
-"  | tr -d '\r' || true)"
-
-            # Only generate wildcard Caddyfile for real domains
-            cf_is_real_domain=false
-            if [ -n "$cf_domain" ] && [ "$cf_domain" != "localhost" ]; then
-                if ! echo "$cf_domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
-                    cf_is_real_domain=true
-                fi
-            fi
-
-            if [ "$cf_is_real_domain" = "true" ]; then
-                cf_known_stanza=""
-                if [ -n "$cf_wildcard_known_hosts" ]; then
-                    cf_known_stanza="    @known_hosts host ${cf_wildcard_known_hosts}
-    handle @known_hosts {
-        reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
-    }"
-                fi
-
-                cat > /tmp/Caddyfile.tmp <<CFCADDY
-# Auto-generated with Cloudflare DNS challenge (wildcard SSL)
-{
-    on_demand_tls {
-        ask http://backend:8000/api/v1/services/check-domain/
-    }
-}
-
-${cf_domain} {
-    reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
-    encode gzip
-    log {
-        output file /var/log/caddy/access.log
-    }
-}
-
-*.${cf_domain} {
-    tls {
-        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-    }
-${cf_known_stanza}
-    handle {
-        reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
-    }
-}
-
-${cf_server_ip} {
-    tls internal
-    redir http://${cf_server_ip}{uri} 308
-}
-
-${cf_svc_blocks}
-CFCADDY
-                if install_caddyfile_atomically /tmp/Caddyfile.tmp "wildcard Caddyfile"; then
-                    echo -e "${GREEN}  ✓ Caddyfile generated with wildcard SSL for *.${cf_domain}${NC}"
-                else
-                    echo -e "${YELLOW}  ⚠ Wildcard Caddyfile could not be applied. Falling back to standard HTTPS for ${cf_domain}.${NC}"
-                    generate_safe_caddyfile "wildcard Caddyfile apply failed"
-                fi
-                rm -f /tmp/Caddyfile.tmp
-            else
-                # IP mode or no domain — fall back to safe Caddyfile
-                generate_safe_caddyfile "update flow (IP mode)"
-            fi
-        else
-            # No valid token — generate safe Caddyfile (no dns cloudflare)
-            generate_safe_caddyfile "update flow caddy regen"
-
-            # NOTE: Cloudflare dns-challenge stripping is now handled by
-            # generate_safe_caddyfile itself, which never emits 'dns cloudflare'
-            # blocks when no token is present. (Removed dead 'if false' block.)
-        fi
-
-        # Final validation — if still broken, regenerate safe fallback
-        if caddy_needs_fix; then
-            generate_safe_caddyfile "post-update validation"
-        fi
-
-        reload_container_caddy  || true
-
-        # ─── Python-based Caddyfile overlay (preview-aware routing) ─────────────
-        # The bash heredoc above generates a static template without preview
-        # environment routing. Django's generate_caddyfile() includes direct
-        # container routing for local preview environments, so we overlay it.
-        echo -e "${BLUE}  → Overlaying preview-aware Caddyfile from Django...${NC}"
-        timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
-from apps.deployments.models import PlatformConfig
-from services.caddy_manager import generate_caddyfile, apply_caddyfile
+from apps.deployments.services.caddy_manager import generate_caddyfile, apply_caddyfile
 config = PlatformConfig.load()
 content = generate_caddyfile(config)
 token = (getattr(config, 'cloudflare_api_token', '') or '').strip()
 result = apply_caddyfile(content, cloudflare_token=token, preserve_existing_token=True)
 print(result.get('message', 'ok'))
-"  && echo -e "${GREEN}  ✓ Preview-aware Caddyfile applied${NC}" || \
-            echo -e "${YELLOW}  ⚠ Python Caddyfile overlay failed (non-fatal, static template still active)${NC}"
+"; then
+                echo -e "${GREEN}  ✓ Caddyfile synced from Django${NC}"
+            else
+                echo -e "${YELLOW}  ⚠ Django Caddyfile sync failed — falling back to safe Caddyfile${NC}"
+                generate_safe_caddyfile "post-update fallback" || true
+            fi
 
-        reload_container_caddy  || true
+            reload_container_caddy || true
 
-        # Verify Caddy is running
-        sleep 2
-        if docker compose -f "$COMPOSE_FILE" ps -q caddy  | grep -q .; then
-            echo -e "${GREEN}  ✓ Caddy config regenerated and running${NC}"
-        else
-            echo -e "${YELLOW}  ⚠ Caddy failed to start. Run: journalctl -u caddy --no-pager -n 20${NC}"
-        fi
-
-        POST_CADDY_DOMAIN="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+            POST_CADDY_DOMAIN="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
 c = PlatformConfig.load()
 d = (c.domain or '').strip()
 if d and d != 'localhost':
     print(d)
 "  | tr -d '[:space:]' || true)"
-        if [ -z "$POST_CADDY_DOMAIN" ]; then
-            POST_CADDY_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env"  | cut -d= -f2- || true)"
-        fi
+            if [ -z "$POST_CADDY_DOMAIN" ]; then
+                POST_CADDY_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env"  | cut -d= -f2- || true)"
+            fi
 
-        install_caddy_health_guard "$POST_CADDY_DOMAIN"
-    fi
+            install_caddy_health_guard "$POST_CADDY_DOMAIN"
+        fi
     fi
 
     # NOTE: heredocs (not `bash -c "..."`) on purpose: the bundle regen
@@ -717,23 +522,47 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
     # ─── Re-apply OOM protection (scores reset when containers restart) ──────
     echo -e "${BLUE}  → Re-applying OOM protection for critical containers...${NC}"
-    oom_containers="smsly-hosting-backend-1 $(get_db_service | sed 's|^|smsly-hosting-|' || echo smsly-hosting-postgres-primary) smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1"
-    if [ "$MODE_AGENT_LITE" = "true" ]; then
-        oom_containers="smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1"
+    if [ "${MODE_AGENT_LITE:-false}" = "true" ]; then
+        oom_containers="smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-redis-1 smsly-hosting-rabbitmq-1 smsly-hosting-traefik-1 smsly-hosting-socket-proxy-1"
+    elif command -v is_node_mode >/dev/null 2>&1 && is_node_mode; then
+        oom_containers="smsly-postgres-primary smsly-hosting-redis-1 smsly-hosting-rabbitmq-1 smsly-hosting-caddy-1 smsly-hosting-traefik-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1"
+    else
+        oom_containers="smsly-postgres-primary smsly-patroni-1 smsly-haproxy smsly-redis-primary smsly-hosting-rabbitmq-1 smsly-hosting-caddy-1 smsly-hosting-traefik-1 smsly-hosting-backend-1 smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1"
     fi
     for CONTAINER in $oom_containers; do
-        resolved_container="$(resolve_container_target "$CONTAINER")"
-        CPID=$(docker inspect --format '{{.State.Pid}}' "$resolved_container"  || echo "")
+        resolved_container="$(resolve_container_target "$CONTAINER" 2>/dev/null || true)"
+        [ -n "$resolved_container" ] || continue
+        CPID=$(docker inspect --format '{{.State.Pid}}' "$resolved_container" 2>/dev/null || echo "")
         if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
-            echo -500 > "/proc/$CPID/oom_score_adj"  || true
+            echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
         fi
     done
-    echo -e "${GREEN}  ✓ OOM protection set (core, database, celery, proxy)${NC}"
+    echo -e "${GREEN}  ✓ OOM protection set (core, database, cache, broker, proxy)${NC}"
+
+    # ─── Egress mirror refresh (Alpine CDN rewrite + SSRF guard) ─────────
+    if [ -f "$INSTALL_DIR/lib/egress_mirror.sh" ]; then
+        # shellcheck disable=SC1090
+        source "$INSTALL_DIR/lib/egress_mirror.sh" || true
+        if command -v ensure_egress_mirror >/dev/null 2>&1; then
+            ensure_egress_mirror || true
+        fi
+    fi
+    if [ -f "$INSTALL_DIR/scripts/setup-egress-mirror.sh" ]; then
+        chmod +x "$INSTALL_DIR/scripts/setup-egress-mirror.sh" || true
+        cp "$INSTALL_DIR/scripts/smsly-egress-mirror.service" /etc/systemd/system/smsly-egress-mirror.service 2>/dev/null || true
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl enable smsly-egress-mirror.service 2>/dev/null || true
+    fi
 
     # ─── Ensure iptables-restore systemd service exists ─────────────────────
     if command -v iptables-save ; then
         mkdir -p /etc/iptables
-        iptables-save > /etc/iptables/rules.v4  || true
+        # Strip transient egress-mirror :8888 NAT REDIRECT rules before persisting
+        # so boot-time iptables-restore does not blackhole :80 before nginx starts;
+        # smsly-egress-mirror.service re-installs them after nginx.service is up.
+        local _egress_port="${SMSLY_EGRESS_MIRROR_PORT:-8888}"
+        iptables-save | grep -vE "REDIRECT[[:space:]].*--to-ports?[[:space:]]+${_egress_port}([[:space:]]|\$)" > /etc/iptables/rules.v4 || true
+        unset _egress_port
         if [ ! -f /etc/systemd/system/iptables-restore.service ]; then
             echo -e "${BLUE}  → Installing iptables-restore systemd service...${NC}"
             cat > /etc/systemd/system/iptables-restore.service <<'RESTORE_EOF'
@@ -764,8 +593,8 @@ RESTORE_EOF
         cp "$INSTALL_DIR/scripts/caddy-watcher.service" /etc/systemd/system/caddy-watcher.service  || true
         systemctl daemon-reload || echo -e "${YELLOW}    ⚠ systemctl daemon-reload failed (non-fatal)${NC}"
         systemctl enable smsly-update-watcher caddy-watcher || echo -e "${YELLOW}    ⚠ systemctl enable watchers failed (non-fatal)${NC}"
-        systemctl restart smsly-update-watcher caddy-watcher || echo -e "${YELLOW}    ⚠ systemctl restart watchers failed (non-fatal)${NC}"
-        echo -e "${GREEN}  ✓ smsly-update-watcher and caddy-watcher services updated and started${NC}"
+        systemctl restart caddy-watcher || echo -e "${YELLOW}    ⚠ systemctl restart caddy-watcher failed (non-fatal)${NC}"
+        echo -e "${GREEN}  ✓ smsly-update-watcher enabled and caddy-watcher restarted${NC}"
     fi
 
     # ─── Ensure Celery Worker Autoscaler service exists and is configured ──
@@ -840,6 +669,9 @@ RESTORE_EOF
         systemctl daemon-reload
         systemctl enable smsly-integrity.timer || echo -e "${YELLOW}    ⚠ systemctl enable integrity timer failed (non-fatal)${NC}"
         systemctl restart smsly-integrity.timer || echo -e "${YELLOW}    ⚠ systemctl restart integrity timer failed (non-fatal)${NC}"
+        if [ -f /etc/crontab ] && grep -q "verify_platform_integrity.sh" /etc/crontab 2>/dev/null; then
+            sed -i '/verify_platform_integrity\.sh/d' /etc/crontab 2>/dev/null || true
+        fi
         echo -e "${GREEN}  ✓ smsly-integrity timer installed and started${NC}"
     fi
 

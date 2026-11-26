@@ -16,6 +16,8 @@ from apps.cloud.serializers import (
     CloudProviderSerializer,
     CloudResourceSerializer,
 )
+from apps.core.rate_limiting import AIAnalysisRateThrottle, AIChatRateThrottle
+from apps.teams.permissions import assert_can_write
 
 logger = logging.getLogger(__name__)
 
@@ -37,20 +39,37 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
     serializer_class = IntelligencePayloadSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    _MAX_ANALYZE_LOGS_BYTES = 64 * 1024
+
     @action(detail=False, methods=['post'])
     def analyze_logs(self, request):
         """Analyze logs for errors and anomalies."""
         from apps.intelligence.analyzer import LogAnalyzer
         logs = request.data.get('logs', [])
-        # service_id = request.data.get('service_id')
+
+        if isinstance(logs, list):
+            parts: list[str] = []
+            total_bytes = 0
+            for item in logs:
+                s = str(item)
+                total_bytes += len(s.encode('utf-8', errors='ignore')) + (1 if parts else 0)
+                if total_bytes > self._MAX_ANALYZE_LOGS_BYTES:
+                    return Response(
+                        {'error': f'Logs payload exceeds {self._MAX_ANALYZE_LOGS_BYTES} bytes limit.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                parts.append(s)
+            logs = "\n".join(parts)
+        else:
+            if not isinstance(logs, str):
+                logs = str(logs)
+            if len(logs.encode('utf-8', errors='ignore')) > self._MAX_ANALYZE_LOGS_BYTES:
+                return Response(
+                    {'error': f'Logs payload exceeds {self._MAX_ANALYZE_LOGS_BYTES} bytes limit.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         analyzer = LogAnalyzer()
-        # analyzer.analyze_logs expects a string, not a list
-        if isinstance(logs, list):
-            logs = "\n".join(str(item) for item in logs)
-        elif not isinstance(logs, str):
-            logs = str(logs)
-
         analysis = analyzer.analyze_logs(logs)
 
         return Response(analysis)
@@ -78,21 +97,34 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
 
         return Response(plan)
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], throttle_classes=[AIAnalysisRateThrottle])
     def optimize_cost(self, request):
         """Analyze current usage and suggest cost optimizations."""
-        from apps.intelligence.cost import CostAdvisor
-        advisor = CostAdvisor()
         from apps.deployments.models import Service
+        from apps.intelligence.cost import CostAdvisor
+        from apps.intelligence.views import (
+            _check_user_cap,
+            _record_usage,
+            _release_cap_reservation,
+        )
+        from apps.permissions.utils import get_accessible_q
 
+        advisor = CostAdvisor()
         service_id = request.query_params.get('service_id')
         if service_id:
-            try:
-                service = Service.objects.get(id=service_id, owner=request.user)
-            except Service.DoesNotExist:
+            service = Service.objects.filter(get_accessible_q(request.user), id=service_id).first()
+            if not service:
                 return Response(
                     {'error': 'Service not found or access denied.'},
                     status=status.HTTP_404_NOT_FOUND,
+                )
+
+            reserve = 256
+            cap_ok, cap_reason = _check_user_cap(request.user, reserve_tokens=reserve)
+            if not cap_ok:
+                return Response(
+                    {'error': cap_reason, 'code': 'ai_cap_exceeded'},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
                 )
 
             cpu = float(service.cpu_cores or 1)
@@ -101,12 +133,21 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             normalized = {k: float(v) for k, v in estimates.items()}
             cheapest = min(normalized, key=normalized.get) if normalized else None
 
-            recommendation = advisor.ai_cost_analysis({
+            cost_cfg = {
                 'cpu_cores': cpu,
                 'memory_mb': float(service.memory_mb or 512),
                 'stack': str(service.deploy_type or '').lower(),
                 'provider': str(service.provider.provider_type if service.provider else 'unknown'),
-            })
+            }
+            try:
+                recommendation = advisor.ai_cost_analysis(cost_cfg)
+            finally:
+                _release_cap_reservation(request.user, reserve)
+
+            _record_usage(
+                request.user, 'cost_advisor', 'cost_advisor', {},
+                prompt_text=str(cost_cfg), response_text=str(recommendation or ''),
+            )
 
             return Response({
                 'scope': 'service',
@@ -117,22 +158,39 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 'ai_recommendations': recommendation,
             })
 
-        services = Service.objects.filter(owner=request.user)
+        reserve = 256
+        cap_ok, cap_reason = _check_user_cap(request.user, reserve_tokens=reserve)
+        if not cap_ok:
+            return Response(
+                {'error': cap_reason, 'code': 'ai_cap_exceeded'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        services = Service.objects.filter(get_accessible_q(request.user)).distinct()
         if not services.exists():
             baseline = advisor.estimate_monthly_cost(1.0, 0.5)
             normalized = {k: float(v) for k, v in baseline.items()}
             cheapest = min(normalized, key=normalized.get) if normalized else None
+            cost_cfg = {
+                'cpu_cores': 1,
+                'memory_mb': 512,
+                'stack': 'mixed',
+                'provider': 'unknown',
+            }
+            try:
+                recommendation = advisor.ai_cost_analysis(cost_cfg)
+            finally:
+                _release_cap_reservation(request.user, reserve)
+            _record_usage(
+                request.user, 'cost_advisor', 'cost_advisor', {},
+                prompt_text=str(cost_cfg), response_text=str(recommendation or ''),
+            )
             return Response({
                 'scope': 'workspace',
                 'service_count': 0,
                 'estimates': normalized,
                 'cheapest_provider': cheapest,
-                'ai_recommendations': advisor.ai_cost_analysis({
-                    'cpu_cores': 1,
-                    'memory_mb': 512,
-                    'stack': 'mixed',
-                    'provider': 'unknown',
-                }),
+                'ai_recommendations': recommendation,
             })
 
         totals: dict[str, Decimal] = {}
@@ -150,6 +208,20 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
 
         normalized = {k: float(v.quantize(Decimal("0.01"))) for k, v in totals.items()}
         cheapest = min(normalized, key=normalized.get) if normalized else None
+        cost_cfg = {
+            'cpu_cores': total_cpu,
+            'memory_mb': total_memory_mb,
+            'stack': 'mixed',
+            'provider': 'multi',
+        }
+        try:
+            recommendation = advisor.ai_cost_analysis(cost_cfg)
+        finally:
+            _release_cap_reservation(request.user, reserve)
+        _record_usage(
+            request.user, 'cost_advisor', 'cost_advisor', {},
+            prompt_text=str(cost_cfg), response_text=str(recommendation or ''),
+        )
         return Response({
             'scope': 'workspace',
             'service_count': services.count(),
@@ -157,33 +229,56 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             'total_memory_mb': round(total_memory_mb, 2),
             'estimates': normalized,
             'cheapest_provider': cheapest,
-            'ai_recommendations': advisor.ai_cost_analysis({
-                'cpu_cores': total_cpu,
-                'memory_mb': total_memory_mb,
-                'stack': 'mixed',
-                'provider': 'multi',
-            }),
+            'ai_recommendations': recommendation,
         })
 
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], throttle_classes=[AIChatRateThrottle])
     def chat(self, request):
         """Interactive AI assistant for cloud ops."""
+        from apps.intelligence.providers import SYSTEM_PROMPT, ask_with_fallback, get_configured_providers
+        from apps.intelligence.views import (
+            _check_user_cap,
+            _check_user_cap_for_committee,
+            _record_usage,
+            _release_cap_reservation,
+        )
+
         message = (request.data.get('message') or '').strip()
         if not message:
             return Response(
                 {'error': 'message is required'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        # history = request.data.get('history', [])
+
+        configured = get_configured_providers()
+        reserve = max(64, len(message) // 4 + 128)
+        cap_ok, cap_reason = (
+            _check_user_cap_for_committee(request.user, len(configured), reserve_tokens=reserve)
+            if len(configured) >= 2
+            else _check_user_cap(request.user, reserve_tokens=reserve)
+        )
+        if not cap_ok:
+            return Response(
+                {'error': cap_reason, 'code': 'ai_cap_exceeded'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
 
         # Add system context
         context = "User is asking about cloud infrastructure."
+        prompt = f"{context}\nUser: {message}"
 
         try:
-            from apps.intelligence.providers import SYSTEM_PROMPT, ask_with_fallback
             response, provider_name = ask_with_fallback(
-                prompt=f"{context}\nUser: {message}",
+                prompt=prompt,
                 system_prompt=SYSTEM_PROMPT
+            )
+            _record_usage(
+                request.user,
+                provider_name,
+                provider_name,
+                {},
+                prompt_text=prompt,
+                response_text=str(response or ''),
             )
             return Response({'response': response, 'provider': provider_name})
         except Exception as exc:
@@ -198,10 +293,12 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 'provider': 'Mock AI (degraded)',
                 'degraded': True,
             })
+        finally:
+            _release_cap_reservation(request.user, reserve)
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAdminUser])
     def providers(self, request):
-        """List available AI providers and their status."""
+        """List available AI providers and their status (admin-only)."""
         try:
             from apps.intelligence.providers import get_available_providers
             return Response(get_available_providers())
@@ -209,13 +306,19 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             logger.exception("Cloud intelligence providers degraded: %s", exc)
             return Response([])
 
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], throttle_classes=[AIAnalysisRateThrottle])
     def troubleshoot(self, request):
         """
         Troubleshoot a specific deployment or service error.
         M-5: Deep diagnostic tool.
         """
         from apps.deployments.models import Deployment, Service
+        from apps.intelligence.views import (
+            _check_user_cap,
+            _record_usage,
+            _release_cap_reservation,
+        )
+        from apps.permissions.utils import get_accessible_q
 
         deployment_id = request.data.get('deployment_id')
         service_id = request.data.get('service_id')
@@ -225,20 +328,20 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             or ''
         ).strip()
 
+        accessible_svcs = Service.objects.filter(get_accessible_q(request.user))
+
         if not error_trace and deployment_id:
-            try:
-                deploy = Deployment.objects.get(id=deployment_id, service__owner=request.user)
-                error_trace = (deploy.build_logs or '').strip()
-            except Deployment.DoesNotExist:
+            deploy = Deployment.objects.filter(service__in=accessible_svcs, id=deployment_id).first()
+            if not deploy:
                 return Response(
                     {'error': 'Deployment not found or access denied.'},
                     status=status.HTTP_404_NOT_FOUND,
                 )
+            error_trace = (deploy.build_logs or '').strip()
 
         if not error_trace and service_id:
-            try:
-                service = Service.objects.get(id=service_id, owner=request.user)
-            except Service.DoesNotExist:
+            service = accessible_svcs.filter(id=service_id).first()
+            if not service:
                 return Response(
                     {'error': 'Service not found or access denied.'},
                     status=status.HTTP_404_NOT_FOUND,
@@ -258,16 +361,36 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        reserve = max(64, len(error_trace[:2000]) // 4 + 128)
+        cap_ok, cap_reason = _check_user_cap(request.user, reserve_tokens=reserve)
+        if not cap_ok:
+            return Response(
+                {'error': cap_reason, 'code': 'ai_cap_exceeded'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
         from apps.intelligence.analyzer import LogAnalyzer
         from apps.intelligence.remediator import RemediationEngine
         analyzer = LogAnalyzer()
         issues = analyzer.analyze_logs(error_trace)
-        diagnosis = analyzer.generate_diagnosis(error_trace)
+        try:
+            diagnosis = analyzer.generate_diagnosis(error_trace)
+        finally:
+            _release_cap_reservation(request.user, reserve)
 
         provider = None
         if diagnosis.startswith('[') and '] ' in diagnosis:
             provider = diagnosis.split(']')[0].lstrip('[')
             diagnosis = diagnosis.split('] ', 1)[1]
+
+        _record_usage(
+            request.user,
+            provider or 'analyzer',
+            provider or 'analyzer',
+            {},
+            prompt_text=error_trace[:2000],
+            response_text=str(diagnosis or ''),
+        )
 
         remediator = RemediationEngine()
         suggested_actions = []
@@ -426,7 +549,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         acknowledged = bool(request.data.get('requires_acknowledgement'))
 
         try:
-            from apps.deployments.models_audit import AuditLog
+            from apps.deployments.models.audit import AuditLog
             AuditLog(
                 user=request.user if request.user.is_authenticated else None,
                 actor=request.user.get_username() if request.user.is_authenticated else 'system',
@@ -448,6 +571,10 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             'replaced with var.* references; you must still declare those '
             'variables and supply values via a non-committed tfvars file.'
         )
+        disclaimer = (
+            'This is a preview template. Review required_providers, '
+            'variables, and backend config before deploy.'
+        )
         return Response({
             'code': iac_code,
             'language': 'hcl',
@@ -456,6 +583,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             'preview_only': True,
             'acknowledged': acknowledged,
             'warning': warning,
+            'disclaimer': disclaimer,
         })
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAdminUser])
@@ -563,27 +691,18 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         selected_repos = request.data.get('selected_repos')
         project_id = request.data.get('project_id')
 
-        # Validate project access if provided
+        # Validate project write access if provided
         project = None
         if project_id:
             from apps.deployments.models.service import Project
             try:
                 project = Project.objects.get(id=project_id)
-                if project.owner != request.user:
-                    from apps.organizations.models.project import ProjectMember
-                    is_member = ProjectMember.objects.filter(
-                        project=project, user=request.user,
-                    ).exists()
-                    if not is_member:
-                        return Response(
-                            {'error': 'You do not have access to this project.'},
-                            status=status.HTTP_403_FORBIDDEN,
-                        )
             except Project.DoesNotExist:
                 return Response(
                     {'error': 'Project not found.'},
                     status=status.HTTP_404_NOT_FOUND,
                 )
+            assert_can_write(request.user, project, action='scan ecosystem in')
 
         plan_record = EcosystemPlan.objects.create(
             user=request.user,
@@ -741,15 +860,9 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         if project_id:
             try:
                 project = Project.objects.get(id=project_id)
-                if project.owner != request.user:
-                    from apps.organizations.models.project import ProjectMember
-                    if not ProjectMember.objects.filter(project=project, user=request.user).exists():
-                        return Response(
-                            {'error': 'You do not have access to this project.'},
-                            status=status.HTTP_403_FORBIDDEN,
-                        )
             except Project.DoesNotExist:
                 return Response({'error': 'Project not found.'}, status=status.HTTP_404_NOT_FOUND)
+            assert_can_write(request.user, project, action='deploy ecosystem in')
 
         # ── Concurrent-deploy guard and claim (atomic) ──────────────────
         from django.db import transaction as _transaction
@@ -962,6 +1075,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             return Response({'error': 'Plan has no associated project'}, status=status.HTTP_400_BAD_REQUEST)
 
         project = plan_record.project
+        assert_can_write(request.user, project, action='add service to ecosystem in')
 
         # Derive names (avoid IntegrityError on the globally-unique name).
         requested_name = service_name.lower().replace(' ', '-').replace('_', '-')

@@ -10,7 +10,12 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.conf import settings
 
-from apps.deployments.consumers.base import authenticate_ws_token, get_websocket_subprotocol, logger
+from apps.deployments.consumers.base import (
+    authenticate_ws_credential,
+    authenticate_ws_token,
+    get_websocket_subprotocol,
+    logger,
+)
 
 
 def _resolve_addon_remote_server(addon):
@@ -63,8 +68,10 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
         self.addon_id = None
         self.group_name = None
         self.user = None
+        self.api_token = None
         self._stream_task = None
         self._proc = None
+        self._log_proc = None
         self._disconnected = False
 
     async def connect(self):
@@ -72,8 +79,23 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
 
         try:
             self.user = self.scope.get('user')
+            self.api_token = self.scope.get('api_token')
+            if not self.user or getattr(self.user, 'is_anonymous', True):
+                subprotocols = self.scope.get('subprotocols') or []
+                token_key = None
+                for proto in subprotocols:
+                    if not proto:
+                        continue
+                    if proto.startswith('token.'):
+                        token_key = proto[len('token.'):]
+                        break
+                    if proto != 'token':
+                        token_key = proto
+                        break
+                if token_key:
+                    self.user, self.api_token = await authenticate_ws_credential(token_key)
 
-            if not self.user or self.user.is_anonymous:
+            if not self.user or getattr(self.user, 'is_anonymous', True):
                 await self.close(code=4002)
                 return
 
@@ -83,13 +105,16 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
 
             await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
 
-            self.group_name = f"addon_logs_{self.addon_id}"
-            await self.channel_layer.group_add(
-                self.group_name,
-                self.channel_name
-            )
-
             initial = await self._get_initial_state()
+            is_restricted_shared = initial.get('source') == 'restricted_shared'
+
+            if not is_restricted_shared:
+                self.group_name = f"addon_logs_{self.addon_id}"
+                await self.channel_layer.group_add(
+                    self.group_name,
+                    self.channel_name
+                )
+
             await self.send(text_data=json.dumps({
                 'type': 'initial_state',
                 **initial
@@ -98,7 +123,8 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
             # Follow stream uses --tail 0: _get_initial_state above already
             # delivered the tail, and replaying it here would paint
             # every line twice.
-            self._stream_task = asyncio.create_task(self._stream_logs())
+            if not is_restricted_shared:
+                self._stream_task = asyncio.create_task(self._stream_logs())
 
         except Exception as e:
             if settings.DEBUG:
@@ -107,18 +133,44 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
                 await self.send(text_data=json.dumps({'error': 'Internal error'}))
             await self.close(code=4000)
 
+    def _reap_proc(self):
+        proc = getattr(self, '_log_proc', None) or getattr(self, '_proc', None)
+        if not proc:
+            return
+        try:
+            if getattr(proc, 'stdout', None):
+                with contextlib.suppress(Exception):
+                    proc.stdout.close()
+            if proc.poll() is None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                except (ProcessLookupError, OSError):
+                    with contextlib.suppress(Exception):
+                        proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except (ProcessLookupError, OSError):
+                        with contextlib.suppress(Exception):
+                            proc.kill()
+                    with contextlib.suppress(Exception):
+                        proc.wait(timeout=2)
+            else:
+                with contextlib.suppress(Exception):
+                    proc.wait(timeout=2)
+        finally:
+            self._proc = None
+            self._log_proc = None
+
     async def disconnect(self, code):
         self._disconnected = True
         if self._stream_task and not self._stream_task.done():
             self._stream_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._stream_task
-        if self._proc and self._proc.poll() is None:
-            try:
-                os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
-            except (ProcessLookupError, OSError):
-                pass
-            self._proc = None
+        self._reap_proc()
         if self.group_name:
             with contextlib.suppress(Exception):
                 await self.channel_layer.group_discard(
@@ -146,18 +198,26 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _verify_ownership(self):
         from apps.deployments.models.addons import Addon
+        from apps.teams.permissions import user_can_read
         try:
-            addon = Addon.objects.select_related('service', 'service__owner').get(id=self.addon_id)
+            addon = Addon.objects.select_related(
+                'service', 'service__owner', 'service__project__team'
+            ).get(id=self.addon_id)
         except Addon.DoesNotExist:
             return False
-        if self.user.is_superuser:
+        if not self.user or not getattr(self.user, 'is_authenticated', False) or not getattr(self.user, 'is_active', False):
+            return False
+        api_token = getattr(self, 'api_token', None)
+        if api_token is not None:
+            if not api_token.has_scope('read'):
+                return False
+            if not addon.service or not api_token.has_project(addon.service.project_id):
+                return False
+        if getattr(self.user, 'is_superuser', False):
             return True
-        if addon.service.owner_id == self.user.id:
-            return True
-        project = getattr(addon.service, 'project', None)
-        if project is not None and project.team_id is not None and project.team.members.filter(user=self.user).exists():
-            return True
-        return False
+        if not addon.service:
+            return False
+        return user_can_read(self.user, addon.service)
 
     @database_sync_to_async
     def _get_initial_state(self):
@@ -168,6 +228,20 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
                 'service', 'service__server').get(id=self.addon_id)
             from apps.addons.services.addon_provisioner import addon_provisioner
             container_name, notice = addon_provisioner.resolve_log_container(addon)
+            is_shared_target = (
+                str(getattr(addon, 'provision_mode', '') or '') == 'shared'
+                or bool(getattr(addon, 'pooler_routed', False))
+                or container_name in ('smsly-shared-postgres', 'pgbouncer-tenants')
+            )
+            if is_shared_target and not getattr(self.user, 'is_superuser', False):
+                return {
+                    'logs': '',
+                    'status': addon.status,
+                    'addon_type': addon.addon_type,
+                    'container_name': '',
+                    'notice': 'Shared database logs contain multi-tenant output and are restricted to platform administrators.',
+                    'source': 'restricted_shared',
+                }
             server = _resolve_addon_remote_server(addon)
             if server is not None:
                 try:
@@ -220,12 +294,22 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
             await self.send(text_data=json.dumps({'error': 'Addon not found'}))
             return
 
+        if (
+            (
+                str(getattr(addon, 'provision_mode', '') or '') == 'shared'
+                or bool(getattr(addon, 'pooler_routed', False))
+                or container_name in ('smsly-shared-postgres', 'pgbouncer-tenants')
+            )
+            and not getattr(self.user, 'is_superuser', False)
+        ):
+            return
+
         if remote_server is not None:
             await self._stream_remote_logs(remote_server, container_name)
             return
 
         try:
-            self._proc = subprocess.Popen(
+            self._log_proc = self._proc = subprocess.Popen(
                 ['docker', 'logs', '--tail', '0', '-f', '--timestamps', container_name],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -251,12 +335,7 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.debug("Addon log stream ended for %s: %s", self.addon_id, e)
         finally:
-            if self._proc:
-                try:
-                    os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
-                except (ProcessLookupError, OSError):
-                    pass
-                self._proc = None
+            self._reap_proc()
 
     async def _stream_remote_logs(self, server, container_name):
         """Poll node container logs for remotely-provisioned addons.

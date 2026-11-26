@@ -49,10 +49,38 @@ def _forwarder_name(addon) -> str:
     return f"smsly-mesh-fwd-{str(addon.id)[:8]}"
 
 
-def _alloc_port(addon) -> int:
-    """Deterministic free-ish port in the mesh-forward range."""
-    base = PORT_RANGE_START + (hash(str(addon.id)) % (PORT_RANGE_END - PORT_RANGE_START))
-    return base
+def _used_mesh_ports(exclude_addon_id=None) -> set[int]:
+    """Collect mesh_forward_port values already claimed by other addons."""
+    used: set[int] = set()
+    try:
+        from apps.deployments.models import Addon
+        qs = Addon.objects.all()
+        if exclude_addon_id is not None:
+            qs = qs.exclude(id=exclude_addon_id)
+        for meta in qs.values_list('provider_metadata', flat=True):
+            if isinstance(meta, dict) and meta.get('mesh_forward_port'):
+                try:
+                    used.add(int(meta['mesh_forward_port']))
+                except (TypeError, ValueError):
+                    pass
+    except Exception:
+        pass
+    return used
+
+
+def _alloc_port(addon, used_ports: set[int] | None = None) -> int:
+    """Deterministic port in the mesh-forward range with collision probing."""
+    import hashlib
+    span = PORT_RANGE_END - PORT_RANGE_START
+    digest = hashlib.sha256(str(addon.id).encode('utf-8')).digest()
+    start_offset = int.from_bytes(digest[:4], 'big') % span
+    if used_ports is None:
+        used_ports = _used_mesh_ports(exclude_addon_id=getattr(addon, 'id', None))
+    for step in range(span):
+        candidate = PORT_RANGE_START + ((start_offset + step) % span)
+        if candidate not in used_ports:
+            return candidate
+    raise RuntimeError("No free mesh forwarder ports available")
 
 
 def _forwarder_network(addon) -> str:
@@ -100,23 +128,36 @@ def ensure_addon_mesh_forward(addon) -> tuple[str, int] | None:
     # network alias inside smsly-net.
     target_host = parsed.hostname
     target_port = parsed.port
+    used_ports = _used_mesh_ports(exclude_addon_id=getattr(addon, 'id', None))
     if not fwd_port:
-        fwd_port = _alloc_port(addon)
+        fwd_port = _alloc_port(addon, used_ports=used_ports)
 
-    _sh(['docker', 'rm', '-f', fwd_name])
-    res = _sh([
-        'docker', 'run', '-d',
-        '--name', fwd_name,
-        '--restart', 'unless-stopped',
-        '--network', _forwarder_network(addon),
-        '-p', f"{_get_master_mesh_ip()}:{fwd_port}:{target_port}",
-        FORWARDER_IMAGE,
-        f"tcp-listen:{target_port},fork,reuseaddr",
-        f"tcp-connect:{target_host}:{target_port}",
-    ])
-    if res.returncode != 0:
+    mesh_ip = _get_master_mesh_ip()
+    net_name = _forwarder_network(addon)
+    res = None
+    for _attempt in range(8):
+        _sh(['docker', 'rm', '-f', fwd_name])
+        res = _sh([
+            'docker', 'run', '-d',
+            '--name', fwd_name,
+            '--restart', 'unless-stopped',
+            '--network', net_name,
+            '-p', f"{mesh_ip}:{fwd_port}:{target_port}",
+            FORWARDER_IMAGE,
+            f"tcp-listen:{target_port},fork,reuseaddr",
+            f"tcp-connect:{target_host}:{target_port}",
+        ])
+        if res.returncode == 0:
+            break
+        err_text = (res.stderr or '').lower()
+        if 'port is already allocated' in err_text or 'address already in use' in err_text:
+            used_ports.add(int(fwd_port))
+            fwd_port = _alloc_port(addon, used_ports=used_ports)
+            continue
+        break
+    if res is None or res.returncode != 0:
         logger.warning("mesh forwarder create failed for %s: %s",
-                       fwd_name, res.stderr.strip()[:200])
+                       fwd_name, (res.stderr if res else '').strip()[:200])
         return None
 
     # Persist the port so restarts reuse it deterministically.

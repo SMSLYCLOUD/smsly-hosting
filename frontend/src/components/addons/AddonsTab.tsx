@@ -5,12 +5,14 @@ import Image from 'next/image';
 import { Database, RotateCcw, Plus, Trash2, RefreshCw, Download, Shield, Loader2, Server, Search, MessageSquare, Zap, HardDrive, Layers, Eye, Copy, Check, Globe, Play, Square } from 'lucide-react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { toast } from '@/components/ui/use-toast';
+import { Label } from '@/components/ui/label';
 import { addonsApi, Addon, systemApi } from '@/lib/api';
 import { ADDON_TYPES } from '@/lib/addonConstants';
 import { CLI_ADDON_TYPES } from '@/lib/addonRegistry';
 import CliConfigCard from '@/components/addons/CliConfigCard';
 import AddonConsole from '@/components/addons/AddonConsole';
 import { AddonLogsViewer } from '@/components/addons/AddonLogsViewer';
+import { usePermissions } from '@/hooks/usePermissions';
 
 
 interface Backup {
@@ -26,6 +28,8 @@ interface Backup {
 
 export function AddonsTab({ serviceId }: { serviceId?: string }) {
     const confirm = useConfirm();
+    const { isStaff, isSuperuser } = usePermissions();
+    const canReadDomainConfig = isStaff || isSuperuser;
     const [addons, setAddons] = useState<Addon[]>([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
@@ -60,13 +64,17 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
     }, [fetchAddons]);
 
     // Platform default for new Postgres addons (shared pool vs individual).
-    // Loaded lazily when the create form opens.
+    // Loaded lazily when the create form opens (admin only).
     useEffect(() => {
         if (!showCreate || platformSharedDefault !== null) return;
+        if (!canReadDomainConfig) {
+            setPlatformSharedDefault(true);
+            return;
+        }
         systemApi.getDomainConfig()
             .then((cfg: any) => setPlatformSharedDefault(cfg?.postgres_shared_addons_default ?? true))
             .catch(() => setPlatformSharedDefault(true));
-    }, [showCreate, platformSharedDefault]);
+    }, [showCreate, platformSharedDefault, canReadDomainConfig]);
 
     const handleCreate = async () => {
         setCreating(true);
@@ -97,18 +105,15 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
     };
 
     const handleDeprovision = async (addonId: string, addonName: string) => {
-        const typed = prompt(`Type "${addonName}" to permanently delete this addon and all its data.`);
-        if (typed === null) return;
-        if (typed.trim() !== addonName) {
-            toast({
-                title: 'Deletion cancelled',
-                description: `Type "${addonName}" exactly to confirm deletion.`,
-                variant: 'destructive',
-            });
-            return;
-        }
+        if (!await confirm({
+            title: 'Delete addon?',
+            message: `Permanently delete "${addonName}" and all its data? This cannot be undone.`,
+            variant: 'destructive',
+            confirmText: 'Delete',
+            requireMatchText: addonName,
+        })) return;
         try {
-            await addonsApi.deprovision(addonId, typed.trim());
+            await addonsApi.deprovision(addonId, addonName);
             fetchAddons();
             toast({ title: 'Addon deprovisioning queued', description: `${addonName} is being removed.` });
         } catch (e: any) {
@@ -296,6 +301,7 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
     const statusColor = (s: string) => {
         switch (s) {
             case 'ACTIVE': return 'bg-emerald-500/10 text-emerald-500';
+            case 'STOPPED': return 'bg-amber-500/10 text-amber-500';
             case 'PROVISIONING': return 'bg-yellow-500/10 text-yellow-500';
             case 'FAILED': return 'bg-red-500/10 text-red-500';
             default: return 'bg-zinc-500/10 text-zinc-500';
@@ -315,7 +321,7 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
             {/* Header */}
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                     <h2 className="text-xl font-bold text-foreground">Infrastructure Addons</h2>
                     <p className="text-sm text-muted-foreground mt-1">
@@ -323,8 +329,9 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                     </p>
                 </div>
                 <button
+                    type="button"
                     onClick={() => setShowCreate(!showCreate)}
-                    className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium text-sm hover:bg-primary/90 transition-colors"
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium text-sm hover:bg-primary/90 transition-colors self-start sm:self-auto"
                 >
                     <Plus size={16} /> Add Addon
                 </button>
@@ -391,18 +398,25 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                             </p>
                         </div>
                     )}
-                    <div className="flex gap-3">
-                        <input
-                            type="text"
-                            placeholder="Addon name (optional)"
-                            value={newName}
-                            onChange={e => setNewName(e.target.value)}
-                            className="flex-1 p-2.5 bg-background border border-border rounded-lg text-sm"
-                        />
+                    <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+                        <div className="flex-1 min-w-0 space-y-1.5">
+                            <Label htmlFor="addon-new-name" className="text-xs font-medium text-muted-foreground">
+                                Addon Name <span className="text-muted-foreground/70">(optional)</span>
+                            </Label>
+                            <input
+                                id="addon-new-name"
+                                type="text"
+                                placeholder="Addon name (optional)"
+                                value={newName}
+                                onChange={e => setNewName(e.target.value)}
+                                className="w-full p-2.5 bg-background border border-border rounded-lg text-sm"
+                            />
+                        </div>
                         <button
+                            type="button"
                             onClick={handleCreate}
                             disabled={creating}
-                            className="px-6 py-2.5 bg-primary text-primary-foreground rounded-lg font-medium text-sm hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2"
+                            className="px-6 py-2.5 bg-primary text-primary-foreground rounded-lg font-medium text-sm hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2 shrink-0"
                         >
                             {creating ? <Loader2 size={14} className="animate-spin" /> : <Server size={14} />}
                             {creating ? 'Provisioning...' : 'Provision'}
@@ -436,11 +450,11 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                         return (
                             <div key={addon.id} className="bg-card border border-border rounded-xl overflow-hidden">
                                 <div
-                                    className="p-5 flex items-center justify-between cursor-pointer hover:bg-muted/30 transition-colors"
+                                    className="p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 cursor-pointer hover:bg-muted/30 transition-colors"
                                     onClick={() => toggleExpand(addon.id)}
                                 >
-                                    <div className="flex items-center gap-4">
-                                        <span className="text-3xl block h-8 w-8 relative flex items-center justify-center">
+                                    <div className="flex items-center gap-4 min-w-0">
+                                        <span className="text-3xl block h-8 w-8 relative flex items-center justify-center shrink-0">
                                             {meta.logo && !failedImages[addon.id] ? (
                                                 <Image 
                                                     src={meta.logo} 
@@ -453,12 +467,12 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                 <Database className="w-6 h-6 text-muted-foreground" />
                                             )}
                                         </span>
-                                        <div>
-                                            <h4 className="font-semibold text-foreground">{addon.name}</h4>
+                                        <div className="min-w-0">
+                                            <h4 className="font-semibold text-foreground truncate">{addon.name}</h4>
                                             <p className={`text-xs font-medium ${meta.color}`}>{meta.label}</p>
                                         </div>
                                     </div>
-                                    <div className="flex items-center gap-3">
+                                    <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                                         <span className={`px-2.5 py-1 rounded text-xs font-bold uppercase ${statusColor(addon.status)}`}>
                                             {addon.status}
                                         </span>
@@ -483,9 +497,9 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                 </div>
 
                                 {isExpanded && (
-                                    <div className="border-t border-border p-5 space-y-4 bg-muted/10">
+                                    <div className="border-t border-border p-4 sm:p-5 space-y-4 bg-muted/10">
                                         {/* Actions */}
-                                        <div className="flex gap-2">
+                                        <div className="flex flex-wrap items-center gap-2">
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); handleBackup(addon.id); }}
                                                 className="flex items-center gap-2 px-3 py-2 bg-blue-500/10 text-blue-400 rounded-lg text-xs font-medium hover:bg-blue-500/20 transition-colors"
@@ -524,44 +538,47 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                     <Layers size={12} /> Migrate to {addon.provision_mode === 'shared' ? 'Individual' : 'Shared'}
                                                 </button>
                                             )}
+                                            {addon.provision_mode !== 'shared' && addon.status === 'STOPPED' && (
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); handleStartStop(addon, true); }}
+                                                    title="Spin up this parked addon container on demand (volumes intact)"
+                                                    className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 text-emerald-400 rounded-lg text-xs font-medium hover:bg-emerald-500/20 transition-colors"
+                                                >
+                                                    <Play size={12} /> Start
+                                                </button>
+                                            )}
                                             {addon.provision_mode !== 'shared' && addon.status === 'ACTIVE' && (
-                                                <>
-                                                    <button
-                                                        onClick={(e) => { e.stopPropagation(); handleStartStop(addon, true); }}
-                                                        title="Spin up this addon container on demand (volumes intact)"
-                                                        className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 text-emerald-400 rounded-lg text-xs font-medium hover:bg-emerald-500/20 transition-colors"
-                                                    >
-                                                        <Play size={12} /> Start
-                                                    </button>
-                                                    <button
-                                                        onClick={(e) => { e.stopPropagation(); handleStartStop(addon, false); }}
-                                                        title="Park this container to free capacity (volumes kept)"
-                                                        className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 text-amber-400 rounded-lg text-xs font-medium hover:bg-amber-500/20 transition-colors"
-                                                    >
-                                                        <Square size={12} /> Stop
-                                                    </button>
-                                                </>
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); handleStartStop(addon, false); }}
+                                                    title="Park this container on demand to free capacity (volumes kept)"
+                                                    className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 text-amber-400 rounded-lg text-xs font-medium hover:bg-amber-500/20 transition-colors"
+                                                >
+                                                    <Square size={12} /> Stop
+                                                </button>
                                             )}
                                             {addon.public_domain ? (
-                                                <div className="flex items-center gap-2">
-                                                    <div className="flex items-center rounded-lg overflow-hidden border border-emerald-500/20">
+                                                <div className="flex flex-wrap items-center gap-2 max-w-full">
+                                                    <div className="flex flex-wrap items-center rounded-lg overflow-hidden border border-emerald-500/20 max-w-full">
                                                         <span
-                                                            className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 text-emerald-400 text-xs font-medium h-full"
+                                                            className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 text-emerald-400 text-xs font-medium min-w-0 max-w-full"
                                                         >
-                                                            <Globe size={12} /> {addon.public_domain}
+                                                            <Globe size={12} className="shrink-0" />
+                                                            <span className="truncate max-w-[200px] sm:max-w-[280px]">{addon.public_domain}</span>
                                                         </span>
                                                         {(meta as any).has_dashboard && (
                                                             <button
+                                                                type="button"
                                                                 onClick={(e) => { e.stopPropagation(); handleUpdatePublicDomain(addon.id, addon.public_domain); }}
-                                                                className="flex items-center px-2 py-2 bg-emerald-500/10 border-l border-emerald-500/20 text-emerald-400 text-xs font-medium hover:bg-emerald-500/30 transition-colors h-full"
+                                                                className="flex items-center px-2 py-2 bg-emerald-500/10 border-l border-emerald-500/20 text-emerald-400 text-xs font-medium hover:bg-emerald-500/30 transition-colors"
                                                                 title="Edit Domain"
                                                             >
                                                                 Edit
                                                             </button>
                                                         )}
                                                         <button
+                                                            type="button"
                                                             onClick={(e) => { e.stopPropagation(); handleUnexpose(addon.id); }}
-                                                            className="flex items-center px-2 py-2 bg-emerald-500/10 border-l border-emerald-500/20 text-emerald-400 text-xs font-medium hover:bg-red-500/30 hover:text-red-400 transition-colors h-full"
+                                                            className="flex items-center px-2 py-2 bg-emerald-500/10 border-l border-emerald-500/20 text-emerald-400 text-xs font-medium hover:bg-red-500/30 hover:text-red-400 transition-colors"
                                                             title="Remove public domain and return to internal-only networking"
                                                         >
                                                             Make Internal
@@ -617,12 +634,12 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
 
                                         {/* MinIO Bucket Access */}
                                         {addon.addon_type === 'MINIO' && (
-                                            <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-4 flex items-center justify-between">
-                                                <div className="flex items-center gap-3">
-                                                    <div className={`p-2 rounded-full ${addon.is_bucket_public ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                                            <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                                <div className="flex items-center gap-3 min-w-0">
+                                                    <div className={`p-2 rounded-full shrink-0 ${addon.is_bucket_public ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
                                                         <Shield size={18} />
                                                     </div>
-                                                    <div>
+                                                    <div className="min-w-0">
                                                         <p className="text-sm font-semibold text-foreground">Bucket Access Control</p>
                                                         <p className="text-xs text-muted-foreground">
                                                             {addon.is_bucket_public 
@@ -631,13 +648,17 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                         </p>
                                                     </div>
                                                 </div>
-                                                <div className="flex items-center gap-2">
+                                                <div className="flex items-center gap-2 shrink-0">
                                                     <span className="text-[10px] font-bold uppercase text-muted-foreground">
                                                         {addon.is_bucket_public ? 'Public' : 'Private'}
                                                     </span>
                                                     <button
+                                                        type="button"
+                                                        role="switch"
+                                                        aria-checked={Boolean(addon.is_bucket_public)}
+                                                        aria-label={`Toggle public access for ${addon.name}`}
                                                         onClick={(e) => { e.stopPropagation(); handleToggleBucketPublic(addon.id, !addon.is_bucket_public); }}
-                                                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${addon.is_bucket_public ? 'bg-emerald-500' : 'bg-zinc-700'}`}
+                                                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${addon.is_bucket_public ? 'bg-emerald-500' : 'bg-zinc-700'}`}
                                                     >
                                                         <span
                                                             className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${addon.is_bucket_public ? 'translate-x-6' : 'translate-x-1'}`}
@@ -659,16 +680,20 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
 
                                                         return (
                                                             <div key={key} className="bg-zinc-900/30 rounded-lg border border-zinc-800/50 p-3">
-                                                                <div className="flex items-center justify-between mb-1">
-                                                                    <span className="font-mono text-xs text-blue-300">{key}</span>
-                                                                    <div className="flex items-center gap-2">
+                                                                <div className="flex items-center justify-between gap-2 mb-1">
+                                                                    <span className="font-mono text-xs text-blue-300 break-all">{key}</span>
+                                                                    <div className="flex items-center gap-2 shrink-0">
                                                                         <button
+                                                                            type="button"
+                                                                            aria-label={isRevealed ? `Hide ${key}` : `Reveal ${key}`}
                                                                             onClick={(e) => { e.stopPropagation(); setRevealedCreds(prev => ({...prev, [`${addon.id}-${key}`]: !isRevealed})); }}
                                                                             className="text-muted-foreground hover:text-foreground transition-colors"
                                                                         >
                                                                             <Eye size={12} />
                                                                         </button>
                                                                         <button
+                                                                            type="button"
+                                                                            aria-label={`Copy ${key}`}
                                                                             onClick={(e) => {
                                                                                 e.stopPropagation();
                                                                                 navigator.clipboard.writeText(value);
@@ -702,7 +727,7 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                             ) : (
                                                 <div className="space-y-2">
                                                     {addonBackups.map(b => (
-                                                        <div key={b.id} className="flex items-center justify-between p-3 bg-background rounded-lg border border-border">
+                                                        <div key={b.id} className="flex flex-wrap items-center justify-between gap-2 p-3 bg-background rounded-lg border border-border">
                                                             <div className="flex items-center gap-3">
                                                                 <Download size={14} className="text-muted-foreground" />
                                                                 <div>

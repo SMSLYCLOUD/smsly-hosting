@@ -13,7 +13,7 @@ from ...models import EnvironmentVariable
 from ...serializers import EnvVarSerializer
 from ...serializers.service import _must_mask_env_value
 from .._helpers import _is_valid_env_key, _looks_masked_secret, _parse_bool
-from apps.teams.permissions import assert_can_write
+from apps.teams.permissions import assert_can_write, user_can_write
 from apps.deployments.utils.env_sanitizer import (
     sanitize_env_value,
     is_placeholder,
@@ -114,7 +114,17 @@ class EnvVarActionsMixin:
 
                 existing = EnvironmentVariable.objects.filter(
                     service=service, key=key).first()
+                if existing and existing.is_locked:
+                    return Response(
+                        {'error': f'Environment variable "{key}" is locked. Unlock it before modifying.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
                 value = str(row.get('value', '') or '')
+                has_explicit_unmasked_value = (
+                    'value' in row
+                    and row.get('value') is not None
+                    and not _looks_masked_secret(value)
+                )
                 if existing and _must_mask_env_value(existing.key, existing.value, existing.is_secret) and _looks_masked_secret(value):
                     value = existing.value
                 else:
@@ -132,6 +142,11 @@ class EnvVarActionsMixin:
 
                 if 'is_secret' in row:
                     is_secret = _parse_bool(row.get('is_secret'))
+                    if existing and existing.is_secret and not is_secret and not (has_explicit_unmasked_value and value):
+                        return Response(
+                            {'error': f'Cannot unmask secret "{key}" (is_secret=False) without supplying a new value.'},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
                 else:
                     is_secret = bool(existing.is_secret) if existing else False
 
@@ -204,7 +219,17 @@ class EnvVarActionsMixin:
             )
 
         existing = EnvironmentVariable.objects.filter(service=service, key=key).first()
+        if existing and existing.is_locked:
+            return Response(
+                {'error': f'Environment variable "{key}" is locked. Unlock it before modifying.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         value = str(request.data.get('value', '') or '')
+        has_explicit_unmasked_value = (
+            'value' in request.data
+            and request.data.get('value') is not None
+            and not _looks_masked_secret(value)
+        )
         if existing and _must_mask_env_value(existing.key, existing.value, existing.is_secret) and _looks_masked_secret(value):
             value = existing.value
         else:
@@ -216,6 +241,11 @@ class EnvVarActionsMixin:
             )
         if 'is_secret' in request.data:
             is_secret = _parse_bool(request.data.get('is_secret'))
+            if existing and existing.is_secret and not is_secret and not (has_explicit_unmasked_value and value):
+                return Response(
+                    {'is_secret': ['Cannot flip is_secret from True to False without supplying a new value.']},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         else:
             is_secret = bool(existing.is_secret) if existing else False
 
@@ -268,11 +298,13 @@ class EnvVarActionsMixin:
 
         reveal_secrets = False
         if request.method.upper() == 'GET':
+            auth_obj = getattr(request, 'auth', None)
+            token_allows_write = True
+            if auth_obj is not None and hasattr(auth_obj, 'has_scope'):
+                token_allows_write = bool(auth_obj.has_scope('write'))
             reveal_secrets = (
-                request.user.is_superuser
-                or var.service.owner_id == request.user.id
-                or (getattr(request, 'auth', None)
-                and hasattr(request.auth, 'prefix'))  # APIToken
+                user_can_write(request.user, service)
+                and token_allows_write
             )
             return Response(
                 EnvVarSerializer(
@@ -282,14 +314,50 @@ class EnvVarActionsMixin:
             )
         assert_can_write(self.request.user, service)
         if request.method.upper() == 'DELETE':
+            if var.is_locked:
+                return Response(
+                    {'error': 'Environment variable is locked. Unlock it before deleting.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             var.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
 
-        # PATCH — toggle is_locked (or update any field)
+        # PATCH — toggle is_locked (or update fields)
+        requested_is_locked = _parse_bool(request.data['is_locked']) if 'is_locked' in request.data else var.is_locked
+        if var.is_locked and requested_is_locked:
+            return Response(
+                {'error': 'Environment variable is locked. Unlock it (is_locked=false) before modifying.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         if 'is_locked' in request.data:
-            var.is_locked = _parse_bool(request.data['is_locked'])
+            var.is_locked = requested_is_locked
+        if 'value' in request.data:
+            raw_val = str(request.data.get('value', '') or '')
+            if _looks_masked_secret(raw_val) and _must_mask_env_value(var.key, var.value, var.is_secret):
+                new_val = var.value
+                has_new_val = False
+            else:
+                new_val = _scrub_user_value(raw_val, var.key)
+                has_new_val = bool(new_val)
+            if _is_ciphertext(new_val):
+                return Response(
+                    {'value': ['Cannot save Fernet ciphertext as value. Sender must decrypt before sending.']},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            new_val = var.value
+            has_new_val = False
+
         if 'is_secret' in request.data:
-            var.is_secret = _parse_bool(request.data['is_secret'])
+            new_is_secret = _parse_bool(request.data['is_secret'])
+            if var.is_secret and not new_is_secret and not has_new_val:
+                return Response(
+                    {'is_secret': ['Cannot flip is_secret from True to False without supplying a new value.']},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            var.is_secret = new_is_secret
+        if 'value' in request.data and has_new_val:
+            var.value = new_val
         var.save()
         return Response(
             EnvVarSerializer(

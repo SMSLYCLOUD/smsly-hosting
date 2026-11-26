@@ -73,6 +73,8 @@ class ResolveRequestedDeployTargetTests(TestCase):
             name="Worker EU",
             host="198.51.100.7",
             is_primary=False,
+            status=ManagedServer.Status.ONLINE,
+            provision_status=ManagedServer.ProvisionStatus.DONE,
         )
         self.service.server = remote
         self.service.save(update_fields=["server"])
@@ -93,6 +95,8 @@ class ResolveRequestedDeployTargetTests(TestCase):
             name="Worker EU",
             host="198.51.100.7",
             is_primary=False,
+            status=ManagedServer.Status.ONLINE,
+            provision_status=ManagedServer.ProvisionStatus.DONE,
         )
         self.service.server = remote
         self.service.save(update_fields=["server"])

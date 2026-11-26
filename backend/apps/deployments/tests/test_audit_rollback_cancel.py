@@ -33,17 +33,26 @@ class RollbackAuditLogTests(APITestCase):
             repository_url='https://github.com/x/y',
             branch='main',
         )
+        from datetime import timedelta
+        from django.utils import timezone
         self.good = Deployment.objects.create(
             service=self.service,
-            status=Deployment.Status.ACTIVE,
+            status=Deployment.Status.INACTIVE,
             commit_hash='goodcommit',
+            finished_at=timezone.now() - timedelta(minutes=5),
+        )
+        self.current = Deployment.objects.create(
+            service=self.service,
+            status=Deployment.Status.ACTIVE,
+            commit_hash='badcommit',
+            finished_at=timezone.now(),
         )
 
     @patch('apps.deployments.tasks.smart_deploy_task.delay')
     def test_instant_rollback_writes_audit_log(self, _mock):
         url = f'/api/v1/services/{self.service.id}/instant-rollback/'
         response = self.client.post(
-            url, data={'message': 'shipped a bug'}, format='json',
+            url, data={'confirm': True, 'message': 'shipped a bug'}, format='json',
         )
         self.assertEqual(response.status_code, http_status.HTTP_201_CREATED)
         entry = AuditLog.objects.filter(

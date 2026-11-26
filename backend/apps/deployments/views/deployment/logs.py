@@ -102,13 +102,22 @@ def _find_container_for_logs(deployment: object) -> tuple[object, str]:
         except Exception as exc:
             logger.debug("Container lookup by ID %s failed: %s", container_id, exc)
 
-        # Also try by short_id / name (container_id might be a compose name)
+        # Also try by short_id / exact name (container_id might be a compose name)
         try:
             containers = client.containers.list(
                 filters={'name': container_id, 'status': 'running'},
             )
-            if containers:
-                return containers[0], f"found by container_id name match={container_id}"
+            for candidate in containers:
+                c_name = getattr(candidate, 'name', '')
+                c_id = getattr(candidate, 'id', '')
+                c_short = getattr(candidate, 'short_id', '')
+                if (
+                    c_name == container_id
+                    or c_id == container_id
+                    or c_short == container_id
+                    or c_id.startswith(container_id)
+                ) and _container_belongs_to_service(candidate, service_id):
+                    return candidate, f"found by container_id name match={container_id}"
         except Exception as exc:
             logger.debug("Container lookup by name %s failed: %s", container_id, exc)
 

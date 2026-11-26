@@ -9,9 +9,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { useToast } from "@/components/ui/use-toast"
+import { toast } from "@/components/ui/use-toast"
 import { cn } from "@/lib/utils"
-import { api } from "@/lib/api"
+import { api, addonsApi, servicesApi } from "@/lib/api"
 import { DashboardShell } from "@/components/layout/DashboardShell"
 import { useConfirm } from '@/components/ui/confirm-dialog'
 import { RequiresTier } from "@/components/licensing/RequiresTier"
@@ -22,7 +22,6 @@ import { ADDON_REGISTRY, getAddonMetadata, AddonRegistryItem } from "@/lib/addon
 type AddonType = any
 
 export default function MarketplacePage() {
-    const { toast } = useToast()
     const confirm = useConfirm()
     const [addons, setAddons] = React.useState<any[]>([])
     const [services, setServices] = React.useState<any[]>([])
@@ -46,34 +45,20 @@ export default function MarketplacePage() {
             // An unauthenticated request returns 401 and surfaces as a
             // "not signed in" UI through the api instance.
             try {
-                // Fetch Addons
-                const addonsRes = await fetch("/api/v1/addons/", {
-                    credentials: "include",
-                })
-                if (addonsRes.ok) {
-                    const data = await addonsRes.json()
-                    // DRF pagination returns { results: [...] }. Support both shapes.
-                    const list = Array.isArray(data) ? data : (data?.results || [])
-                    setAddons(Array.isArray(list) ? list : [])
+                const [addonList, svcList] = await Promise.all([
+                    addonsApi.list(),
+                    servicesApi.list(),
+                ])
+                setAddons(Array.isArray(addonList) ? addonList : [])
+                const normalizedServices = Array.isArray(svcList) ? svcList : []
+                setServices(normalizedServices)
+                // Auto-select the most recently created service (API is ordered by -created_at).
+                if (normalizedServices.length > 0) {
+                    setTargetServiceId((prev) => prev || normalizedServices[0].id)
                 }
-
-                // Fetch Services (for provisioning)
-                const servicesRes = await fetch("/api/v1/services/", {
-                    credentials: "include",
-                })
-                if (servicesRes.ok) {
-                    const data = await servicesRes.json()
-                    const list = Array.isArray(data) ? data : (data?.results || [])
-                    const svcList = Array.isArray(list) ? list : []
-                    setServices(svcList)
-                    // Auto-select the most recently created service (API is ordered by -created_at).
-                    if (svcList.length > 0) {
-                        setTargetServiceId((prev) => prev || svcList[0].id)
-                    }
-                }
-
             } catch (err) {
                 console.error(err)
+                toast({ title: "Error", description: "Failed to load marketplace data.", variant: "destructive" })
             } finally {
                 setIsLoading(false)
             }
@@ -101,24 +86,20 @@ export default function MarketplacePage() {
 
         setIsProvisioning(item.id)
         try {
-            const res = await fetch("/api/v1/addons/", {
-                method: "POST",
-                credentials: "include",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    name: `${item.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${randomToken(6)}`.slice(0, 255),
-                    addon_type: item.addon_type,
-                    service: targetServiceId
-                })
+            const newAddon = await addonsApi.create({
+                name: `${item.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${randomToken(6)}`.slice(0, 255),
+                addon_type: item.addon_type,
+                service: targetServiceId,
             })
-            if (!res.ok) throw new Error("Provisioning failed")
-            
-            const newAddon = await res.json()
             // Defensive: in case addons was set to a non-array by a backend shape change.
             setAddons((prev) => Array.isArray(prev) ? [...prev, newAddon] : [newAddon])
             toast({ title: "Started", description: "Provisioning initiated." })
-        } catch (err) {
-            toast({ title: "Error", description: "Failed to provision addon.", variant: "destructive" })
+        } catch (err: any) {
+            toast({
+                title: "Error",
+                description: err?.response?.data?.error || err?.message || "Failed to provision addon.",
+                variant: "destructive",
+            })
         } finally {
             setIsProvisioning(null)
         }
@@ -130,16 +111,15 @@ export default function MarketplacePage() {
         setIsLoadingBackups(true)
 
         try {
-            const res = await fetch(`/api/v1/addons/${addon.id}/backups/`, {
-                credentials: "include",
-            })
-            if (res.ok) {
-                const data = await res.json()
-                const list = Array.isArray(data) ? data : (data?.results || [])
-                setBackups(Array.isArray(list) ? list : [])
-            }
-        } catch (err) {
+            const list = await addonsApi.backups(addon.id)
+            setBackups(Array.isArray(list) ? list : [])
+        } catch (err: any) {
             console.error(err)
+            toast({
+                title: "Error",
+                description: err?.response?.data?.error || "Failed to load addon backups.",
+                variant: "destructive",
+            })
         } finally {
             setIsLoadingBackups(false)
         }
@@ -148,17 +128,16 @@ export default function MarketplacePage() {
     const handleCreateBackup = async () => {
         if (!activeAddon) return
         try {
-             const res = await fetch(`/api/v1/addons/${activeAddon.id}/backup/`, {
-                method: "POST",
-                credentials: "include",
+            await addonsApi.backup(activeAddon.id)
+            toast({ title: "Backup Started", description: "Your backup is running in background." })
+            // Refresh list after a delay
+            setTimeout(() => loadBackups(activeAddon), 2000)
+        } catch (err: any) {
+            toast({
+                title: "Error",
+                description: err?.response?.data?.error || "Failed to start backup.",
+                variant: "destructive",
             })
-            if (res.ok) {
-                toast({ title: "Backup Started", description: "Your backup is running in background." })
-                // Refresh list after a delay
-                setTimeout(() => loadBackups(activeAddon), 2000)
-            }
-        } catch (err) {
-            toast({ title: "Error", description: "Failed to start backup.", variant: "destructive" })
         }
     }
 
@@ -167,17 +146,14 @@ export default function MarketplacePage() {
         if (!await confirm({ title: 'Restore backup?', message: 'This will overwrite current data. Continue?', variant: 'destructive', confirmText: 'Restore' })) return
 
         try {
-             const res = await fetch(`/api/v1/addons/${activeAddon.id}/restore/`, {
-                method: "POST",
-                credentials: "include",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ backup_id: backupId })
+            await addonsApi.restore(activeAddon.id, backupId)
+            toast({ title: "Restore Started", description: "Database restoration in progress." })
+        } catch (err: any) {
+            toast({
+                title: "Error",
+                description: err?.response?.data?.error || "Restore failed.",
+                variant: "destructive",
             })
-            if (res.ok) {
-                toast({ title: "Restore Started", description: "Database restoration in progress." })
-            }
-        } catch (err) {
-             toast({ title: "Error", description: "Restore failed.", variant: "destructive" })
         }
     }
 
@@ -185,21 +161,25 @@ export default function MarketplacePage() {
         if (!activeAddon) return
 
         try {
-            const res = await fetch(`/api/v1/addons/${activeAddon.id}/download_backup/?backup_id=${backup.id}`, {
-                credentials: "include",
+            const res = await api.get(`/addons/${activeAddon.id}/download_backup/`, {
+                params: { backup_id: backup.id },
+                responseType: "blob",
             })
-            if (!res.ok) throw new Error("Download failed")
-
-            const blob = await res.blob()
+            const blob = new Blob([res.data])
             const url = window.URL.createObjectURL(blob)
             const a = document.createElement('a')
             a.href = url
             a.download = `backup-${activeAddon.addon_type.toLowerCase()}-${backup.created_at}.dump`
             document.body.appendChild(a)
             a.click()
+            a.remove()
             window.URL.revokeObjectURL(url)
-        } catch (err) {
-            toast({ title: "Error", description: "Download failed.", variant: "destructive" })
+        } catch (err: any) {
+            toast({
+                title: "Error",
+                description: err?.response?.data?.error || "Download failed.",
+                variant: "destructive",
+            })
         }
     }
 
@@ -314,16 +294,15 @@ export default function MarketplacePage() {
                                             onClick={async () => {
                                                 if (await confirm({ title: "Delete Addon", message: "Are you sure? All data will be lost." })) {
                                                     try {
-                                                        const res = await fetch(`/api/v1/addons/${addon.id}/`, {
-                                                            method: 'DELETE',
-                                                            credentials: 'include',
+                                                        await addonsApi.delete(addon.id)
+                                                        setAddons(prev => prev.filter(a => a.id !== addon.id))
+                                                        toast({ title: "Deleted", description: "Addon has been deleted." })
+                                                    } catch (err: any) {
+                                                        toast({
+                                                            title: "Error",
+                                                            description: err?.response?.data?.error || "Could not delete addon.",
+                                                            variant: "destructive",
                                                         })
-                                                        if (res.ok) {
-                                                            setAddons(prev => prev.filter(a => a.id !== addon.id))
-                                                            toast({ title: "Deleted", description: "Addon has been deleted." })
-                                                        }
-                                                    } catch (err) {
-                                                        toast({ title: "Error", description: "Could not delete addon.", variant: "destructive" })
                                                     }
                                                 }
                                             }}

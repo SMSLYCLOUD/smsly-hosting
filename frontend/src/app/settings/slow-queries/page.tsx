@@ -2,12 +2,14 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { DashboardShell } from "@/components/layout/DashboardShell";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, Database, Clock, Hash, Zap, RefreshCcw, Trash2, BarChart3 } from "lucide-react";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useToast } from "@/components/ui/use-toast";
 import api from "@/lib/api";
 
 interface SlowQuery {
@@ -37,6 +39,8 @@ const MIN_MS_OPTIONS = [
 ];
 
 export default function SlowQueriesPage() {
+  const confirm = useConfirm();
+  const { toast } = useToast();
   const [queries, setQueries] = useState<SlowQuery[]>([]);
   const [stats, setStats] = useState<QueryStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,16 +53,41 @@ export default function SlowQueriesPage() {
       const res = await api.get(`/slow-queries/?min_ms=${minMs}&limit=50`);
       setQueries(res.data.queries || []);
       setStats(res.data.stats || null);
-    } catch { /* silent */ }
-    finally { setLoading(false); }
-  }, [minMs]);
+    } catch (err: any) {
+      toast({
+        title: "Failed to load slow queries",
+        description: err?.response?.data?.error || err?.message || "Could not fetch query stats.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [minMs, toast]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
   const handleReset = async () => {
+    const ok = await confirm({
+      title: "Reset query statistics?",
+      message: "This clears accumulated pg_stat_statements counters across the database.",
+      variant: "destructive",
+      confirmText: "Reset Stats",
+    });
+    if (!ok) return;
     setResetting(true);
-    try { await api.post("/slow-queries/reset/"); fetchData(); }
-    catch {} finally { setResetting(false); }
+    try {
+      await api.post("/slow-queries/reset/");
+      toast({ title: "Slow query statistics reset" });
+      await fetchData();
+    } catch (err: any) {
+      toast({
+        title: "Failed to reset slow queries",
+        description: err?.response?.data?.error || err?.message || "Could not reset query stats.",
+        variant: "destructive",
+      });
+    } finally {
+      setResetting(false);
+    }
   };
 
   const formatTime = (ms: number) => ms < 1000 ? `${ms.toFixed(1)}ms` : `${(ms / 1000).toFixed(2)}s`;

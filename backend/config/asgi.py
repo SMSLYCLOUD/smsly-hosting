@@ -12,23 +12,26 @@ django.setup()
 
 import apps.deployments.routing
 from apps.core.middleware.dynamic_hosts import (
+    ControlPlaneOriginValidator,
     DynamicAllowedHostsASGIMiddleware,
     QueryStringAuthMiddleware,
     RedisResilientMiddleware,
+    SameOriginCookieWebsocketValidator,
 )
 from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
-from channels.security.websocket import AllowedHostsOriginValidator
 
 application = ProtocolTypeRouter({
     "http": get_asgi_application(),
     "websocket": DynamicAllowedHostsASGIMiddleware(
         RedisResilientMiddleware(
-            AllowedHostsOriginValidator(
+            ControlPlaneOriginValidator(
                 AuthMiddlewareStack(
                     QueryStringAuthMiddleware(
-                        URLRouter(
-                            apps.deployments.routing.websocket_urlpatterns
+                        SameOriginCookieWebsocketValidator(
+                            URLRouter(
+                                apps.deployments.routing.websocket_urlpatterns
+                            )
                         )
                     )
                 )

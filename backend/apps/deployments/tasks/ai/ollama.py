@@ -233,7 +233,7 @@ def _cleanup_shared_ollama_if_unused(project):
             # Mark for deletion
             shared.status = 'DELETION_PENDING'
             shared.save(update_fields=['status'])
-            from .deploy.deletion import delete_service_task
+            from apps.deployments.tasks.deploy.deletion import delete_service_task
             delete_service_task.delay(str(shared.id), force=True)
     except Exception as exc:
         logger.warning("Shared Ollama cleanup check failed: %s", exc)

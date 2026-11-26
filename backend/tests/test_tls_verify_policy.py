@@ -75,8 +75,13 @@ class ShouldVerifyTests(SimpleTestCase):
 
     @override_settings(DEBUG=True)
     def test_https_private_ip_skips_verification_in_debug(self):
-        # Django DEBUG acts as a development-mode override.
+        # SECURITY: DEBUG alone does NOT disable inter-node TLS checks on
+        # private IPs — explicit ALLOW_INSECURE_INTER_NODE_TLS is required.
         with mock.patch.dict(os.environ, {"ALLOW_INSECURE_INTER_NODE_TLS": ""}):
+            self.assertTrue(
+                tls_verify.should_verify("https://10.0.0.1:8000/health")
+            )
+        with mock.patch.dict(os.environ, {"ALLOW_INSECURE_INTER_NODE_TLS": "true"}):
             self.assertFalse(
                 tls_verify.should_verify("https://10.0.0.1:8000/health")
             )
@@ -163,19 +168,22 @@ class NoBareVerifyFalseCallSitesTests(SimpleTestCase):
 
     def test_no_bare_verify_false_in_call_sites(self):
         import inspect
-
-        import apps.deployments.tasks as tasks_module
-        from apps.deployments.management.commands import diagnose_nodes
-        from apps.deployments.services import (
-            health_monitor,
-            remote_orchestrator,
+        from apps.core.services import health_monitor
+        from apps.deployments.management.commands import (
+            diagnose_nodes,
+            prune_orphaned_registry_namespaces,
         )
+        from apps.deployments.services.remote_orchestrator import auth as ro_auth
+        from apps.deployments.services.remote_orchestrator import client as ro_client
+        from apps.deployments.tasks.infra import tasks_maintenance
 
         modules = {
             "health_monitor.py": health_monitor,
-            "remote_orchestrator.py": remote_orchestrator,
-            "tasks.py": tasks_module,
+            "remote_orchestrator/client.py": ro_client,
+            "remote_orchestrator/auth.py": ro_auth,
+            "tasks_maintenance.py": tasks_maintenance,
             "diagnose_nodes.py": diagnose_nodes,
+            "prune_orphaned_registry_namespaces.py": prune_orphaned_registry_namespaces,
         }
         for filename, module in modules.items():
             source = inspect.getsource(module)

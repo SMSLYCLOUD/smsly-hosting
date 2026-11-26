@@ -5,6 +5,7 @@ metadata:
   name: {{ include "smsly-hosting.fullname" . }}-prometheus
   labels:
     app: {{ include "smsly-hosting.name" . }}-prometheus
+    app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
   replicas: 1
   selector:
@@ -14,33 +15,65 @@ spec:
     metadata:
       labels:
         app: {{ include "smsly-hosting.name" . }}-prometheus
+        app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      automountServiceAccountToken: false
       securityContext:
         {{- include "smsly.podSecurityContext" . | nindent 8 }}
       containers:
         - name: prometheus
-          image: "{{ .Values.observability.prometheus.image }}"
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.observability.prometheus.image }}"
           securityContext:
             {{- include "smsly.containerSecurityContext" . | nindent 12 }}
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time={{ .Values.observability.prometheus.retention }}"
           ports:
-            - containerPort: 9090
+            - name: http
+              containerPort: {{ .Values.observability.prometheus.port }}
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.observability.prometheus.resources | nindent 12 }}
           volumeMounts:
             - name: config
               mountPath: /etc/prometheus/prometheus.yml
               subPath: prometheus.yml
+            - name: prometheus-data
+              mountPath: /prometheus
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: config
           configMap:
             name: {{ include "smsly-hosting.fullname" . }}-prometheus-config
+        - name: prometheus-data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "smsly-hosting.fullname" . }}-prometheus
+  labels:
+    app: {{ include "smsly-hosting.name" . }}-prometheus
+    app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
   ports:
-    - port: 9090
-      targetPort: 9090
+    - port: {{ .Values.observability.prometheus.port }}
+      targetPort: {{ .Values.observability.prometheus.port }}
   selector:
     app: {{ include "smsly-hosting.name" . }}-prometheus
 ---
@@ -48,6 +81,9 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ include "smsly-hosting.fullname" . }}-prometheus-config
+  labels:
+    app: {{ include "smsly-hosting.name" . }}-prometheus
+    app.kubernetes.io/instance: {{ .Release.Name }}
 data:
   prometheus.yml: |
     global:
@@ -56,8 +92,8 @@ data:
       - job_name: 'smsly-backend'
         metrics_path: '/metrics'
         static_configs:
-          - targets: ['{{ include "smsly-hosting.fullname" . }}-backend:8000']
+          - targets: ['{{ include "smsly-hosting.fullname" . }}-backend:{{ .Values.backend.service.port }}']
       - job_name: 'smsly-frontend'
         static_configs:
-          - targets: ['{{ include "smsly-hosting.fullname" . }}-frontend:3000']
+          - targets: ['{{ include "smsly-hosting.fullname" . }}-frontend:{{ .Values.frontend.service.port }}']
 {{- end }}

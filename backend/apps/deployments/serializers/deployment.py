@@ -30,7 +30,11 @@ class DeploymentSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'id', 'container_id', 'remote_deployment_id',
+            'id', 'status',
+            'build_logs', 'runtime_logs', 'runtime_logs_url',
+            'pipeline_stages', 'ai_diagnosis', 'review_summary',
+            'vulnerability_report',
+            'container_id', 'remote_deployment_id',
             'green_container_id', 'staging_url', 'staged_at',
             'target_server', 'target_is_local',
             'verified_target_type', 'verified_host_ip',

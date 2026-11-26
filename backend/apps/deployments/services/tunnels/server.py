@@ -119,6 +119,22 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
         except Exception:  # pylint: disable=broad-exception-caught
             return None
 
+    @staticmethod
+    async def _check_reserved_subdomain_owner(subdomain: str, user_id: str) -> bool:
+        """Return True if subdomain is unreserved or actively reserved by user_id."""
+        from asgiref.sync import sync_to_async
+        from apps.deployments.models.tunnels import ReservedSubdomain
+
+        def _check() -> bool:
+            reservation = ReservedSubdomain.objects.filter(
+                subdomain=subdomain, is_active=True,
+            ).first()
+            if reservation is None:
+                return True
+            return bool(user_id) and str(reservation.owner_id) == str(user_id)
+
+        return await sync_to_async(_check, thread_sensitive=True)()
+
     async def handle_tunnel_connect(self, request: web.Request) -> web.WebSocketResponse:
         """
         Handle new tunnel WebSocket connection from CLI client.
@@ -142,10 +158,31 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
         await ws.prepare(request)
 
         # Get optional custom subdomain from query
-        custom_subdomain = request.query.get('subdomain')
+        custom_subdomain = (request.query.get('subdomain') or '').strip().lower()
         user_id = str(payload.get('user_id', ''))
 
         if custom_subdomain:
+            if (
+                not all(c.isalnum() or c == '-' for c in custom_subdomain)
+                or custom_subdomain.startswith('-')
+                or custom_subdomain.endswith('-')
+                or len(custom_subdomain) > 63
+            ):
+                await ws.send_json({'error': 'Invalid subdomain format'})
+                await ws.close()
+                return ws
+
+            from apps.deployments.views.subdomains import RESERVED_LABELS
+            if custom_subdomain in RESERVED_LABELS:
+                await ws.send_json({'error': f"Subdomain '{custom_subdomain}' is reserved and cannot be used"})
+                await ws.close()
+                return ws
+
+            if not await self._check_reserved_subdomain_owner(custom_subdomain, user_id):
+                await ws.send_json({'error': 'Subdomain is reserved by another user'})
+                await ws.close()
+                return ws
+
             if custom_subdomain in self.tunnels:
                 await ws.send_json({'error': 'Subdomain already in use'})
                 await ws.close()
@@ -240,7 +277,11 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
             body=body,
             timestamp=datetime.utcnow(),
         )
-        self.request_logs[tunnel.tunnel_id].append(log_entry)
+        # Cap per-tunnel inspection buffer to prevent unbounded memory growth.
+        logs_list = self.request_logs.setdefault(tunnel.tunnel_id, [])
+        logs_list.append(log_entry)
+        if len(logs_list) > 500:
+            del logs_list[:-500]
 
         # Forward to tunnel client
         loop = asyncio.get_running_loop()
@@ -316,9 +357,29 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
         ]
         return web.json_response({'tunnels': tunnels})
 
+    def _authenticate_http_request(self, request: web.Request) -> dict | None:
+        auth = (request.headers.get('Authorization') or '').strip()
+        if auth.lower().startswith('bearer '):
+            token = auth[7:].strip()
+        else:
+            token = request.query.get('token', '')
+        tunnel_secret = str(
+            getattr(settings, 'TUNNEL_SECRET', '')
+            or getattr(settings, 'GATEWAY_SECRET', '')
+        )
+        return self._verify_tunnel_token(token, tunnel_secret)
+
     async def get_request_logs(self, request: web.Request) -> web.Response:
-        """Get request logs for a tunnel (for inspector)."""
+        """Get request logs for a tunnel owned by the authenticated user."""
+        payload = self._authenticate_http_request(request)
+        if not payload:
+            return web.json_response({'error': 'Authentication required'}, status=401)
+
         tunnel_id = request.match_info['tunnel_id']
+        tunnel = next((t for t in self.tunnels.values() if t.tunnel_id == tunnel_id), None)
+        if not tunnel or tunnel.user_id != str(payload.get('user_id', '')):
+            return web.json_response({'error': 'Tunnel not found'}, status=404)
+
         logs = self.request_logs.get(tunnel_id, [])
 
         return web.json_response({
@@ -336,21 +397,26 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
         })
 
     async def replay_request(self, request: web.Request) -> web.Response:
-        """Replay a logged request."""
+        """Replay a logged request for a tunnel owned by the authenticated user."""
+        payload = self._authenticate_http_request(request)
+        if not payload:
+            return web.json_response({'error': 'Authentication required'}, status=401)
+
         tunnel_id = request.match_info['tunnel_id']
         request_id = request.match_info['request_id']
+
+        # Find active tunnel and verify ownership before reading/replaying
+        tunnel = next((t for t in self.tunnels.values() if t.tunnel_id == tunnel_id), None)
+        if not tunnel:
+            return web.Response(status=404, text="Tunnel not connected")
+        if tunnel.user_id != str(payload.get('user_id', '')):
+            return web.json_response({'error': 'Forbidden'}, status=403)
 
         logs = self.request_logs.get(tunnel_id, [])
         log_entry = next((entry for entry in logs if entry.request_id == request_id), None)
 
         if not log_entry:
             return web.Response(status=404, text="Request not found")
-
-        # Find active tunnel
-        tunnel = next((t for t in self.tunnels.values() if t.tunnel_id == tunnel_id), None)
-
-        if not tunnel:
-            return web.Response(status=404, text="Tunnel not connected")
 
         # Replay the request
         new_request_id = str(uuid.uuid4())

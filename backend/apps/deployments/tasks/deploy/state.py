@@ -12,6 +12,90 @@ from apps.deployments.models import Deployment, Service
 logger = logging.getLogger(__name__)
 
 
+def stamp_deployment_artifact_metadata(
+    deployment: Deployment | None,
+    service: Service | None = None,
+    image_ref: str | None = None,
+) -> dict[str, Any]:
+    """Snapshot artifact provenance into ``deployment.metadata`` for rollback."""
+    if deployment is None:
+        return {}
+    svc = service or getattr(deployment, 'service', None)
+    meta = dict(getattr(deployment, 'metadata', None) or {})
+    deploy_type = str(getattr(svc, 'deploy_type', '') or '').upper() if svc else ''
+
+    resolved_image = str(image_ref or '').strip()
+    if not resolved_image and svc is not None and not str(meta.get('deployed_image') or '').strip():
+        resolved_image = str(getattr(svc, 'docker_image', '') or '').strip()
+    if resolved_image:
+        meta['deployed_image'] = resolved_image
+
+    if svc is not None:
+        if deploy_type == 'UPLOAD':
+            repo_url = str(getattr(svc, 'repository_url', '') or '').strip()
+            if repo_url:
+                meta['repository_url'] = repo_url
+        elif deploy_type == 'FUNCTION':
+            fn_code = str(getattr(svc, 'function_code', '') or '')
+            if fn_code:
+                meta['function_code'] = fn_code
+
+    deployment.metadata = meta
+    return meta
+
+
+def restore_deployment_artifact_metadata(
+    service: Service,
+    target_deployment: Deployment,
+) -> dict[str, Any]:
+    """Restore service artifact fields from ``target_deployment.metadata`` for manual rollback."""
+    target_meta = dict(getattr(target_deployment, 'metadata', None) or {})
+    deploy_type = str(getattr(service, 'deploy_type', 'GIT') or 'GIT').upper()
+    target_image = str(
+        target_meta.get('deployed_image')
+        or target_meta.get('docker_image')
+        or target_meta.get('image_name')
+        or ''
+    ).strip()
+    target_repo_url = str(target_meta.get('repository_url') or '').strip()
+    target_fn_code = str(target_meta.get('function_code') or '')
+
+    svc_updates: list[str] = []
+    if (
+        target_image
+        and not target_image.startswith('compose:')
+        and target_image != str(getattr(service, 'docker_image', '') or '').strip()
+    ):
+        service.docker_image = target_image
+        svc_updates.append('docker_image')
+    if (
+        deploy_type == 'UPLOAD'
+        and target_repo_url
+        and target_repo_url != str(getattr(service, 'repository_url', '') or '').strip()
+    ):
+        service.repository_url = target_repo_url
+        svc_updates.append('repository_url')
+    if (
+        deploy_type == 'FUNCTION'
+        and target_fn_code
+        and target_fn_code != str(getattr(service, 'function_code', '') or '')
+    ):
+        service.function_code = target_fn_code
+        svc_updates.append('function_code')
+    if svc_updates:
+        svc_updates.append('updated_at')
+        service.save(update_fields=svc_updates)
+
+    rollback_meta: dict[str, Any] = {'rollback_target_id': str(target_deployment.id)}
+    if target_image:
+        rollback_meta['deployed_image'] = target_image
+    if target_repo_url:
+        rollback_meta['repository_url'] = target_repo_url
+    if target_fn_code:
+        rollback_meta['function_code'] = target_fn_code
+    return rollback_meta
+
+
 def _mark_deployment_active(deployment: Deployment, target_type: str, host_ip: str, runtime_id: str) -> None:
     deployment.verified_target_type = target_type
     deployment.verified_host_ip = host_ip
@@ -21,7 +105,7 @@ def _mark_deployment_active(deployment: Deployment, target_type: str, host_ip: s
 
 def _post_deploy_success(deployment: Deployment, service: Service, log_line_func: Callable[..., Any] | None = None) -> None:
     with suppress(Exception):
-        from .tasks_commit_status import update_commit_status
+        from apps.deployments.tasks.cicd.tasks_commit_status import update_commit_status
         update_commit_status.delay(
             str(deployment.id), 'success', 'Deployment active'
         )

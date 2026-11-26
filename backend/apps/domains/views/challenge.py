@@ -8,8 +8,11 @@ verifier fetches it over the PUBLIC edge (grey or orange), which proves
 end-to-end control of the hostname — same strength as DNS proof, plus
 path proof. Unknown tokens 404 without revealing anything.
 """
+from django.core.exceptions import DisallowedHost
 from django.http import HttpResponse, HttpResponseNotFound
 from django.views.decorators.http import require_GET
+
+from apps.domains.utils import normalize_domain
 
 
 @require_GET
@@ -19,7 +22,20 @@ def domain_challenge(request, token):
         return HttpResponseNotFound("not found")
     from apps.domains.models import Domain
     row = Domain.objects.filter(verification_token=token).only(
-        "verification_token").first()
+        "domain_name", "verification_token"
+    ).first()
     if row is None:
+        return HttpResponseNotFound("not found")
+    try:
+        raw_host = request.get_host().split(":", 1)[0].strip().lower()
+        if raw_host in ("localhost", "127.0.0.1"):
+            xfh = str(request.META.get("HTTP_X_FORWARDED_HOST", "") or "").split(",")[0].strip()
+            if xfh:
+                raw_host = xfh.split(":", 1)[0].strip().lower()
+        req_host = normalize_domain(raw_host)
+        expected_host = normalize_domain(row.domain_name)
+    except (ValueError, DisallowedHost):
+        return HttpResponseNotFound("not found")
+    if req_host != expected_host:
         return HttpResponseNotFound("not found")
     return HttpResponse(row.verification_token, content_type="text/plain")

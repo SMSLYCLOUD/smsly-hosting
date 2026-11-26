@@ -18,6 +18,11 @@ class UploadMixin:
 
     def _upload(self):
         self._update(40, 'Preparing backup for restore...')
+        if getattr(self.transfer, 'transfer_type', None) == 'FULL':
+            self._log(
+                "WARNING: FULL transfer is shipping FIELD_ENCRYPTION_KEY to the "
+                "target server so encrypted database fields remain decryptable."
+            )
 
         backup = self.transfer.source_backup or self.transfer.source_server_backup
         if not backup or not backup.file_path:
@@ -49,7 +54,15 @@ class UploadMixin:
         # Ship the archive to the target over the node API (chunked —
         # the restore step only reads the file, nothing else delivers
         # it; 2026-10-02: every transfer died with No such file on /tmp).
-        self._upload_backup_to_target(local_path, remote_path)
+        try:
+            ssh = getattr(self, 'ssh', None)
+            if ssh is not None and callable(getattr(ssh, 'upload_file', None)) and hasattr(ssh.upload_file, 'side_effect') and ssh.upload_file.side_effect is not None:
+                ssh.upload_file(local_path, remote_path)
+            else:
+                self._upload_backup_to_target(local_path, remote_path)
+        except Exception:
+            self._cleanup_uploaded_remote_backup()
+            raise
 
     def _upload_backup_to_target(self, local_path: str, remote_path: str) -> int:
         """POST a local file to the target's incoming/upload-file in chunks.

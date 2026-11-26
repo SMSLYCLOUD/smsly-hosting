@@ -104,7 +104,7 @@ class ManagedServerAPIURLSSRFGuardTests(TestCase):
             "/api/v1/servers/",
             {
                 "name": "attacker",
-                "host": "203.0.113.1",
+                "host": "93.184.216.34",
                 "api_url": "http://localhost:8000",
             },
             format="json",
@@ -117,7 +117,7 @@ class ManagedServerAPIURLSSRFGuardTests(TestCase):
             "/api/v1/servers/",
             {
                 "name": "attacker",
-                "host": "203.0.113.1",
+                "host": "93.184.216.34",
                 "api_url": "http://169.254.169.254/latest/meta-data/",
             },
             format="json",
@@ -129,7 +129,7 @@ class ManagedServerAPIURLSSRFGuardTests(TestCase):
             "/api/v1/servers/",
             {
                 "name": "attacker",
-                "host": "203.0.113.1",
+                "host": "93.184.216.34",
                 "api_url": "http://10.0.0.1/admin",
             },
             format="json",
@@ -141,7 +141,7 @@ class ManagedServerAPIURLSSRFGuardTests(TestCase):
             "/api/v1/servers/",
             {
                 "name": "good-srv",
-                "host": "203.0.113.1",
+                "host": "93.184.216.34",
                 "api_url": "https://node.example.com",
             },
             format="json",

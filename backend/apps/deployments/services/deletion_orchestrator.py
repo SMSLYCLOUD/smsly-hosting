@@ -62,6 +62,13 @@ class DeletionOrchestrator:
             except Exception as e:
                 logger.warning(f"Deployment cancellation failed for {service.id}: {e}")
 
+            if containers_to_remove:
+                try:
+                    from apps.deployments.services.mesh_dns import sync_dns_now
+                    sync_dns_now(client=self.docker_client)
+                except Exception:
+                    pass
+
         except Exception as e:
             logger.error(f"Error during service deletion orchestration for {service.id}: {e}")
             success = False
@@ -158,6 +165,13 @@ class DeletionOrchestrator:
                 if not self._safe_remove_volume(volume):
                     success = False
 
+            if containers_to_remove:
+                try:
+                    from apps.deployments.services.mesh_dns import sync_dns_now
+                    sync_dns_now(client=self.docker_client)
+                except Exception:
+                    pass
+
         except Exception as e:
             logger.error(f"Error during addon deletion orchestration for {addon.id}: {e}")
             success = False
@@ -246,6 +260,31 @@ class DeletionOrchestrator:
 
     # -- Internal Discovery Methods --
 
+    @staticmethod
+    def _is_foreign_or_platform_resource(service: Service | None, labels: dict | None, name: str = '') -> bool:
+        """Return True if a container/volume belongs to another service, addon, or platform stack."""
+        from apps.deployments.constants import (
+            PLATFORM_RESERVED_CONTAINER_NAMES,
+            PLATFORM_RESERVED_CONTAINER_PREFIXES,
+        )
+        lbls = labels or {}
+        svc_id = str(getattr(service, 'id', '') or '').strip()
+        label_svc_id = str(lbls.get('smsly.service_id') or '').strip()
+        if label_svc_id and (not svc_id or label_svc_id != svc_id):
+            return True
+        if lbls.get('smsly.addon_id'):
+            return True
+        compose_project = str(lbls.get('com.docker.compose.project') or '').lower()
+        if compose_project.startswith('smsly'):
+            return True
+        res_name = str(name or '').lower().lstrip('/')
+        if res_name and (
+            res_name in PLATFORM_RESERVED_CONTAINER_NAMES
+            or res_name.startswith(PLATFORM_RESERVED_CONTAINER_PREFIXES)
+        ):
+            return True
+        return False
+
     def _find_service_containers(self, service: Service) -> set[Any]:
         containers: set[Any] = set()
         if not self.docker_client:
@@ -255,7 +294,11 @@ class DeletionOrchestrator:
             runtime_id = str(getattr(service, 'active_runtime_id', '') or '').strip()
             if runtime_id:
                 try:
-                    containers.add(self.docker_client.containers.get(runtime_id))
+                    runtime_container = self.docker_client.containers.get(runtime_id)
+                    if not self._is_foreign_or_platform_resource(
+                        service, runtime_container.labels, runtime_container.name
+                    ):
+                        containers.add(runtime_container)
                 except docker.errors.NotFound:
                     pass
                 except Exception as e:
@@ -265,9 +308,13 @@ class DeletionOrchestrator:
                     )
 
             all_containers = self.docker_client.containers.list(all=True)
+            slug_lower = (getattr(service, 'slug', None) or service.name).lower()
+            namespaced_project = f"svc-{slug_lower}-{str(service.id)[:8]}"
             for c in all_containers:
                 # 1. Check labels
-                labels = c.labels
+                labels = c.labels or {}
+                if self._is_foreign_or_platform_resource(service, labels, c.name):
+                    continue
                 if labels.get('smsly.service_id') == str(service.id):
                     containers.add(c)
                     continue
@@ -282,7 +329,6 @@ class DeletionOrchestrator:
 
                 # 2. Check legacy name patterns
                 c_name = c.name.lower()
-                slug_lower = service.slug.lower() if hasattr(service, 'slug') else service.name.lower()
 
                 # Match containers whose name STARTS with the slug followed
                 # by a separator (-, _).  A bare substring match would catch
@@ -292,7 +338,8 @@ class DeletionOrchestrator:
                     continue
 
                 # 3. Check compose project labels
-                if labels.get('com.docker.compose.project') == slug_lower:
+                compose_proj = str(labels.get('com.docker.compose.project') or '').lower()
+                if compose_proj == slug_lower or compose_proj == namespaced_project or compose_proj.startswith(f"{namespaced_project}-"):
                     containers.add(c)
                     continue
 
@@ -338,11 +385,20 @@ class DeletionOrchestrator:
         try:
             # We don't forcefully delete all matching volumes for services,
             # only those explicitly labeled or explicitly managed
-            slug_lower = service.slug.lower() if hasattr(service, 'slug') else service.name.lower()
+            slug_lower = (getattr(service, 'slug', None) or service.name).lower()
+            namespaced_project = f"svc-{slug_lower}-{str(service.id)[:8]}"
             all_vols = self.docker_client.volumes.list()
             for v in all_vols:
                 labels = v.attrs.get('Labels') or {}
-                if labels.get('smsly.service_id') == str(service.id) or labels.get('com.docker.compose.project') == slug_lower:
+                if self._is_foreign_or_platform_resource(service, labels, getattr(v, 'name', '')):
+                    continue
+                compose_proj = str(labels.get('com.docker.compose.project') or '').lower()
+                if (
+                    labels.get('smsly.service_id') == str(service.id)
+                    or compose_proj == slug_lower
+                    or compose_proj == namespaced_project
+                    or compose_proj.startswith(f"{namespaced_project}-")
+                ):
                     volumes.add(v)
         except Exception as e:
             logger.warning(f"Failed to list volumes for service {service.id}: {e}")

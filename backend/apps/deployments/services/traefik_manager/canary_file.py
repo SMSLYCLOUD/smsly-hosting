@@ -87,8 +87,9 @@ def _iter_router_services(labels: dict):
         if m:
             services.add(m.group(1))
     for router in routers:
-        if router in services:
-            yield router, router
+        svc_ref = str(labels.get(f"traefik.http.routers.{router}.service") or router).strip()
+        if svc_ref in services:
+            yield router, svc_ref
 
 
 def _router_service_from_labels(labels: dict, host_substr: str) -> tuple[str, str, dict] | None:
@@ -107,6 +108,20 @@ def _router_service_from_labels(labels: dict, host_substr: str) -> tuple[str, st
 
 def _label(labels: dict, router: str, field: str, default: str = "") -> str:
     return str(labels.get(f"traefik.http.routers.{router}.{field}", default) or default)
+
+
+def qualify_docker_middlewares(middlewares: list[str]) -> list[str]:
+    """Qualify bare Docker middleware refs with ``@docker`` for file-provider routers."""
+    out: list[str] = []
+    for raw in middlewares or []:
+        m = str(raw or "").strip()
+        if not m:
+            continue
+        if "@" not in m:
+            m = f"{m}@docker"
+        if m not in out:
+            out.append(m)
+    return out
 
 
 def _has_child_healthcheck(labels: dict, service: str) -> bool:
@@ -166,10 +181,10 @@ def resolve_canary_topology(service, deployment, live_container, green_container
         e.strip() for e in _label(live_labels, live_router, "entrypoints", "web").split(",")
         if e.strip()
     ] or ["web"]
-    middlewares = [
+    middlewares = qualify_docker_middlewares([
         m.strip() for m in _label(live_labels, live_router, "middlewares", "").split(",")
         if m.strip()
-    ]
+    ])
     tls_resolver = _label(live_labels, live_router, "tls.certresolver", "").strip()
     try:
         port = int(getattr(service, "internal_port", None) or 8000)
@@ -381,10 +396,19 @@ def write_canary_file(service, live_weight: int, staging_weight: int) -> dict:
         live_container = client.containers.get(live_name)
     except Exception:
         raise CanaryFileError(f"Live container {live_name} is not inspectable.")
+    from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
+    if DeletionOrchestrator._is_foreign_or_platform_resource(
+        service, _container_labels(live_container), getattr(live_container, "name", live_name),
+    ):
+        raise CanaryFileError(f"Live container {live_name} belongs to another service or platform stack.")
     try:
         green_container = client.containers.get(green_id)
     except Exception:
         raise CanaryFileError("Green container is gone — redeploy to stage a fresh one.")
+    if DeletionOrchestrator._is_foreign_or_platform_resource(
+        service, _container_labels(green_container), getattr(green_container, "name", green_id),
+    ):
+        raise CanaryFileError("Green container belongs to another service or platform stack.")
     if not _container_running(live_container):
         raise CanaryFileError("Live container is not running/healthy.")
     if not _container_running(green_container):
@@ -469,11 +493,12 @@ def write_canary_file(service, live_weight: int, staging_weight: int) -> dict:
 
 def _remote_service(service) -> bool:
     try:
-        from apps.deployments.services.caddy_manager.upstream import (
-            _remote_upstream_url_for_service,
+        from apps.deployments.services.caddy_manager.config_generation import (
+            _resolve_effective_server,
         )
 
-        return bool(_remote_upstream_url_for_service(service))
+        svr = _resolve_effective_server(service)
+        return bool(svr is not None and not getattr(svr, "is_primary", True))
     except Exception:
         return False
 

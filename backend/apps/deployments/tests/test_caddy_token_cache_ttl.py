@@ -100,7 +100,15 @@ class CaddyTokenCacheTtlTests(SimpleTestCase):
             mock_subprocess.run.return_value.stderr = ""
             with patch("time.time", return_value=1_000_000.0):
                 result = caddy_manager.apply_caddyfile(
-                    ":80 { reverse_proxy localhost:8090 }",
+                    "(secure_headers) {\n"
+                    "    header X-Content-Type-Options nosniff\n"
+                    "}\n"
+                    "(coraza_waf) {\n"
+                    "}\n"
+                    ":80 {\n"
+                    "    import secure_headers\n"
+                    "    reverse_proxy localhost:8090\n"
+                    "}\n",
                     cloudflare_token="t" * 40,
                 )
 

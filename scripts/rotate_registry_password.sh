@@ -39,7 +39,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 command -v docker >/dev/null 2>&1 || { echo -e "${RED}ERROR: docker not found${NC}"; exit 1; }
 [ -f "$INSTALL_DIR/.env" ] || { echo -e "${RED}ERROR: $INSTALL_DIR/.env not found${NC}"; exit 1; }
-if ! docker compose -f "$COMPOSE_FILE" --profile "$PROFILE" ps -q backend 2>/dev/null | grep -q .; then
+if ! timeout 30 docker compose -f "$COMPOSE_FILE" --profile "$PROFILE" ps -q backend 2>/dev/null | grep -q .; then
     echo -e "${RED}ERROR: backend container is not running — start the stack first${NC}"
     exit 1
 fi
@@ -80,13 +80,14 @@ if grep -q '^REGISTRY_PASSWORD=' "$INSTALL_DIR/.env"; then
 else
     echo "REGISTRY_PASSWORD=$NEW_PASS" >> "$INSTALL_DIR/.env"
 fi
-chmod 600 "$INSTALL_DIR/.env" || true
+chown root:1000 "$INSTALL_DIR/.env" 2>/dev/null || true
+chmod 640 "$INSTALL_DIR/.env" || true
 echo -e "${GREEN}  ✓ .env updated${NC}"
 
 # ── 4. Host daemon logins (both hostnames — credentials are per-host) ──
 echo -e "${BLUE}  → Logging host daemon in to registry (both hostnames)...${NC}"
 for _host in 127.0.0.1:5000 registry:5000; do
-    if printf '%s\n' "$NEW_PASS" | docker login --username "$REG_USER" --password-stdin "$_host" >/dev/null 2>&1; then
+    if printf '%s\n' "$NEW_PASS" | timeout 30 docker login --username "$REG_USER" --password-stdin "$_host" >/dev/null 2>&1; then
         echo -e "${GREEN}  ✓ docker login $_host${NC}"
     else
         echo -e "${RED}  ✗ docker login $_host FAILED — pulls via that hostname will 401${NC}"

@@ -21,21 +21,28 @@ from apps.notifications.webhooks import (
 )
 
 
+_PUBLIC_GETADDRINFO = [(2, 1, 6, '', ('93.184.216.34', 0))]
+
+
 class NotificationURLValidationTests(unittest.TestCase):
 
-    def test_allows_hooks_slack_com(self):
+    @patch('socket.getaddrinfo', return_value=_PUBLIC_GETADDRINFO)
+    def test_allows_hooks_slack_com(self, _mock_gai):
         host = _validate_notification_url('https://hooks.slack.com/services/T/B/X')
         self.assertEqual(host, 'hooks.slack.com')
 
-    def test_allows_discord_com(self):
+    @patch('socket.getaddrinfo', return_value=_PUBLIC_GETADDRINFO)
+    def test_allows_discord_com(self, _mock_gai):
         host = _validate_notification_url('https://discord.com/api/webhooks/123/abc')
         self.assertEqual(host, 'discord.com')
 
-    def test_allows_discordapp_com(self):
+    @patch('socket.getaddrinfo', return_value=_PUBLIC_GETADDRINFO)
+    def test_allows_discordapp_com(self, _mock_gai):
         host = _validate_notification_url('https://discordapp.com/api/webhooks/123/abc')
         self.assertEqual(host, 'discordapp.com')
 
-    def test_allows_hooks_slack_gov_com(self):
+    @patch('socket.getaddrinfo', return_value=_PUBLIC_GETADDRINFO)
+    def test_allows_hooks_slack_gov_com(self, _mock_gai):
         host = _validate_notification_url('https://hooks.slack-gov.com/services/T/B/X')
         self.assertEqual(host, 'hooks.slack-gov.com')
 
@@ -99,8 +106,9 @@ class NotificationURLValidationTests(unittest.TestCase):
 
 class PostNotificationSafetyTests(unittest.TestCase):
 
+    @patch('socket.getaddrinfo', return_value=_PUBLIC_GETADDRINFO)
     @patch('apps.notifications.webhooks.requests.post')
-    def test_post_uses_5s_timeout_and_disables_redirects(self, mpost):
+    def test_post_uses_5s_timeout_and_disables_redirects(self, mpost, _mock_gai):
         mpost.return_value = MagicMock(status_code=200)
         ok = _post_notification(
             'https://hooks.slack.com/services/T/B/X',
@@ -113,8 +121,9 @@ class PostNotificationSafetyTests(unittest.TestCase):
         self.assertEqual(kwargs['timeout'], 5)
         self.assertFalse(kwargs['allow_redirects'])
 
+    @patch('socket.getaddrinfo', return_value=_PUBLIC_GETADDRINFO)
     @patch('apps.notifications.webhooks.requests.post')
-    def test_post_rejects_oversize_body(self, mpost):
+    def test_post_rejects_oversize_body(self, mpost, _mock_gai):
         big_payload = {'text': 'a' * (65 * 1024)}
         ok = _post_notification(
             'https://hooks.slack.com/x',
@@ -124,8 +133,9 @@ class PostNotificationSafetyTests(unittest.TestCase):
         self.assertFalse(ok)
         mpost.assert_not_called()
 
+    @patch('socket.getaddrinfo', return_value=_PUBLIC_GETADDRINFO)
     @patch('apps.notifications.webhooks.requests.post')
-    def test_post_returns_false_for_5xx(self, mpost):
+    def test_post_returns_false_for_5xx(self, mpost, _mock_gai):
         mpost.return_value = MagicMock(status_code=500)
         ok = _post_notification('https://hooks.slack.com/x', {'text': 'h'}, provider='slack')
         self.assertFalse(ok)
@@ -136,8 +146,9 @@ class PostNotificationSafetyTests(unittest.TestCase):
         self.assertFalse(ok)
         mpost.assert_not_called()
 
+    @patch('socket.getaddrinfo', return_value=_PUBLIC_GETADDRINFO)
     @patch('apps.notifications.webhooks.requests.post')
-    def test_post_returns_false_on_network_error(self, mpost):
+    def test_post_returns_false_on_network_error(self, mpost, _mock_gai):
         import requests as _req
         mpost.side_effect = _req.ConnectionError('boom')
         ok = _post_notification('https://hooks.slack.com/x', {'text': 'h'}, provider='slack')

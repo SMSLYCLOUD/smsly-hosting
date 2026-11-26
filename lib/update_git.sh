@@ -90,5 +90,5 @@ fi
         # Release the lock before re-exec so the new process can acquire it.
         # Closing FD 9 releases the flock.
         exec 9>&-  || true
-        exec env SMSLY_REEXEC=1 NO_SCREEN=true SKIP_SCREEN=1 SMSLY_PRE_UPDATE_HEAD="$PRE_UPDATE_HEAD" PATH="/usr/local/bin:$PATH" bash "$SCRIPT_PATH" --no-screen "$@"
+        exec env SMSLY_REEXEC=1 NO_SCREEN=true SKIP_SCREEN=1 SMSLY_PRE_UPDATE_HEAD="$PRE_UPDATE_HEAD" PATH="/usr/local/bin:$PATH" bash "$INSTALL_DIR/install.sh" --no-screen "$@"
     fi

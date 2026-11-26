@@ -11,6 +11,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import api from '@/lib/api';
+import { safeAssignUrl } from '@/lib/paths';
 import { getWsUrl } from '@/lib/websocket';
 
 interface CloudDestination {
@@ -71,6 +72,7 @@ export default function ServerBackupsPage() {
 
     // Backup progress WebSocket
     const progressWsRef = useRef<WebSocket | null>(null);
+    const progressTargetIdRef = useRef<string | null>(null);
     const [backupProgress, setBackupProgress] = useState<{
         stage: string; percent: number; message: string;
         bytes_transferred?: number; total_bytes?: number;
@@ -215,7 +217,18 @@ export default function ServerBackupsPage() {
     };
 
     const connectBackupProgressWebSocket = (backupId: string) => {
-        if (progressWsRef.current?.readyState === WebSocket.OPEN) return;
+        if (
+            progressTargetIdRef.current === backupId &&
+            (progressWsRef.current?.readyState === WebSocket.OPEN || progressWsRef.current?.readyState === WebSocket.CONNECTING)
+        ) {
+            return;
+        }
+
+        if (progressWsRef.current) {
+            try { progressWsRef.current.close(); } catch { /* ignore */ }
+            progressWsRef.current = null;
+        }
+        progressTargetIdRef.current = backupId;
 
         // Auth travels via the HttpOnly session cookie on the WS upgrade
         // (see QueryStringAuthMiddleware) — never in ?token=. Reading
@@ -225,14 +238,23 @@ export default function ServerBackupsPage() {
 
         try {
             const ws = new WebSocket(wsUrl);
+            progressWsRef.current = ws;
             setProgressLog([]);
             setBackupProgress({ stage: 'connecting', percent: 0, message: 'Connecting...' });
 
             ws.onopen = () => {
+                if (progressWsRef.current !== ws || progressTargetIdRef.current !== backupId) {
+                    try { ws.close(); } catch { /* ignore */ }
+                    return;
+                }
                 setBackupProgress({ stage: 'connected', percent: 0, message: 'Waiting for progress...' });
             };
 
             ws.onmessage = (event) => {
+                if (progressWsRef.current !== ws || progressTargetIdRef.current !== backupId) {
+                    try { ws.close(); } catch { /* ignore */ }
+                    return;
+                }
                 try {
                     const data = JSON.parse(event.data);
                     if (data.type === 'backup_progress') {
@@ -253,20 +275,24 @@ export default function ServerBackupsPage() {
             };
 
             ws.onerror = () => {
+                if (progressWsRef.current !== ws) {
+                    try { ws.close(); } catch { /* ignore */ }
+                    return;
+                }
                 ws.close();
             };
 
             ws.onclose = () => {
+                if (progressWsRef.current !== ws) return;
                 progressWsRef.current = null;
             };
-
-            progressWsRef.current = ws;
         } catch (error) {
             console.error('Backup progress WebSocket failed:', error);
         }
     };
 
     const disconnectBackupProgressWebSocket = () => {
+        progressTargetIdRef.current = null;
         if (progressWsRef.current) {
             progressWsRef.current.close();
             progressWsRef.current = null;
@@ -650,9 +676,7 @@ export default function ServerBackupsPage() {
                                                     <Button variant="ghost" size="sm" onClick={async () => {
                                                         try {
                                                             const res = await api.get(`/server/backups/${backup.id}/download-url/`);
-                                                            if (res.data?.url) {
-                                                                window.location.href = res.data.url;
-                                                            } else {
+                                                            if (!res.data?.url || !safeAssignUrl(res.data.url)) {
                                                                 toast({ title: "Download failed", description: "Could not generate signed download link.", variant: "destructive" });
                                                             }
                                                         } catch (err) {

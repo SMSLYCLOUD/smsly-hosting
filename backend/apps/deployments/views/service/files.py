@@ -232,6 +232,7 @@ class FileBrowserActionsMixin:
     def file_download(self, request, pk=None):
         """Download a file from the container."""
         service = self.get_object()
+        assert_can_write(request.user, service, action='download container files from')
         path = request.query_params.get('path')
         if not path:
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -282,6 +283,7 @@ class FileBrowserActionsMixin:
     def file_delete(self, request, pk=None):
         """Delete a file or directory in the container."""
         service = self.get_object()
+        assert_can_write(request.user, service, action='delete container files in')
         path = request.data.get('path')
         if not path:
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -327,6 +329,7 @@ class FileBrowserActionsMixin:
     def file_mkdir(self, request, pk=None):
         """Create a directory in the container."""
         service = self.get_object()
+        assert_can_write(request.user, service, action='create directories in')
         path = request.data.get('path')
         if not path:
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -372,6 +375,7 @@ class FileBrowserActionsMixin:
     def file_read(self, request, pk=None):
         """Read a file's contents from the running container."""
         service = self.get_object()
+        assert_can_write(request.user, service, action='read container files in')
         path = request.query_params.get('path')
 
         if not path:

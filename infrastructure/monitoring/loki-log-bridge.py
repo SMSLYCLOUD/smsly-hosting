@@ -33,7 +33,7 @@ log = logging.getLogger("loki-log-bridge")
 
 LOKI_URL = os.environ.get("LOKI_URL", "http://smsly-loki:3100")
 CROWDSEC_LOG_DIR = os.environ.get("CROWDSEC_LOG_DIR", "/var/log/crowdsec/nodes")
-POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "2"))
+POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "10"))
 LOOKBACK = os.environ.get("LOOKBACK", "5m")
 
 

@@ -75,7 +75,7 @@ export function ServiceSidePanel({ node, onClose }: ServiceSidePanelProps) {
               </div>
            </div>
         </div>
-        <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-500 hover:text-white" onClick={onClose}>
+        <Button variant="ghost" size="icon" aria-label="Close service panel" className="h-8 w-8 text-zinc-400 hover:text-white" onClick={onClose}>
           <X className="w-4 h-4" />
         </Button>
       </div>
@@ -149,7 +149,12 @@ export function ServiceSidePanel({ node, onClose }: ServiceSidePanelProps) {
                         <div className="px-3 py-2 border-b border-zinc-800/30 bg-zinc-900/50 flex justify-between items-center">
                            <code className="text-[10px] text-blue-300 font-mono break-all">{env.key}</code>
                            {env.is_secret && (
-                             <button onClick={() => handleReveal(env.key)} className="text-zinc-500 hover:text-white transition-colors">
+                             <button
+                               type="button"
+                               aria-label={isRevealed ? `Hide ${env.key}` : `Reveal ${env.key}`}
+                               onClick={() => handleReveal(env.key)}
+                               className="text-zinc-400 hover:text-white transition-colors"
+                             >
                                {isRevealed ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
                              </button>
                            )}
@@ -159,8 +164,10 @@ export function ServiceSidePanel({ node, onClose }: ServiceSidePanelProps) {
                              {displayValue}
                            </code>
                            <button
+                             type="button"
+                             aria-label={`Copy value of ${env.key}`}
                              onClick={() => copyToClipboard(isRevealed || !env.is_secret ? (revealedKeys[env.key] || env.value) : '')}
-                             className="text-zinc-600 hover:text-zinc-300 opacity-0 group-hover:opacity-100 transition-opacity"
+                             className="text-zinc-400 hover:text-zinc-200 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                              disabled={env.is_secret && !isRevealed}
                            >
                              <Copy className="w-3 h-3" />

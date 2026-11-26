@@ -318,7 +318,9 @@ def _resolve_activity_service_and_deployment(act: dict[str, Any]):
             # "container: my-svc (proc: bash)"
             cand_name = target.split("container:", 1)[1].split("(", 1)[0].strip()
         if cand_name and cand_name not in ("host", "host-kernel", "waf", "reverse-proxy", "smsly-falco", "unknown"):
-            svc = Service.objects.filter(name=cand_name).first()
+            matches = list(Service.objects.filter(name=cand_name)[:2])
+            if len(matches) == 1:
+                svc = matches[0]
 
     return svc, dep
 

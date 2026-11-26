@@ -104,7 +104,7 @@ class EnvoySidecar:
     @staticmethod
     def _config_path_for(service) -> str:
         """Host path of the rendered Envoy config bind-mounted into the sidecar."""
-        config_dir = os.getenv("ENVOY_CONFIG_DIR", "/opt/smsly-hosting/builds")
+        config_dir = os.getenv("ENVOY_CONFIG_DIR") or os.getenv("SMSLY_BUILDS_DIR") or "/opt/smsly-hosting/builds"
         safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "", service.name)[:80]
         return os.path.join(config_dir, f"envoy-{safe_name}.yaml")
 
@@ -340,6 +340,161 @@ class EnvoySidecar:
         return image
 
     @staticmethod
+    def _compile_rbac_filters_yaml(service, trust_domain: str) -> str:
+        """Compile MtlsAuthorizationPolicy rows into Envoy HTTP RBAC filter YAML."""
+        import json as _json
+
+        policies = []
+        try:
+            from apps.mtls.models import MtlsAuthorizationPolicy
+
+            if getattr(service, "pk", None) is not None:
+                policies = list(
+                    MtlsAuthorizationPolicy.objects.filter(
+                        target_service=service,
+                        enabled=True,
+                    ).order_by("-priority", "id")
+                )
+        except Exception as exc:
+            logger.debug(
+                "MtlsAuthorizationPolicy lookup skipped for %s: %s",
+                getattr(service, "name", "?"),
+                exc,
+            )
+
+        def _render_string_list_rule(kind: str, values: list[str]) -> list[str]:
+            if kind == "path":
+                items = [
+                    [
+                        "url_path:",
+                        "  path:",
+                        f"    prefix: {_json.dumps(v)}",
+                    ]
+                    for v in values
+                ]
+            else:
+                items = [
+                    [
+                        "header:",
+                        '  name: ":method"',
+                        f"  exact_match: {_json.dumps(v)}",
+                    ]
+                    for v in values
+                ]
+            if len(items) == 1:
+                return items[0]
+            out = ["or_rules:", "  rules:"]
+            for item in items:
+                out.append(f"  - {item[0]}")
+                for sub in item[1:]:
+                    out.append(f"    {sub}")
+            return out
+
+        def _render_policy_yaml(policy, idx: int) -> list[str]:
+            raw_name = re.sub(r"[^a-zA-Z0-9_]", "_", str(getattr(policy, "name", "") or ""))[:40].strip("_")
+            key = f"policy_{getattr(policy, 'id', idx)}_{raw_name or 'rule'}"
+            source = str(getattr(policy, "source_spiffe_id", "") or "").strip()
+            paths = [
+                str(p).strip()
+                for p in (getattr(policy, "paths", None) or [])
+                if str(p).strip()
+            ]
+            methods = [
+                str(m).strip().upper()
+                for m in (getattr(policy, "methods", None) or [])
+                if str(m).strip()
+            ]
+
+            lines = [
+                f"                  {key}:",
+                "                    principals:",
+            ]
+            if not source or source == "*":
+                lines.extend([
+                    "                    - authenticated:",
+                    "                        principal_name:",
+                    "                          safe_regex:",
+                    "                            google_re2: {}",
+                    f"                            regex: {_json.dumps(f'spiffe://{re.escape(trust_domain)}/service/.*')}",
+                ])
+            else:
+                lines.extend([
+                    "                    - authenticated:",
+                    "                        principal_name:",
+                    f"                          exact: {_json.dumps(source)}",
+                ])
+
+            lines.append("                    permissions:")
+            if paths and methods:
+                path_lines = _render_string_list_rule("path", paths)
+                method_lines = _render_string_list_rule("method", methods)
+                lines.extend([
+                    "                    - and_rules:",
+                    "                        rules:",
+                    f"                        - {path_lines[0]}",
+                    *[f"                          {l}" for l in path_lines[1:]],
+                    f"                        - {method_lines[0]}",
+                    *[f"                          {l}" for l in method_lines[1:]],
+                ])
+            elif paths:
+                path_lines = _render_string_list_rule("path", paths)
+                lines.append(f"                    - {path_lines[0]}")
+                lines.extend(f"                      {l}" for l in path_lines[1:])
+            elif methods:
+                method_lines = _render_string_list_rule("method", methods)
+                lines.append(f"                    - {method_lines[0]}")
+                lines.extend(f"                      {l}" for l in method_lines[1:])
+            else:
+                lines.append("                    - any: true")
+            return lines
+
+        def _render_rbac_filter(stat_prefix: str, action: str, policy_list: list) -> list[str]:
+            lines = [
+                "          - name: envoy.filters.http.rbac",
+                "            typed_config:",
+                '              "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBAC',
+                f"              stat_prefix: {stat_prefix}",
+                "              rules:",
+                f"                action: {action}",
+                "                policies:",
+            ]
+            for idx, pol in enumerate(policy_list):
+                lines.extend(_render_policy_yaml(pol, idx))
+            return lines
+
+        def _default_allow_filter() -> list[str]:
+            return [
+                "          - name: envoy.filters.http.rbac",
+                "            typed_config:",
+                '              "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBAC',
+                "              stat_prefix: inbound_rbac",
+                "              rules:",
+                "                action: ALLOW",
+                "                policies:",
+                "                  spiffe_auth:",
+                "                    principals:",
+                "                    - authenticated:",
+                "                        principal_name:",
+                "                          safe_regex:",
+                "                            google_re2: {}",
+                f"                            regex: {_json.dumps(f'spiffe://{re.escape(trust_domain)}/service/.*')}",
+                "                    permissions:",
+                "                    - any: true",
+            ]
+
+        deny_policies = [p for p in policies if str(getattr(p, "action", "")).lower() == "deny"]
+        allow_policies = [p for p in policies if str(getattr(p, "action", "")).lower() != "deny"]
+
+        filter_lines: list[str] = []
+        if deny_policies:
+            filter_lines.extend(_render_rbac_filter("inbound_rbac_deny", "DENY", deny_policies))
+        if allow_policies:
+            filter_lines.extend(_render_rbac_filter("inbound_rbac", "ALLOW", allow_policies))
+        else:
+            filter_lines.extend(_default_allow_filter())
+        return "\n".join(filter_lines)
+
+    @staticmethod
     def generate_config(service, mtls_config):
         """
         Generate Envoy YAML config for a service.
@@ -375,11 +530,27 @@ class EnvoySidecar:
         socket_path = spire_socket.replace("unix://", "")
 
         # Generate SPIFFE ID
-        spiffe_id = mtls_config.spiffe_id or f"spiffe://ecosystem.local/service/{service.name}"
         trust_domain = mtls_config.trust_domain or "ecosystem.local"
+
+        # Compile MtlsAuthorizationPolicy rules into Envoy HTTP RBAC filter(s)
+        rbac_yaml = EnvoySidecar._compile_rbac_filters_yaml(service, trust_domain)
 
         # Replace placeholders
         config = template
+        marker_re = re.compile(
+            r"[ \t]*# BEGIN_RBAC_FILTER.*?# END_RBAC_FILTER",
+            re.DOTALL,
+        )
+        if marker_re.search(config):
+            config = marker_re.sub(lambda _m: rbac_yaml, config, count=1)
+        else:
+            fallback_re = re.compile(
+                r"[ \t]*# RBAC authorization filter\s*\n[ \t]*- name: envoy\.filters\.http\.rbac.*?(?=\n[ \t]*# Router|\n[ \t]*- name: envoy\.filters\.http\.router)",
+                re.DOTALL,
+            )
+            if fallback_re.search(config):
+                config = fallback_re.sub(lambda _m: rbac_yaml, config, count=1)
+
         config = config.replace("{{APP_PORT}}", str(app_port))
         config = config.replace("{{TRUST_DOMAIN}}", trust_domain)
         config = config.replace("{{SERVICE_NAME}}", service.name)
@@ -461,7 +632,7 @@ class EnvoySidecar:
         # the daemon auto-create a directory on the next start — the same
         # "not a directory" death. It is deleted only when the sidecar
         # itself is removed (remove_sidecar / remove_orphan_sidecar).
-        config_dir = os.getenv("ENVOY_CONFIG_DIR", "/opt/smsly-hosting/builds")
+        config_dir = os.getenv("ENVOY_CONFIG_DIR") or os.getenv("SMSLY_BUILDS_DIR") or "/opt/smsly-hosting/builds"
         os.makedirs(config_dir, exist_ok=True)
         config_path = EnvoySidecar._config_path_for(service)
         if os.path.isdir(config_path):
@@ -495,10 +666,6 @@ class EnvoySidecar:
                 # service:<name> is a Compose-only form and fails via the
                 # socket proxy during runtime injection.
                 network_mode=f"container:{main_container.id}",
-                # Keep the sidecar process in the host PID namespace so the
-                # host-PID SPIRE agent can resolve its Workload API caller.
-                # Network namespace remains shared with the app container.
-                pid_mode="host",
                 labels={
                     "managed_by": "smsly-hosting",
                     "envoy_sidecar": "true",
@@ -690,13 +857,13 @@ class EnvoySidecar:
         """
         from apps.cloud.docker_client import get_docker_client
 
+        sidecar_name = EnvoySidecar.get_sidecar_name(service)
         try:
             # Client acquisition is inside the try: without a reachable
             # daemon get_docker_client() itself raises, and the status
             # endpoint must degrade to "not_found", never 500.
             # sidecar_name stays outside: the except handler needs it and
             # it never touches Docker.
-            sidecar_name = EnvoySidecar.get_sidecar_name(service)
             client = get_docker_client()
             container = client.containers.get(sidecar_name)
             try:
@@ -782,7 +949,13 @@ class EnvoySidecar:
                 resolve_spire_volume_name,
             )
 
-            expected = resolve_spire_volume_name(SPIRE_AGENT_SOCKET_VOLUME)
+            mtls_cfg = getattr(service, "mtls_config", None)
+            raw_td = getattr(mtls_cfg, "trust_domain", None)
+            if isinstance(raw_td, str) and raw_td.strip():
+                socket_base, _ = spire_volumes_for(raw_td.strip())
+            else:
+                socket_base = SPIRE_AGENT_SOCKET_VOLUME
+            expected = resolve_spire_volume_name(socket_base)
             client = get_docker_client()
             container = client.containers.get(sidecar_name)
             try:
@@ -1128,7 +1301,7 @@ class EnvoySidecar:
 
         try:
             mtls_config = service.mtls_config
-            if not mtls_config.enabled:
+            if not mtls_config.enabled or not getattr(mtls_config, "sidecar_enabled", False):
                 return compose_data
         except MtlsConfig.DoesNotExist:
             return compose_data
@@ -1181,6 +1354,8 @@ class EnvoySidecar:
                 "managed_by": "smsly-hosting",
                 "envoy_sidecar": "true",
                 "smsly.blue_green.canonical_name": service.name,
+                "com.paas.service": service.name,
+                "com.paas.mtls": "true",
                 **sidecar_sablier_labels(service),
             },
             "depends_on": {

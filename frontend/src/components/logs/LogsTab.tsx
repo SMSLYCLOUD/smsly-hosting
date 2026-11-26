@@ -31,6 +31,12 @@ export function LogsTab({
     const initialLoadDoneRef = useRef<{ build: boolean; runtime: boolean }>({ build: false, runtime: false });
     const activeWsTypeRef = useRef<'BUILD' | 'RUNTIME' | null>(null);
     const lastDeploymentIdRef = useRef<string | undefined>(deployment?.id);
+    const disposedRef = useRef(false);
+    const logTypeRef = useRef<'BUILD' | 'RUNTIME'>(logType);
+    logTypeRef.current = logType;
+    const isBuilding = isDeploymentInProgress(deployment?.status);
+    const isBuildingRef = useRef(isBuilding);
+    isBuildingRef.current = isBuilding;
 
     // Reset viewer buffers and initial-load flags when switching to a new deployment
     useEffect(() => {
@@ -51,10 +57,6 @@ export function LogsTab({
             setPipelineStages(deployment.pipeline_stages);
         }
     }, [deployment?.pipeline_stages]);
-
-    // Backend-parity: any in-flight pipeline state keeps the LIVE badge,
-    // not just BUILDING/QUEUED (the backend never emits PENDING).
-    const isBuilding = isDeploymentInProgress(deployment?.status);
 
     // ---- REST fallback: load build_logs from the deployment object ----
     // The deployment prop is refreshed every 3s by the parent, but on first
@@ -92,7 +94,7 @@ export function LogsTab({
 
     // ---- WebSocket: build logs ----
     const connectBuildWebSocket = useCallback(() => {
-        if (!deployment?.id) return;
+        if (disposedRef.current || !deployment?.id) return;
         if (activeWsTypeRef.current === 'BUILD' && wsRef.current?.readyState === WebSocket.OPEN) return;
         // Close any previous WS so we don't have two open
         if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
@@ -106,10 +108,12 @@ export function LogsTab({
             activeWsTypeRef.current = 'BUILD';
 
             ws.onopen = () => {
+                if (disposedRef.current || wsRef.current !== ws) return;
                 setWsConnected(true);
             };
 
             ws.onmessage = (event) => {
+                if (disposedRef.current || wsRef.current !== ws) return;
                 try {
                     const data = JSON.parse(event.data);
                     if (data.type === 'initial_state') {
@@ -137,19 +141,24 @@ export function LogsTab({
                 }
             };
 
-            ws.onclose = () => {
+            ws.onclose = (event) => {
+                if (wsRef.current !== ws) return;
+                wsRef.current = null;
+                if (disposedRef.current) return;
                 setWsConnected(false);
                 activeWsTypeRef.current = null;
-                // Reconnect only if the build tab is still active AND we
-                // don't already have a fresh fetch. We always reconnect
-                // (even when the build is finished) so the user can come
-                // back to the tab and see the full build log.
-                if (logType === 'BUILD') {
+                const isFatalCode = [4001, 4002, 4003, 4403, 4404].includes(event.code);
+                if (isFatalCode || !isBuildingRef.current) {
+                    return;
+                }
+                if (logTypeRef.current === 'BUILD') {
+                    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
                     reconnectTimer.current = setTimeout(connectBuildWebSocket, 3000);
                 }
             };
 
             ws.onerror = () => {
+                if (wsRef.current !== ws) return;
                 try { ws.close(); } catch { /* ignore */ }
             };
 
@@ -157,11 +166,11 @@ export function LogsTab({
         } catch {
             // WebSocket not supported or connection failed
         }
-    }, [deployment?.id, logType]);
+    }, [deployment?.id]);
 
     // ---- WebSocket: runtime logs ----
     const connectRuntimeWebSocket = useCallback(() => {
-        if (!deployment?.id) return;
+        if (disposedRef.current || !deployment?.id) return;
         if (activeWsTypeRef.current === 'RUNTIME' && wsRef.current?.readyState === WebSocket.OPEN) return;
         if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
             try { wsRef.current.close(); } catch { /* ignore */ }
@@ -174,10 +183,12 @@ export function LogsTab({
             activeWsTypeRef.current = 'RUNTIME';
 
             ws.onopen = () => {
+                if (disposedRef.current || wsRef.current !== ws) return;
                 setWsConnected(true);
             };
 
             ws.onmessage = (event) => {
+                if (disposedRef.current || wsRef.current !== ws) return;
                 try {
                     const data = JSON.parse(event.data);
                     if (data.type === 'initial_state') {
@@ -211,15 +222,24 @@ export function LogsTab({
                 }
             };
 
-            ws.onclose = () => {
+            ws.onclose = (event) => {
+                if (wsRef.current !== ws) return;
+                wsRef.current = null;
+                if (disposedRef.current) return;
                 setWsConnected(false);
                 activeWsTypeRef.current = null;
-                if (logType === 'RUNTIME') {
+                const isFatalCode = [4001, 4002, 4003, 4403, 4404].includes(event.code);
+                if (isFatalCode) {
+                    return;
+                }
+                if (logTypeRef.current === 'RUNTIME') {
+                    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
                     reconnectTimer.current = setTimeout(connectRuntimeWebSocket, 5000);
                 }
             };
 
             ws.onerror = () => {
+                if (wsRef.current !== ws) return;
                 try { ws.close(); } catch { /* ignore */ }
             };
 
@@ -227,7 +247,7 @@ export function LogsTab({
         } catch {
             // WebSocket not supported
         }
-    }, [deployment?.id, logType]);
+    }, [deployment?.id]);
 
     // Connect WS for the active tab. NOTE: we no longer gate on isBuilding
     // — the build tab needs the WS even for finished/failed deployments
@@ -252,10 +272,13 @@ export function LogsTab({
 
     // Clean up WS on unmount
     useEffect(() => {
+        disposedRef.current = false;
         return () => {
+            disposedRef.current = true;
             if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
                 try { wsRef.current.close(); } catch { /* ignore */ }
             }
+            wsRef.current = null;
             if (reconnectTimer.current) {
                 clearTimeout(reconnectTimer.current);
                 reconnectTimer.current = null;
@@ -484,6 +507,7 @@ export function LogsTab({
                                 ref={buildViewerRef}
                                 className="bg-zinc-950"
                                 heightClass={viewerHeight}
+                                ariaLabel="Build logs"
                                 emptyMessage={isBuilding ? 'Waiting for build output…' : 'No build logs recorded for this deployment.'}
                                 shortcutsHint="Space: pause · End: jump to latest · c: clear"
                             />
@@ -511,6 +535,7 @@ export function LogsTab({
                                 ref={runtimeViewerRef}
                                 className="bg-zinc-950"
                                 heightClass={viewerHeight}
+                                ariaLabel="Runtime logs"
                                 emptyMessage="No runtime logs available. If the container is stopped, saved crash logs from the deployment will appear here when available."
                                 shortcutsHint="Space: pause · End: jump to latest · c: clear"
                             />

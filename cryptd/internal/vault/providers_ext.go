@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -528,7 +529,7 @@ func (p *CommandProvider) FetchWeeklySMK(ctx context.Context, week uint64, clust
 	defer cancel()
 
 	cmd := exec.CommandContext(cctx, p.cfg.CommandBin, p.cfg.CommandArgs...)
-	cmd.Env = append(cmd.Environ(),
+	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("GRID_WEEK=%d", week),
 		"GRID_CLUSTER_SALT="+clusterSalt,
 		"GRID_PURPOSE=weekly-smk",

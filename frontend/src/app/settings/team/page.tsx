@@ -30,8 +30,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Users, UserPlus, Trash2, Mail, PlusCircle } from 'lucide-react';
-import { teamsApi, Team, TeamMember } from '@/lib/api';
+import { Users, UserPlus, Trash2, Mail, PlusCircle, Check, Building2, Loader2 } from 'lucide-react';
+import { teamsApi, organizationsApi, Team, TeamMember, PendingOrganizationInvite } from '@/lib/api';
 import { useAuth } from '@/components/auth-provider';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/use-toast';
@@ -45,6 +45,11 @@ export default function TeamPage() {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(false);
 
+  // Pending Organization Invites & ?accept_org= state
+  const [pendingInvites, setPendingInvites] = useState<PendingOrganizationInvite[]>([]);
+  const [acceptOrgId, setAcceptOrgId] = useState<string | null>(null);
+  const [acceptingOrgId, setAcceptingOrgId] = useState<string | null>(null);
+
   // Invite State
   const [showInviteDialog, setShowInviteDialog] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
@@ -56,10 +61,28 @@ export default function TeamPage() {
   const [newTeamName, setNewTeamName] = useState('');
   const [createTeamLoading, setCreateTeamLoading] = useState(false);
 
+  const loadPendingInvites = async () => {
+    try {
+      const invites = await organizationsApi.pendingInvites();
+      setPendingInvites(invites);
+    } catch {
+      setPendingInvites([]);
+    }
+  };
+
   useEffect(() => {
     // Initial load
     const storedId = localStorage.getItem('smsly_active_team');
     if (storedId) setActiveTeamId(storedId);
+
+    // Read ?accept_org= inside useEffect so static `next build` passes cleanly
+    const params = new URLSearchParams(window.location.search);
+    const orgParam = params.get('accept_org')?.trim() || null;
+    if (orgParam) {
+      setAcceptOrgId(orgParam);
+    }
+
+    loadPendingInvites();
 
     // Listen for changes
     const handleTeamChange = (e: CustomEvent) => {
@@ -71,6 +94,116 @@ export default function TeamPage() {
       window.removeEventListener('smsly:team-changed', handleTeamChange as EventListener);
     };
   }, []);
+
+  const handleAcceptOrgInvite = async (orgId: string, orgName?: string) => {
+    setAcceptingOrgId(orgId);
+    try {
+      await organizationsApi.acceptInvite(orgId);
+      toast({
+        title: "Organization invite accepted",
+        description: orgName ? `You have joined ${orgName}.` : "You have joined the organization.",
+      });
+      if (acceptOrgId === orgId) {
+        setAcceptOrgId(null);
+        const url = new URL(window.location.href);
+        url.searchParams.delete('accept_org');
+        window.history.replaceState({}, '', url.toString());
+      }
+      await loadPendingInvites();
+    } catch (err: any) {
+      toast({
+        title: "Failed to accept invitation",
+        description: err?.response?.data?.error || err?.message || "Could not accept organization invitation.",
+        variant: "destructive",
+      });
+    } finally {
+      setAcceptingOrgId(null);
+    }
+  };
+
+  const renderPendingInvitesSection = () => {
+    const matchedInvite = acceptOrgId
+      ? pendingInvites.find((inv) => (inv.organization_id || inv.organization) === acceptOrgId)
+      : undefined;
+    const extraPromptOnly = Boolean(acceptOrgId && !matchedInvite);
+    if (pendingInvites.length === 0 && !extraPromptOnly) return null;
+
+    return (
+      <Card className="border-primary/30 bg-primary/5">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Mail className="h-5 w-5 text-primary" />
+            Pending Organization Invitations
+          </CardTitle>
+          <CardDescription>
+            Accept an invitation to join an organization.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {extraPromptOnly && acceptOrgId && (
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-primary/40 bg-card p-4">
+              <div className="flex items-center gap-3">
+                <Building2 className="h-5 w-5 text-primary shrink-0" />
+                <div>
+                  <p className="font-medium text-sm">Organization Invitation</p>
+                  <p className="text-xs text-muted-foreground">
+                    Accept invitation to organization {acceptOrgId}
+                  </p>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                onClick={() => handleAcceptOrgInvite(acceptOrgId)}
+                disabled={acceptingOrgId === acceptOrgId}
+              >
+                {acceptingOrgId === acceptOrgId ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                ) : (
+                  <Check className="h-4 w-4 mr-1" />
+                )}
+                Accept Invite
+              </Button>
+            </div>
+          )}
+          {pendingInvites.map((inv) => {
+            const targetOrgId = inv.organization_id || inv.organization;
+            const isHighlighted = acceptOrgId === targetOrgId;
+            return (
+              <div
+                key={inv.id}
+                className={`flex items-center justify-between gap-4 rounded-lg border p-4 bg-card ${
+                  isHighlighted ? 'border-primary ring-1 ring-primary/30' : 'border-border'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Building2 className="h-5 w-5 text-primary shrink-0" />
+                  <div>
+                    <p className="font-medium text-sm">{inv.organization_name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Role: {inv.role}
+                      {isHighlighted ? ' • Invited via link' : ''}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => handleAcceptOrgInvite(targetOrgId, inv.organization_name)}
+                  disabled={acceptingOrgId === targetOrgId}
+                >
+                  {acceptingOrgId === targetOrgId ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                  ) : (
+                    <Check className="h-4 w-4 mr-1" />
+                  )}
+                  Accept Invite
+                </Button>
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+    );
+  };
 
   useEffect(() => {
     if (activeTeamId) {
@@ -171,7 +304,8 @@ export default function TeamPage() {
   if (!activeTeamId) {
     return (
       <DashboardShell>
-        <div className="container max-w-4xl mx-auto p-6">
+        <div className="container max-w-4xl mx-auto p-6 space-y-6">
+          {renderPendingInvitesSection()}
           <Card>
             <CardHeader>
               <CardTitle>Welcome to Team Management</CardTitle>
@@ -234,6 +368,7 @@ export default function TeamPage() {
   return (
     <DashboardShell>
       <div className="container max-w-4xl mx-auto p-6 space-y-6">
+        {renderPendingInvitesSection()}
         <div className="flex justify-between items-center">
           <div>
             <h1 className="text-3xl font-bold flex items-center gap-2">

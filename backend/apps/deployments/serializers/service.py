@@ -328,6 +328,26 @@ class ServiceSerializer(serializers.ModelSerializer):
     deployment_count = serializers.SerializerMethodField()
     failed_deployments = serializers.SerializerMethodField()
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request') if isinstance(self.context, dict) else None
+        user = getattr(request, 'user', None)
+        if user and getattr(user, 'is_authenticated', False) and not getattr(user, 'is_superuser', False):
+            from apps.cloud.models import CloudProvider
+            from apps.teams.permissions import get_team_q_filter
+            if 'registry_credential' in self.fields:
+                self.fields['registry_credential'].queryset = (
+                    RegistryCredential.objects.filter(owner=user)
+                )
+            if 'provider' in self.fields:
+                self.fields['provider'].queryset = (
+                    CloudProvider.objects.filter(is_active=True).exclude(scope='ecosystem')
+                )
+            if 'parent_service' in self.fields:
+                self.fields['parent_service'].queryset = (
+                    Service.objects.filter(get_team_q_filter(user)).distinct()
+                )
+
     def validate_docker_image(self, value):
         if not value:
             return value
@@ -362,28 +382,51 @@ class ServiceSerializer(serializers.ModelSerializer):
         if not cleaned:
             return ''
         from ..services.pipeline.utils import _SAFE_COMPOSE_SVC_RE
-        if not _SAFE_COMPOSE_SVC_RE.match(cleaned):
+        if (
+            not _SAFE_COMPOSE_SVC_RE.match(cleaned)
+            or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}', cleaned)
+        ):
             raise serializers.ValidationError(
-                "compose_main_service must contain only letters, numbers, '.', '_', or '-'."
+                "compose_main_service must start with an alphanumeric character, "
+                "be at most 100 characters, and contain only letters, numbers, '.', '_', or '-'."
             )
         return cleaned
 
     def validate_name(self, value):
         if not value or not isinstance(value, str):
             raise serializers.ValidationError("name is required.")
-        value = value.strip()
-        slug = re.sub(r'[^a-zA-Z0-9_.-]', '-', value).lower()
+        raw = value.strip()
+        if '/' in raw or '..' in raw:
+            raise serializers.ValidationError(
+                "name must not contain '/' or '..'."
+            )
+        slug = re.sub(r'[^a-zA-Z0-9_.-]', '-', raw).lower()
         slug = re.sub(r'-{2,}', '-', slug)
-        slug = slug.strip('-_').strip()
+        slug = slug.strip('-_.').strip()
         if not slug:
             raise serializers.ValidationError(
                 "name must contain at least one alphanumeric character."
             )
-        slug = slug[:63].rstrip('-_').strip()
-        if not re.fullmatch(r"[a-z0-9]([-a-z0-9_.]{0,61}[a-z0-9])?", slug):
+        slug = slug[:63].rstrip('-_.').strip()
+        if '..' in slug or not re.fullmatch(r"[a-z0-9]([-a-z0-9_.]{0,61}[a-z0-9])?", slug):
             raise serializers.ValidationError(
                 "name must start and end with a letter or digit "
                 "(max 63 chars)."
+            )
+        if re.fullmatch(r'[0-9a-f]{12,64}', slug):
+            raise serializers.ValidationError(
+                "name must not resemble a container ID (12-64 hex characters)."
+            )
+        from ..constants import (
+            PLATFORM_RESERVED_CONTAINER_NAMES,
+            PLATFORM_RESERVED_CONTAINER_PREFIXES,
+        )
+        if (
+            slug in PLATFORM_RESERVED_CONTAINER_NAMES
+            or slug.startswith(PLATFORM_RESERVED_CONTAINER_PREFIXES)
+        ):
+            raise serializers.ValidationError(
+                f"name '{slug}' is reserved for platform infrastructure."
             )
         return slug
 
@@ -419,6 +462,16 @@ class ServiceSerializer(serializers.ModelSerializer):
             # any existing rewrite_root (or set it when none was given).
             if path and not normalized_entry.get('rewrite_root'):
                 normalized_entry['rewrite_root'] = path
+            rewrite_root = str(normalized_entry.get('rewrite_root') or '').strip()
+            if rewrite_root:
+                if (
+                    not re.fullmatch(r'^/[A-Za-z0-9/_.-]{0,100}$', rewrite_root)
+                    or '..' in rewrite_root
+                ):
+                    raise serializers.ValidationError(
+                        f"Invalid rewrite_root '{rewrite_root}' for host_alias '{host}'."
+                    )
+                normalized_entry['rewrite_root'] = rewrite_root
             # Dedup key is (bare_host, rewrite_root). Two entries with the
             # same host but different rewrite_roots (e.g. 'accounts.google.com'
             # rewriting / to /login AND /signup to /register) are legitimate
@@ -454,6 +507,11 @@ class ServiceSerializer(serializers.ModelSerializer):
                 host_aliases__contains=[{"host": host}]
             ).exists():
                 raise serializers.ValidationError(f"Host '{host}' is already assigned to another service.")
+            from apps.domains.models import Domain
+            if Domain.objects.filter(domain_name__iexact=host).exclude(service=self.instance).exists():
+                raise serializers.ValidationError(
+                    f"Host '{host}' is already registered as a domain on another service."
+                )
         # Return the normalized list (with the path stripped from host and
         # moved into rewrite_root). Returning the unmodified value here was
         # the root cause of the React #31 crash — the frontend saw the raw
@@ -500,6 +558,11 @@ class ServiceSerializer(serializers.ModelSerializer):
             try:
                 target_host, target_path = split_host_and_path(target)
                 target_host = normalize_domain(target_host)
+                if target_path and (
+                    not re.fullmatch(r'^/[A-Za-z0-9/_.-]{0,200}$', target_path)
+                    or '..' in target_path
+                ):
+                    raise ValueError("Redirect target path contains invalid characters.")
                 target = target_host
                 if target_path and target_path != '/':
                     target = f'{target}{target_path}'
@@ -568,6 +631,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'repository_url', 'branch',
             'deploy_type', 'buildpack',
             'docker_image', 'registry_credential', 'effective_registry',
+            'function_code', 'function_runtime',
             'build_command', 'start_command', 'root_directory',
             'internal_port',
             'public_domain', 'public_domain_hidden', 'domain_verified',
@@ -635,6 +699,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'active_host_ip',
             'active_runtime_id',
             'last_scale_at',
+            'domain_verified',
             'staging_domain_verified',
             # Auto-populated at spawn time from the platform-bridge
             # network attachment; users don't set this directly.
@@ -759,6 +824,15 @@ class ServiceSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def validate_sablier_session(self, value):
+        if value in (None, ""):
+            return "10m"
+        from ..services.traefik_labels import normalize_sablier_session
+        try:
+            return normalize_sablier_session(value, default="10m", strict=True)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc))
+
     def validate_promotion_policy(self, value):
         if not value:
             return value
@@ -778,8 +852,101 @@ class ServiceSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("min_staging_seconds must be an integer.")
         return value
 
+    @staticmethod
+    def _validate_git_repository_url(url: str) -> str:
+        """Validate Git repository_url against SSRF, file://, and bare paths."""
+        import ipaddress
+        from urllib.parse import urlparse
+        from apps.core.validators import validate_ssrf
+
+        cleaned = str(url or '').strip()
+        if not cleaned:
+            return cleaned
+
+        lower = cleaned.lower()
+        if lower.startswith('file://') or cleaned.startswith('/') or cleaned.startswith('\\\\'):
+            raise serializers.ValidationError(
+                "Local filesystem repository URLs are not allowed."
+            )
+
+        # Allow SCP-style SSH URLs (git@host:org/repo.git) and ssh:// URLs
+        scp_match = re.match(r'^([a-zA-Z0-9._-]+)@([a-zA-Z0-9.-]+):([^\s]+)$', cleaned)
+        if scp_match:
+            host = scp_match.group(2).lower()
+            if host in ('localhost', '127.0.0.1', '::1', '0.0.0.0', '169.254.169.254') or host.endswith('.local') or host.endswith('.internal'):
+                raise serializers.ValidationError("Repository host is not permitted.")
+            try:
+                ip = ipaddress.ip_address(host)
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                    raise serializers.ValidationError("Repository IP address is not permitted.")
+            except ValueError:
+                pass
+            return cleaned
+
+        parsed = urlparse(cleaned)
+        scheme = (parsed.scheme or '').lower()
+        if scheme == 'https':
+            try:
+                validate_ssrf(cleaned, fail_closed_dns=False)
+            except Exception as exc:
+                raise serializers.ValidationError(str(exc)) from exc
+            return cleaned
+
+        if scheme == 'ssh':
+            host = (parsed.hostname or '').lower()
+            if not host or host in ('localhost', '127.0.0.1', '::1', '0.0.0.0', '169.254.169.254') or host.endswith('.local') or host.endswith('.internal'):
+                raise serializers.ValidationError("Repository SSH host is not permitted.")
+            try:
+                ip = ipaddress.ip_address(host)
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                    raise serializers.ValidationError("Repository SSH IP address is not permitted.")
+            except ValueError:
+                pass
+            return cleaned
+
+        raise serializers.ValidationError(
+            "Repository URL must use https://, ssh://, or git@host:path format."
+        )
+
     def validate(self, attrs):
         attrs = super().validate(attrs)
+        request = self.context.get('request') if isinstance(self.context, dict) else None
+        user = getattr(request, 'user', None)
+        from ..views._helpers import is_remote_sync_request
+        is_superuser = bool(user and getattr(user, 'is_superuser', False))
+        is_remote_sync = bool(request and is_remote_sync_request(request))
+
+        if request and not is_superuser and not is_remote_sync:
+            for protected_field in ('public_domain', 'custom_domains', 'staging_domain'):
+                if protected_field in attrs:
+                    incoming = attrs[protected_field]
+                    if self.instance is None:
+                        if incoming:
+                            raise serializers.ValidationError({
+                                protected_field: (
+                                    f"Direct modification of {protected_field} requires administrator privileges."
+                                )
+                            })
+                    elif incoming != getattr(self.instance, protected_field):
+                        raise serializers.ValidationError({
+                            protected_field: (
+                                f"Direct modification of {protected_field} requires administrator privileges."
+                            )
+                        })
+
+            if 'deploy_type' in attrs and str(attrs['deploy_type'] or '').upper() == 'UPLOAD':
+                existing_type = str(getattr(self.instance, 'deploy_type', '') or '').upper() if self.instance else ''
+                if existing_type != 'UPLOAD':
+                    raise serializers.ValidationError({
+                        'deploy_type': "Direct selection of UPLOAD deploy_type is restricted; use the upload deploy endpoint."
+                    })
+
+        effective_deploy_type = str(
+            attrs.get('deploy_type', getattr(self.instance, 'deploy_type', 'GIT')) or 'GIT'
+        ).upper()
+        if 'repository_url' in attrs and attrs.get('repository_url'):
+            if effective_deploy_type == 'GIT':
+                attrs['repository_url'] = self._validate_git_repository_url(attrs['repository_url'])
         # Canary-block rule (expand/contract): a shared-DB weighted split
         # runs old + new code concurrently. Enabling CANARY with weight > 0
         # while the latest migration validation holds contract-unsafe ops
@@ -820,6 +987,36 @@ class ServiceSerializer(serializers.ModelSerializer):
                         "Set canary_percentage to 0 to disable the split.",
                     ],
                 })
+        # Block scale-to-zero (Sablier) on Lite Agent servers: agent-lite nodes
+        # do not run Sablier or load Traefik's sablier plugin, so emitting
+        # sablier middleware labels causes Traefik to drop the HTTP router (503).
+        wants_sablier = (
+            bool(attrs.get('sablier_enabled'))
+            if 'sablier_enabled' in attrs
+            else bool(getattr(self.instance, 'sablier_enabled', False))
+        )
+        if wants_sablier and ('sablier_enabled' in attrs or 'server' in attrs):
+            target_svr = (
+                attrs.get('server')
+                if 'server' in attrs
+                else getattr(self.instance, 'server', None)
+            )
+            active_tt = (
+                str(getattr(self.instance, 'active_target_type', '') or '').lower()
+                if self.instance else ''
+            )
+            if (
+                (target_svr is not None and getattr(target_svr, 'is_lite_agent', False) is True)
+                or (target_svr is None and active_tt == 'lite_agent')
+            ):
+                raise serializers.ValidationError({
+                    'sablier_enabled': (
+                        "Scale-to-zero (Sablier) is not supported on Lite Agent nodes "
+                        "because Lite Agents do not run Sablier. Deploy on the primary "
+                        "server or a full worker node."
+                    ),
+                })
+
         return attrs
 
     def create(self, validated_data):

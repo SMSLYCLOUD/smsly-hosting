@@ -110,9 +110,10 @@ class RemoteHardeningTests(TestCase):
         service.save()
         self.assertTrue(is_deployment_local(deployment))
 
-    @patch('apps.deployments.services.pipeline.NixpacksBuilder.push_image')
-    def test_pipeline_push_image_success(self, mock_push):
-        mock_push.return_value = "registry.smsly.cloud/smsly/app:tag"
+    @patch('apps.deployments.services.pipeline.registry.log_exhaustive_push_diagnostics', return_value=True)
+    @patch('apps.deployments.services.pipeline.registry.NixpacksBuilder.push_image')
+    def test_pipeline_push_image_success(self, mock_push, mock_diagnostics):
+        mock_push.return_value = ("registry.smsly.cloud/smsly/app:tag", None)
 
         service = Service.objects.create(
             name='svc-git',
@@ -126,16 +127,18 @@ class RemoteHardeningTests(TestCase):
             commit_hash='abc1234'
         )
 
+        self.config.container_registry_url = 'registry.smsly.cloud'
+        self.config.save()
         with patch.object(settings, 'CONTAINER_REGISTRY_URL', 'registry.smsly.cloud'):
             manager = PipelineManager(deployment)
             manager.image_name = "smsly/app:tag"
             manager._push_image()
             self.assertEqual(manager.image_name, "registry.smsly.cloud/smsly/app:tag")
 
-    @patch('apps.deployments.services.pipeline.NixpacksBuilder.push_image')
+    @patch('apps.deployments.services.pipeline.registry.NixpacksBuilder.push_image')
     def test_pipeline_push_image_fail_local_allows_fallback(self, mock_push):
         # Push fails, returns the local tag
-        mock_push.return_value = "smsly/app:tag"
+        mock_push.return_value = ("smsly/app:tag", "Registry unreachable")
 
         service = Service.objects.create(
             name='svc-git-local',
@@ -149,17 +152,20 @@ class RemoteHardeningTests(TestCase):
             commit_hash='abc1234'
         )
 
-        with patch.object(settings, 'CONTAINER_REGISTRY_URL', 'registry.smsly.cloud'):
+        self.config.container_registry_url = 'registry.smsly.cloud'
+        self.config.save()
+        with patch.object(settings, 'CONTAINER_REGISTRY_URL', 'registry.smsly.cloud'), \
+             patch.object(PipelineManager, '_verify_local_tag', return_value=True):
             manager = PipelineManager(deployment)
             manager.image_name = "smsly/app:tag"
             manager._push_image()
             # Falls back successfully to local tag
             self.assertEqual(manager.image_name, "smsly/app:tag")
 
-    @patch('apps.deployments.services.pipeline.NixpacksBuilder.push_image')
+    @patch('apps.deployments.services.pipeline.registry.NixpacksBuilder.push_image')
     def test_pipeline_push_image_fail_remote_raises_error(self, mock_push):
         # Push fails, returns the local tag
-        mock_push.return_value = "smsly/app:tag"
+        mock_push.return_value = ("smsly/app:tag", "Registry unreachable")
 
         service = Service.objects.create(
             name='svc-git-remote',
@@ -173,6 +179,8 @@ class RemoteHardeningTests(TestCase):
             commit_hash='abc1234'
         )
 
+        self.config.container_registry_url = 'registry.smsly.cloud'
+        self.config.save()
         with patch.object(settings, 'CONTAINER_REGISTRY_URL', 'registry.smsly.cloud'):
             manager = PipelineManager(deployment)
             manager.image_name = "smsly/app:tag"

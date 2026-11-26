@@ -35,24 +35,44 @@ jobs:
 
       - name: Sign backend image (keyless)
         run: |
-          cosign sign --yes \
-            smsly/backend:latest
+          if docker manifest inspect smsly/backend:latest >/dev/null 2>&1; then
+            cosign sign --yes smsly/backend:latest
+          else
+            echo "Skipping cosign sign for smsly/backend:latest (local-only unpushed tag)"
+          fi
 
       - name: Sign frontend image (keyless)
         run: |
-          cosign sign --yes \
-            smsly/frontend:latest
+          if docker manifest inspect smsly/frontend:latest >/dev/null 2>&1; then
+            cosign sign --yes smsly/frontend:latest
+          else
+            echo "Skipping cosign sign for smsly/frontend:latest (local-only unpushed tag)"
+          fi
 
       - name: Verify backend signature
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
         run: |
-          cosign verify \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/cosign-sign.yml@${{ github.ref }}" \
-            smsly/backend:latest
+          if docker manifest inspect smsly/backend:latest >/dev/null 2>&1; then
+            cosign verify \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-identity "https://github.com/${GITHUB_REPO}/.github/workflows/cosign-sign.yml@${GITHUB_REF}" \
+              smsly/backend:latest
+          else
+            echo "Skipping cosign verify for smsly/backend:latest (local-only unpushed tag)"
+          fi
 
       - name: Verify frontend signature
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
         run: |
-          cosign verify \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/cosign-sign.yml@${{ github.ref }}" \
-            smsly/frontend:latest
+          if docker manifest inspect smsly/frontend:latest >/dev/null 2>&1; then
+            cosign verify \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-identity "https://github.com/${GITHUB_REPO}/.github/workflows/cosign-sign.yml@${GITHUB_REF}" \
+              smsly/frontend:latest
+          else
+            echo "Skipping cosign verify for smsly/frontend:latest (local-only unpushed tag)"
+          fi

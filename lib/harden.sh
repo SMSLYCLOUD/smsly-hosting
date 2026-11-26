@@ -1,5 +1,4 @@
 #!/bin/bash
-set +e
 
 _harden_log() {
     local level="$1"; shift
@@ -9,6 +8,39 @@ _harden_log() {
         err)  echo -e "${RED}  ✗ [harden] $*${NC}" ;;
         info) echo -e "${BLUE}  → [harden] $*${NC}" ;;
     esac
+}
+
+# Resolve effective STACK_TIER (lite|medium|full) without requiring env.sh.
+_harden_stack_tier() {
+    local _tier="${STACK_TIER:-}"
+    local _env_file="${INSTALL_DIR:-/opt/smsly-hosting}/.env"
+    if [ -z "$_tier" ] && [ -f "$_env_file" ]; then
+        _tier="$(grep -E '^STACK_TIER=' "$_env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]\r"'\''' || true)"
+    fi
+    if [ -z "$_tier" ] && [ -f "$_env_file" ]; then
+        local _profs=""
+        _profs="$(grep -E '^COMPOSE_PROFILES=' "$_env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]\r"'\''' || true)"
+        if [ -n "$_profs" ]; then
+            case ",${_profs}," in
+                *,full,*) _tier="full" ;;
+                *,medium,*) _tier="medium" ;;
+                *) _tier="lite" ;;
+            esac
+        fi
+    fi
+    if [ -z "$_tier" ]; then
+        local _ram_mb=""
+        _ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+        [ -n "$_ram_mb" ] || _ram_mb=8192
+        if [ "$_ram_mb" -lt 6144 ]; then
+            _tier="lite"
+        elif [ "$_ram_mb" -lt 12288 ]; then
+            _tier="medium"
+        else
+            _tier="full"
+        fi
+    fi
+    printf '%s' "$_tier"
 }
 
 source "$(dirname "${BASH_SOURCE[0]}")/harden_fail2ban.sh"
@@ -53,11 +85,11 @@ _harden_envoy_registry_login() {
         [ -n "$user" ] || user="smsly-registry"
     fi
     [ -n "$user" ] && [ -n "$pass" ] || return 1
-    printf '%s\n' "$pass" | docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
+    printf '%s\n' "$pass" | timeout 30 docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
     # The sidecar flow pulls via registry:5000 but pushes via 127.0.0.1:5000
     # (see _harden_envoy_image_bootstrap) — the daemon keys credentials per
     # hostname, so both need a login or the push 401s (fresh-install gap).
-    printf '%s\n' "$pass" | docker login --username "$user" --password-stdin 127.0.0.1:5000 >/dev/null 2>&1 || true
+    printf '%s\n' "$pass" | timeout 30 docker login --username "$user" --password-stdin 127.0.0.1:5000 >/dev/null 2>&1 || true
 }
 
 _harden_envoy_image_bootstrap() {
@@ -78,19 +110,19 @@ _harden_envoy_image_bootstrap() {
     # must stay visible instead of dying silently (2026-09-12).
     _harden_envoy_registry_login || _harden_log warn "no registry login available — pull/push may 401"
     local envoy_tag="registry:5000/smsly/envoy-spire-sidecar:latest"
-    if docker image inspect "$envoy_tag" >/dev/null 2>&1; then
+    if timeout 10 docker image inspect "$envoy_tag" >/dev/null 2>&1; then
         return 0
     fi
-    if docker pull "$envoy_tag" >/dev/null 2>&1; then
+    if timeout 120 docker pull "$envoy_tag" >/dev/null 2>&1; then
         _harden_log ok "envoy sidecar image present"
         return 0
     fi
     local loop_tag="127.0.0.1:5000/smsly/envoy-spire-sidecar:latest"
-    if ! docker build -t "$envoy_tag" -t "$loop_tag" "$envoy_dir" >/dev/null 2>&1; then
+    if ! timeout 300 docker build -t "$envoy_tag" -t "$loop_tag" "$envoy_dir" >/dev/null 2>&1; then
         _harden_log err "envoy sidecar image build failed in $envoy_dir"
         return 1
     fi
-    if ! docker push "$loop_tag" >/dev/null 2>&1; then
+    if ! timeout 120 docker push "$loop_tag" >/dev/null 2>&1; then
         _harden_log err "envoy sidecar image push failed — check registry auth (docker login) and that the registry is up"
         return 1
     fi
@@ -102,26 +134,47 @@ _harden_spire_start_agent() {
     # Start one SPIRE agent with a freshly minted single-use join token
     # (mirrors apps/mtls/views.py::_start_agent_with_token).
     # $1 agent container, $2 server container, $3 agent.conf host path,
-    # $4 data volume, $5 socket volume, $6 svids volume.
+    # $4 data volume, $5 socket volume, $6 svids volume, $7 optional trust domain.
     local agent="$1" server="$2" conf="$3" data_vol="$4" sock_vol="$5" svids_vol="$6"
+    local trust_domain="${7:-}"
+    if [ -z "$trust_domain" ]; then
+        if [[ "$agent" == *ecosystem* ]]; then
+            trust_domain="${ECOSYSTEM_TRUST_DOMAIN:-ecosystem.local}"
+        else
+            trust_domain="${SPIFFE_TRUST_DOMAIN:-platform.local}"
+        fi
+    fi
     # A crash-looping agent reports Running=true while Restarting — only a
     # truly stable container may keep its (single-use, now consumed) token.
     if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ] && \
        [ "$(docker inspect -f '{{.State.Restarting}}' "$agent" 2>/dev/null)" != "true" ]; then
         return 0
     fi
-    local token
-    token="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
+    # Export the server trust bundle into the agent data volume so
+    # insecure_bootstrap = false has a valid trust_bundle_path on boot.
+    local _bundle_pem=""
+    _bundle_pem="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server bundle show -socketPath /tmp/spire-server/private/api.sock -format pem 2>/dev/null || true)"
+    if [ -z "$_bundle_pem" ]; then
+        _harden_log warn "$agent — could not export trust bundle from $server"
+        return 1
+    fi
+    if ! printf '%s\n' "$_bundle_pem" | timeout -k 5 30 docker run --rm -i -v "$data_vol:/opt/spire/data" alpine:3.19 sh -c 'mkdir -p /opt/spire/data && chmod 0700 /opt/spire/data && cat > /opt/spire/data/bundle.crt && chmod 0644 /opt/spire/data/bundle.crt' >/dev/null 2>&1; then
+        _harden_log warn "$agent — failed writing trust bundle to $data_vol"
+        return 1
+    fi
+    local token=""
+    token="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1 || true)"
     if [ -z "$token" ]; then
         _harden_log warn "$agent — could not mint join token"
         return 1
     fi
     docker rm -f "$agent" >/dev/null 2>&1 || true
-    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
+    timeout 60 docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --cgroupns host --restart unless-stopped \
         -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
         -v /var/run/docker.sock:/var/run/docker.sock:ro \
         -v "$conf:/etc/spire/agent.conf:ro,z" \
         -e DOCKER_HOST=unix:///var/run/docker.sock \
+        -e "SPIFFE_TRUST_DOMAIN=${trust_domain}" \
         ghcr.io/spiffe/spire-agent:1.9.6 -config /etc/spire/agent.conf -joinToken "$token" >/dev/null 2>&1 || {
         _harden_log warn "$agent — docker run failed"
         return 1
@@ -135,6 +188,12 @@ _harden_spire_bootstrap() {
     # their own trust roots.
     if command -v is_master_mode >/dev/null 2>&1 && ! is_master_mode; then
         _harden_log info "spire skipped (not master mode)"
+        return 0
+    fi
+    local _spire_tier=""
+    _spire_tier="$(_harden_stack_tier)"
+    if [ "$_spire_tier" != "full" ]; then
+        _harden_log info "spire skipped (STACK_TIER=${_spire_tier})"
         return 0
     fi
     command -v docker >/dev/null 2>&1 || return 0
@@ -166,7 +225,7 @@ _harden_spire_bootstrap() {
         fi
     done
     # Servers are idempotent under compose (running services are kept).
-    docker compose -p smsly-hosting -f "$spire_file" up -d spire-server spire-server-ecosystem >/dev/null 2>&1 || {
+    timeout 120 docker compose -p smsly-hosting -f "$spire_file" up -d spire-server spire-server-ecosystem >/dev/null 2>&1 || {
         _harden_log warn "spire servers failed to start"
         return 1
     }
@@ -195,6 +254,14 @@ _harden_spire_bootstrap() {
 
 _harden_spire_verify() {
     [ "${NODE_SPIRE:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode); then
+        local _spire_tier=""
+        _spire_tier="$(_harden_stack_tier)"
+        if [ "$_spire_tier" != "full" ]; then
+            _harden_log info "spire skipped (STACK_TIER=${_spire_tier})"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     if [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent 2>/dev/null)" != "true" ] || \
        [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent-ecosystem 2>/dev/null)" != "true" ]; then

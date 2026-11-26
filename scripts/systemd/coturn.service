@@ -12,7 +12,7 @@ LimitNOFILE=65536
 
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/log/coturn /run
+ReadWritePaths=-/var/log/coturn -/run
 NoNewPrivileges=true
 
 [Install]

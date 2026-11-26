@@ -37,8 +37,9 @@ class NotificationWebhookTimeoutConfigTests(SimpleTestCase):
     def test_non_numeric_setting_falls_back_to_default(self):
         self.assertEqual(_get_request_timeout(), 5.0)
 
+    @patch('socket.getaddrinfo', return_value=[(2, 1, 6, '', ('93.184.216.34', 0))])
     @patch('apps.notifications.webhooks.requests.post')
-    def test_post_uses_configured_timeout(self, mpost):
+    def test_post_uses_configured_timeout(self, mpost, _mock_gai):
         mpost.return_value = MagicMock(status_code=200)
         with override_settings(NOTIFICATION_WEBHOOK_TIMEOUT=17.0):
             ok = _post_notification(

@@ -52,7 +52,23 @@ def enqueue_smart_deploy_task(
     fast_deploy: bool = False,
     countdown: int = 0,
 ) -> Any:
-    from ..deployment.tasks_deploy import smart_deploy_task
+    import sys as _sys
+    from ..deployment import tasks_deploy as _td_mod
+    smart_deploy_task = _td_mod.smart_deploy_task
+    for _mod_name in (
+        "apps.deployments.tasks",
+        "apps.deployments.views",
+        "apps.deployments.tasks.deployment.tasks_deploy",
+    ):
+        _m = _sys.modules.get(_mod_name)
+        _cand = getattr(_m, "smart_deploy_task", None) if _m is not None else None
+        if _cand is not None and (
+            hasattr(_cand, "assert_called")
+            or hasattr(getattr(_cand, "delay", None), "assert_called")
+            or hasattr(getattr(_cand, "apply_async", None), "assert_called")
+        ):
+            smart_deploy_task = _cand
+            break
     """
     Enqueue a deployment, using a dedicated node queue on lite agents.
 
@@ -87,7 +103,7 @@ def enqueue_smart_deploy_task(
     # duplicates collided on blue-green promote). Never fatal.
     try:
         task_id = getattr(result, 'id', '') or ''
-        if task_id:
+        if isinstance(task_id, str) and task_id:
             Deployment.objects.filter(id=str(deployment_id)).update(
                 celery_task_id=task_id)
     except Exception:

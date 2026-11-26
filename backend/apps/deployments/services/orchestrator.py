@@ -10,6 +10,7 @@ from uuid import UUID
 
 from apps.deployments.models import Deployment
 from apps.deployments.tasks.ai.tasks_ai import analyze_failure_task
+from apps.deployments.tasks.deploy.state import stamp_deployment_artifact_metadata
 from apps.core.tasks.alerts import alert_user_task
 from django.conf import settings
 from django.utils import timezone
@@ -80,6 +81,7 @@ class Orchestrator:
 
         Raises DeploymentTimeoutError if DEPLOYMENT_TIMEOUT is exceeded.
         """
+        stamp_deployment_artifact_metadata(self.deployment, self.deployment.service)
         self.deployment.status = Deployment.Status.BUILDING
         self.deployment.started_at = timezone.now()
         self.deployment.save()
@@ -103,12 +105,18 @@ class Orchestrator:
                 raise DeploymentTimeoutError("Shutdown requested after build.")
 
             # 2. Deploy
+            stamp_deployment_artifact_metadata(
+                self.deployment, self.deployment.service, image_ref=image_tag
+            )
             self.deployment.status = Deployment.Status.DEPLOYING
             self.deployment.save()
 
             container_id = self.cluster_manager.deploy_service(image_tag)
 
             # 3. Success
+            stamp_deployment_artifact_metadata(
+                self.deployment, self.deployment.service, image_ref=image_tag
+            )
             self.deployment.status = Deployment.Status.ACTIVE
             self.deployment.container_id = container_id
             self.deployment.finished_at = timezone.now()
@@ -124,6 +132,9 @@ class Orchestrator:
             )
 
         except Exception as e:
+            stamp_deployment_artifact_metadata(
+                self.deployment, self.deployment.service
+            )
             self.deployment.status = Deployment.Status.FAILED
             self.deployment.finished_at = timezone.now()
             self.deployment.build_logs += f"\n\n[ERROR] {e!s}"
@@ -155,6 +166,7 @@ class Orchestrator:
             DEPLOYMENT_TIMEOUT,
         )
         self._shutdown_requested = True
+        stamp_deployment_artifact_metadata(self.deployment, self.deployment.service)
         self.deployment.status = Deployment.Status.FAILED
         self.deployment.finished_at = timezone.now()
         self.deployment.build_logs += (

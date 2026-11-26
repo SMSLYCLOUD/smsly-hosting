@@ -112,6 +112,21 @@ def _provision_node_db_credentials(server: ManagedServer):
         return None, None
 
 
+def _decode_exec_output(output) -> str:
+    """Safely decode docker exec_run output (handles both bytes and demux tuples)."""
+    if not output:
+        return ""
+    if isinstance(output, tuple):
+        parts = []
+        for item in output:
+            if item:
+                parts.append(item.decode(errors="replace") if isinstance(item, (bytes, bytearray)) else str(item))
+        return "\n".join(parts)
+    if isinstance(output, (bytes, bytearray)):
+        return output.decode(errors="replace")
+    return str(output)
+
+
 def _restart_pgcat():
     def _find_pgcat_container():
         try:
@@ -160,7 +175,7 @@ def _restart_pgcat():
             time.sleep(2)
             logger.info("PgCat hot-reloaded config via docker exec + SIGHUP.")
             return
-        logger.warning("PgCat render exited %d: %s", exit_code, (output or b"").decode(errors="replace"))
+        logger.warning("PgCat render exited %d: %s", exit_code, _decode_exec_output(output))
     except Exception as exc:
         logger.info("PgCat hot-reload failed (%s), falling back to restart.", exc)
 
@@ -168,6 +183,11 @@ def _restart_pgcat():
         try:
             container.restart(timeout=10)
             logger.info("Restarted PgCat container %s (attempt %d/3).", pgcat_name, attempt + 1)
+            try:
+                from apps.deployments.services.mesh_dns import sync_dns_now
+                sync_dns_now()
+            except Exception:
+                pass
             if _wait_healthy(container, pgcat_name, timeout=20):
                 return
             logger.warning("PgCat %s not healthy after restart attempt %d.", pgcat_name, attempt + 1)
@@ -213,7 +233,7 @@ def _rerender_pgcat_config():
                 "NOT restarting from the provision path — a container restart "
                 "drops every DB connection platform-wide. Re-run the render "
                 "manually or restart PgCat explicitly during maintenance.",
-                exit_code, (output or b"").decode(errors="replace"),
+                exit_code, _decode_exec_output(output),
             )
     except Exception as exc:
         logger.warning(

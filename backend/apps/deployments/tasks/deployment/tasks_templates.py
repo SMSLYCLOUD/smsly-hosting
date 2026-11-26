@@ -391,7 +391,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         # readiness check because Caddy returns 404 for the un-listed host.
         if required_addons:
             try:
-                from .tasks_caddy import _regenerate_caddyfile
+                from apps.deployments.tasks.deploy.caddy import _regenerate_caddyfile
                 _regenerate_caddyfile()
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.warning("Failed to regenerate Caddyfile after addon provisioning: %s", exc)
@@ -739,7 +739,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                 # Regenerate the Caddyfile so the wildcard block includes
                 # the freshly created companion services' public_domains.
                 try:
-                    from .tasks_caddy import _regenerate_caddyfile
+                    from apps.deployments.tasks.deploy.caddy import _regenerate_caddyfile
                     _regenerate_caddyfile()
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.warning("Failed to regenerate Caddyfile after companion provisioning: %s", exc)

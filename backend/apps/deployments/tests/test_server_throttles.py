@@ -86,11 +86,19 @@ class ServerRunCommandThrottleTests(TestCase):
     @override_settings(REST_FRAMEWORK=REST_FRAMEWORK_FAST)
     def test_three_calls_third_returns_429(self):
         from django.core.cache import cache
-        cache.clear()
+        from rest_framework.settings import api_settings
+        from apps.deployments.views.server.serializers import ServerCommandThrottle
 
-        first = self._post()
-        second = self._post()
-        third = self._post()
+        cache.clear()
+        orig_rates = getattr(ServerCommandThrottle, "THROTTLE_RATES", None)
+        api_settings.reload()
+        ServerCommandThrottle.THROTTLE_RATES = api_settings.DEFAULT_THROTTLE_RATES
+        try:
+            first = self._post()
+            second = self._post()
+            third = self._post()
+        finally:
+            ServerCommandThrottle.THROTTLE_RATES = orig_rates
 
         self.assertIn(first.status_code, (200, 400, 403),
                       f"First call returned {first.status_code}")
@@ -102,11 +110,19 @@ class ServerRunCommandThrottleTests(TestCase):
     @override_settings(REST_FRAMEWORK=REST_FRAMEWORK_FAST)
     def test_429_response_includes_retry_after_header(self):
         from django.core.cache import cache
-        cache.clear()
+        from rest_framework.settings import api_settings
+        from apps.deployments.views.server.serializers import ServerCommandThrottle
 
-        self._post()
-        self._post()
-        third = self._post()
+        cache.clear()
+        orig_rates = getattr(ServerCommandThrottle, "THROTTLE_RATES", None)
+        api_settings.reload()
+        ServerCommandThrottle.THROTTLE_RATES = api_settings.DEFAULT_THROTTLE_RATES
+        try:
+            self._post()
+            self._post()
+            third = self._post()
+        finally:
+            ServerCommandThrottle.THROTTLE_RATES = orig_rates
 
         self.assertEqual(third.status_code, 429)
         self.assertIn("Retry-After", third.headers)

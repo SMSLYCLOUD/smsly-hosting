@@ -13,8 +13,6 @@ from rest_framework import parsers, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from apps.core.auth import CookieAwareTokenAuthentication
-from rest_framework.authentication import TokenAuthentication
 from ..models.backup import ServerBackup
 from ..models.audit import AuditLog
 from ..serializers import ServerBackupSerializer
@@ -44,7 +42,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         backup = serializer.save(status='PENDING')
         create_server_backup_task.delay(backup_id=str(backup.id))
 
-    @action(detail=True, methods=['get'], url_path='download-key', permission_classes=[permissions.IsAdminUser], authentication_classes=[CookieAwareTokenAuthentication, TokenAuthentication])
+    @action(detail=True, methods=['get'], url_path='download-key', permission_classes=[permissions.IsAdminUser])
     def download_key(self, request, pk=None):
         """Download the V2 backup header as a .key.json file.
 
@@ -188,9 +186,10 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
                     pass
 
         from apps.deployments.tasks import restore_server_backup_task
+        from ..services.task_encryption import encrypt_arg
         restore_server_backup_task.delay(
             backup_id=str(backup.id),
-            encryption_key=key_provided or None,
+            encryption_key=encrypt_arg(key_provided) if key_provided else None,
             requesting_user_id=request.user.id,
         )
         return Response({
@@ -205,7 +204,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             ),
         })
 
-    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAdminUser], authentication_classes=[CookieAwareTokenAuthentication, TokenAuthentication])
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAdminUser])
     def download(self, request, pk=None):
         signed_value = request.query_params.get('signed')
         token_value = request.query_params.get('token')
@@ -357,9 +356,10 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
 
         # Trigger async restore
         from apps.deployments.tasks import restore_server_backup_task
+        from ..services.task_encryption import encrypt_arg
         restore_server_backup_task.delay(
             backup_id=str(backup.id),
-            encryption_key=encryption_key,
+            encryption_key=encrypt_arg(encryption_key) if encryption_key else None,
             requesting_user_id=request.user.id,
         )
 
@@ -475,9 +475,10 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
 
         encryption_key = _resolve_encryption_key(request)
         from apps.deployments.tasks import restore_server_backup_task
+        from ..services.task_encryption import encrypt_arg
         restore_server_backup_task.delay(
             backup_id=str(backup.id),
-            encryption_key=encryption_key,
+            encryption_key=encrypt_arg(encryption_key) if encryption_key else None,
             requesting_user_id=request.user.id,
         )
 

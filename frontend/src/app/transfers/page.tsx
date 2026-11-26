@@ -143,6 +143,27 @@ export default function TransfersPage() {
             return;
         }
 
+        // Build and validate payload before optimistic UI update
+        const payload: any = {
+            transfer_type: 'SERVICE',
+        };
+        if (sourceServerId !== 'local') payload.source_server_id = sourceServerId;
+        if (targetServerId !== 'local') payload.target_server_id = targetServerId;
+
+        if (itemType === 'service') {
+            payload.service_id = itemId;
+        } else if (itemType === 'addon') {
+            const addon = addons.find((a: any) => a.id === itemId);
+            if (!addon?.service) {
+                toast.error('Addon has no parent service — cannot transfer.');
+                return;
+            }
+            payload.service_id = addon.service;
+        }
+
+        // If cross-platform migration, prompt for target domain
+        if (targetDomain) payload.target_public_domain = targetDomain;
+
         // Optimistic UI update
         const itemToMove = groupedServices[sourceServerId].find(item => item.id === itemId);
         if (!itemToMove) return;
@@ -154,29 +175,9 @@ export default function TransfersPage() {
             return next;
         });
 
-            // Trigger API transfer request
+        // Trigger API transfer request
         try {
             const endpoint = `/transfers/`;
-            const payload: any = {
-                transfer_type: 'SERVICE',
-            };
-            if (sourceServerId !== 'local') payload.source_server_id = sourceServerId;
-            if (targetServerId !== 'local') payload.target_server_id = targetServerId;
-
-            if (itemType === 'service') {
-                payload.service_id = itemId;
-            } else if (itemType === 'addon') {
-                const addon = addons.find((a: any) => a.id === itemId);
-                if (!addon?.service) {
-                    toast.error('Addon has no parent service — cannot transfer.');
-                    return;
-                }
-                payload.service_id = addon.service;
-            }
-
-            // If cross-platform migration, prompt for target domain
-            if (targetDomain) payload.target_public_domain = targetDomain;
-
             if (itemType === 'addon') {
                 toast.message('Note: the parent service will be moved; the addon is tied to it.', {
                     description: 'The addon will follow its parent service automatically.',
@@ -214,6 +215,13 @@ export default function TransfersPage() {
 
     const IN_PROGRESS_STATUSES = ['PREPARING', 'UPLOADING', 'RESTORING', 'DNS_CUTOVER', 'VERIFYING'];
 
+    const getTransferStatusColor = (transferStatus?: string) => {
+        if (transferStatus === 'COMPLETED') return 'text-emerald-400';
+        if (transferStatus === 'FAILED') return 'text-red-400';
+        if (transferStatus === 'CANCELLED' || transferStatus === 'ROLLED_BACK') return 'text-zinc-400';
+        return 'text-amber-400';
+    };
+
     const handleRollback = async (transferId: string) => {
         const transfer = transfers.find(t => t.id === transferId);
         const deadline = transfer?.rollback_deadline
@@ -236,7 +244,13 @@ export default function TransfersPage() {
     };
 
     const handleCancel = async (transferId: string) => {
-        if (!window.confirm('Cancel this in-progress transfer? This action cannot be undone.')) return;
+        const ok = await confirm({
+            title: 'Cancel transfer?',
+            message: 'Cancel this in-progress transfer? This action cannot be undone.',
+            variant: 'destructive',
+            confirmText: 'Cancel Transfer',
+        });
+        if (!ok) return;
         try {
             await api.post(`/transfers/${transferId}/cancel/`);
             toast.success('Transfer cancellation requested');
@@ -417,13 +431,7 @@ export default function TransfersPage() {
                                             <div key={transfer.id} className="rounded-xl border border-zinc-800 bg-black/30 p-3">
                                                 <div className="flex items-center justify-between gap-2">
                                                     <span className="text-[11px] font-bold text-white truncate">{getServiceName(transfer)}</span>
-                                                    <span className={`text-[10px] font-bold uppercase shrink-0 ${
-                                                        transfer.status === 'COMPLETED'
-                                                            ? 'text-emerald-400'
-                                                            : transfer.status === 'FAILED'
-                                                              ? 'text-red-400'
-                                                              : 'text-amber-400'
-                                                    }`}>
+                                                    <span className={`text-[10px] font-bold uppercase shrink-0 ${getTransferStatusColor(transfer.status)}`}>
                                                         {transfer.status}
                                                     </span>
                                                 </div>
@@ -489,13 +497,7 @@ export default function TransfersPage() {
                                                 </span>
                                             </div>
                                             <div className="flex items-center gap-2 mb-1">
-                                                <span className={`text-[9px] font-bold uppercase ${
-                                                    transfer.status === 'COMPLETED'
-                                                        ? 'text-emerald-400'
-                                                        : transfer.status === 'FAILED'
-                                                          ? 'text-red-400'
-                                                          : 'text-amber-400'
-                                                }`}>
+                                                <span className={`text-[9px] font-bold uppercase ${getTransferStatusColor(transfer.status)}`}>
                                                     {transfer.status}
                                                 </span>
                                                 <span className="text-[9px] text-zinc-600">•</span>
@@ -552,10 +554,14 @@ export default function TransfersPage() {
                                     value={fullTransferSshKey}
                                     onChange={(e) => setFullTransferSshKey(e.target.value)}
                                     rows={4}
+                                    autoComplete="off"
+                                    spellCheck={false}
+                                    style={!fullTransferShowKey ? ({ WebkitTextSecurity: 'disc' } as React.CSSProperties) : undefined}
                                     className="font-mono text-[11px] pr-10"
                                 />
                                 <button
                                     type="button"
+                                    aria-label={fullTransferShowKey ? 'Hide SSH private key' : 'Show SSH private key'}
                                     onClick={() => setFullTransferShowKey(!fullTransferShowKey)}
                                     className="absolute right-3 top-3 text-zinc-500 hover:text-zinc-300"
                                 >

@@ -27,6 +27,23 @@ logger = logging.getLogger(__name__)
 PROMETHEUS_URL = getattr(settings, 'PROMETHEUS_INTERNAL_URL', 'http://smsly-prometheus:9090')
 LOKI_URL = getattr(settings, 'LOKI_INTERNAL_URL', 'http://smsly-loki:3100')
 METRICS_TIMEOUT = 12
+_SAFE_SERVICE_LABEL_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$')
+
+
+def _escape_promql_label_value(value: str) -> str:
+    """Escape characters special inside PromQL double-quoted label matchers."""
+    return (
+        str(value)
+        .replace('\\', '\\\\')
+        .replace('"', '\\"')
+        .replace('\n', '\\n')
+        .replace('\r', '\\r')
+    )
+
+
+def _is_valid_service_label(value: str) -> bool:
+    """Return True if value matches the safe service/compose label pattern."""
+    return bool(value and _SAFE_SERVICE_LABEL_RE.match(value))
 
 
 @dataclass
@@ -66,7 +83,14 @@ class MetricsCollector:
 
     def __init__(self, service, prefer: str = 'db'):
         self.service = service
-        self.service_name = service.compose_main_service or service.name
+        compose_svc = str(getattr(service, 'compose_main_service', '') or '').strip()
+        if compose_svc and not _is_valid_service_label(compose_svc):
+            logger.warning(
+                "Ignoring invalid compose_main_service %r for service %s",
+                compose_svc, getattr(service, 'id', '?'),
+            )
+            compose_svc = ''
+        self.service_name = compose_svc or service.name
         self.prefer = prefer
 
     def collect(self) -> MetricsSnapshot:
@@ -93,17 +117,47 @@ class MetricsCollector:
             return ['docker', 'db', 'prometheus']
         return ['db', 'prometheus', 'docker']
 
+    def _cpu_limit(self) -> float:
+        try:
+            val = float(getattr(self.service, 'cpu_cores', 1.0) or 1.0)
+            return val if val > 0.0 else 1.0
+        except (TypeError, ValueError):
+            return 1.0
+
     # ── Prometheus ──────────────────────────────────────────────────────────
     def _from_prometheus(self) -> MetricsSnapshot:
-        label = f'service_name="{self.service_name}"'
+        if not _is_valid_service_label(self.service_name):
+            logger.warning(
+                "Skipping Prometheus query for unsafe service_name %r",
+                self.service_name,
+            )
+            return MetricsSnapshot(source='prometheus')
+        safe_service_name = _escape_promql_label_value(self.service_name)
+        label = f'service_name="{safe_service_name}"'
+        cpu_limit = self._cpu_limit()
+        # Note: docker-labels-exporter exports docker_container_cpu_usage_seconds_total
+        # as an instantaneous core-usage gauge (not a monotonic counter), so applying
+        # rate() treats dips as counter resets and inflates CPU%. Average over [2m]
+        # and normalize by allocated cpu_cores to match ServiceMetric.cpu_percent.
+        cpu_promql = (
+            f'avg(avg_over_time(docker_container_cpu_usage_seconds_total{{{label}}}[2m])) '
+            f'/ {cpu_limit} * 100'
+        )
+        cadvisor_cpu_promql = (
+            f'avg(rate(container_cpu_usage_seconds_total{{'
+            f'container_label_smsly_blue_green_canonical_name="{safe_service_name}"}}[2m])) '
+            f'/ {cpu_limit} * 100'
+        )
         queries = {
-            'cpu_percent': f'max(rate(docker_container_cpu_usage_seconds_total{{{label}}}[5m]) * 100)',
+            'cpu_percent': cpu_promql,
             'memory_mb': f'max(docker_container_memory_usage_bytes{{{label}}} / 1024 / 1024)',
             'memory_trend': f'max(deriv(docker_container_memory_usage_bytes{{{label}}}[15m]) / 1024 / 1024)',
         }
         out: dict = {}
         for key, query in queries.items():
             out[key] = self._promql(query)
+        if out.get('cpu_percent') is None:
+            out['cpu_percent'] = self._promql(cadvisor_cpu_promql)
         # Loki enrichment runs on both branches: OOM/crash signals must
         # stay visible even when CPU/memory series are present. A bare
         # `any(out.values())` check is wrong here — 0.0 is a valid idle
@@ -182,12 +236,18 @@ class MetricsCollector:
             containers = json.loads(resp.read())
             conn.close()
 
+            cpu_limit = self._cpu_limit()
+            cpu_samples: list[float] = []
+            mem_samples_mb: list[float] = []
             for c in containers:
                 labels = c.get('Labels', {}) or {}
                 cid = c.get('Id', '')
+                names = [str(n).lstrip('/') for n in (c.get('Names') or [])]
                 canonical = labels.get('smsly.blue_green.canonical_name', '')
                 compose_svc = labels.get('com.docker.compose.service', '')
-                if self.service_name not in (canonical, compose_svc):
+                if self.service_name not in (canonical, compose_svc, *names):
+                    continue
+                if str(c.get('State') or '').lower() not in ('running', ''):
                     continue
 
                 conn2 = http.client.HTTPConnection('localhost', timeout=10)
@@ -206,13 +266,17 @@ class MetricsCollector:
                         precpu.get('cpu_usage', {}).get('total_usage', 0)
                 sys_d = cpu.get('system_cpu_usage', 0) - \
                         precpu.get('system_cpu_usage', 0)
-                cpu_pct = (cpu_d / sys_d * cpu.get('online_cpus', 1)) * 100 if sys_d > 0 else 0
+                cores_used = (cpu_d / sys_d * cpu.get('online_cpus', 1)) if sys_d > 0 else 0.0
+                cpu_samples.append((cores_used / cpu_limit) * 100.0)
 
                 mem = stats.get('memory_stats', {})
                 mem_bytes = mem.get('usage', 0) - mem.get('stats', {}).get('inactive_file', 0)
+                mem_samples_mb.append(mem_bytes / 1024 / 1024)
+
+            if cpu_samples:
                 return MetricsSnapshot(
-                    cpu_percent=round(cpu_pct, 2),
-                    memory_mb=round(mem_bytes / 1024 / 1024, 2),
+                    cpu_percent=round(sum(cpu_samples) / len(cpu_samples), 2),
+                    memory_mb=round(max(mem_samples_mb), 2) if mem_samples_mb else None,
                     memory_trend_mb_per_min=None,
                     source='docker',
                 )

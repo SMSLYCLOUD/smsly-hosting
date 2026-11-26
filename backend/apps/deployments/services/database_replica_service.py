@@ -211,6 +211,11 @@ def sync_pgcat_config(*, trigger_reload: bool = True) -> dict[str, Any]:
         try:
             container.restart(timeout=10)
             result["reloaded"] = True
+            try:
+                from apps.deployments.services.mesh_dns import sync_dns_now
+                sync_dns_now()
+            except Exception:
+                pass
         except APIError as exc2:
             result["error"] = f"restart also failed: {exc2}"
             logger.error(result["error"])

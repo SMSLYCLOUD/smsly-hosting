@@ -36,10 +36,12 @@ class ReplicationHealthTaskTests(django.test.TestCase):
     """
 
     def _run(self, health, cache=None):
+        from django.core.cache import cache as default_cache
         from django.core.cache.backends.locmem import LocMemCache
 
         from apps.deployments.tasks.data import tasks_replication as task_mod
 
+        default_cache.delete("coalesce:repl-health")
         if cache is None:
             cache = LocMemCache("replication-test", {})
         mesh = mock.MagicMock()

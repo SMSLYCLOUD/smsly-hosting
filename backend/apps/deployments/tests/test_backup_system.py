@@ -210,7 +210,7 @@ class BackupSystemTest(TestCase):
         # Mock SSH Client instance
         mock_ssh = MagicMock()
         mock_ssh.check_docker.return_value = True
-        mock_ssh.exec_command.return_value = ("stdout", "stderr", 0)
+        mock_ssh.exec_command.return_value = ("BACKUP_PATH=/tmp/smsly_backup_test.tar.gz\n", "stderr", 0)
         mock_ssh_class.return_value = mock_ssh
 
         # Mock download_file to write a valid tar.gz archive

@@ -133,10 +133,8 @@ if _existing_env_is_complete "$INSTALL_DIR/.env"; then
         exit 1
     fi
 
-    # Source existing values for summary output.
-    set -a
-    source "$INSTALL_DIR/.env"  || true
-    set +a
+    # Load existing values safely without shell execution.
+    env_load_file_safe "$INSTALL_DIR/.env"
     # Same gate as after fresh generation (resume path never generated,
     # so the deps-time run skipped for lack of .env — see below).
     if [ -f "$INSTALL_DIR/lib/harden_crowdsec.sh" ]; then
@@ -160,9 +158,7 @@ else
     if [ -f "$INSTALL_DIR/.env" ]; then
         echo -e "${YELLOW}  ⚠ Incomplete .env found (missing DOMAIN/secrets) — regenerating fully${NC}"
         cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.stub-backup" || true
-        set -a
-        source "$INSTALL_DIR/.env" || true
-        set +a
+        env_load_file_safe "$INSTALL_DIR/.env"
         rm -f "$INSTALL_DIR/.env"
     fi
     # ─── Configuration Summary ──────────────────────────────────────────────
@@ -248,25 +244,68 @@ else
     [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] || BACKUP_ENCRYPTION_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  || python3 -c "import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())")"
     [ -n "${CROWDSEC_BOUNCER_KEY:-}" ] || CROWDSEC_BOUNCER_KEY="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     [ -n "${REGISTRY_HTTP_SECRET:-}" ] || REGISTRY_HTTP_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
-    [ -n "${CADDY_ASK_SECRET:-}" ] || CADDY_ASK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+    [ -n "${CADDY_ASK_SECRET:-}" ] || CADDY_ASK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || openssl rand -hex 64 || true)"
+    [ -n "${EDGE_JWT_SECRET:-}" ] || EDGE_JWT_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || openssl rand -hex 64 || true)"
     [ -n "${PATRONI_SUPERUSER_PASSWORD:-}" ] || PATRONI_SUPERUSER_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     [ -n "${BACKUP_REQUIRE_ENCRYPTION:-}" ] || BACKUP_REQUIRE_ENCRYPTION="true"
-    # SECURITY: SSH strict host-key checking. Defaults to false (accept-first)
-    # for convenience during initial provisioning. Operators managing trusted
-    # environments with pre-populated known_hosts should set this to "true".
-    [ -n "${SMSLY_STRICT_SSH_HOST_KEY_CHECK:-}" ] || SMSLY_STRICT_SSH_HOST_KEY_CHECK="false"
+    # SECURITY: SSH strict host-key checking defaults to true. Operators
+    # explicitly accepting TOFU on first provision can set this to "false".
+    [ -n "${SMSLY_STRICT_SSH_HOST_KEY_CHECK:-}" ] || SMSLY_STRICT_SSH_HOST_KEY_CHECK="true"
     # Read-replica plumbing (used by pgcat for replica routing).
     # Default follows the DB mode so the replica that the compose stack
     # actually starts is also the one pgcat routes to (previously empty
     # here while compose defaulted to postgres-replica:5432 — same
     # effective value, but .env and runtime disagreed).
+    # Compute hardware tier and WAF default early so DB_REPLICA_HOSTS,
+    # SENTINEL_HOSTS, and COMPOSE_PROFILES align with the host size.
+    ENV_SCHED_CPUS="$(nproc 2>/dev/null || echo 4)"
+    ENV_SCHED_RAM_MB="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+    [ -n "$ENV_SCHED_RAM_MB" ] || ENV_SCHED_RAM_MB=8192
+    _caller_compose_profiles="${COMPOSE_PROFILES:-}"
+    STACK_TIER="${STACK_TIER:-}"
+    case "$STACK_TIER" in
+        lite|medium|full) ;;
+        *)
+            if [ -n "$_caller_compose_profiles" ]; then
+                case ",${_caller_compose_profiles}," in
+                    *,full,*) STACK_TIER="full" ;;
+                    *,medium,*) STACK_TIER="medium" ;;
+                    *) STACK_TIER="lite" ;;
+                esac
+            elif [ "$ENV_SCHED_RAM_MB" -lt 6144 ]; then
+                STACK_TIER="lite"
+            elif [ "$ENV_SCHED_RAM_MB" -lt 12288 ]; then
+                STACK_TIER="medium"
+            else
+                STACK_TIER="full"
+            fi
+            ;;
+    esac
+    # WAF shadow follows host size: the 6-container shadow costs ~1-2GB
+    # real — on <12GB hosts that erases the idle headroom this sizing
+    # exists to protect. On at >=12GB RAM (full tier), off below. An
+    # explicit operator OPENAPPSEC_ENABLED value always wins.
+    ENV_OPENAPPSEC_ENABLED="${OPENAPPSEC_ENABLED:-}"
+    if [ -z "$ENV_OPENAPPSEC_ENABLED" ]; then
+        if [ "$ENV_SCHED_RAM_MB" -ge 12288 ]; then ENV_OPENAPPSEC_ENABLED=1; else ENV_OPENAPPSEC_ENABLED=0; fi
+    fi
+    if [ -z "${OPENAPPSEC_ENABLED:-}" ] && [ "$STACK_TIER" != "full" ]; then
+        ENV_OPENAPPSEC_ENABLED=0
+    fi
+
     [ -n "${REPLICATION_PASSWORD:-}" ] || REPLICATION_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     [ -n "${SENTINEL_PASSWORD:-}" ] || SENTINEL_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     if [ -z "${DB_REPLICA_HOSTS:-}" ]; then
         case "${DB_HA_ENABLED:-local-ha}" in
             patroni) DB_REPLICA_HOSTS="haproxy:5001" ;;
             external) DB_REPLICA_HOSTS="" ;;
-            *) DB_REPLICA_HOSTS="postgres-replica:5432" ;;
+            *)
+                if [ "$STACK_TIER" = "lite" ]; then
+                    DB_REPLICA_HOSTS=""
+                else
+                    DB_REPLICA_HOSTS="postgres-replica:5432"
+                fi
+                ;;
         esac
     fi
 
@@ -350,8 +389,25 @@ except Exception:
     # SSH into the master to fetch the correct POSTGRES_PASSWORD.
     if is_agent_lite_mode && [ -n "${MASTER_IP:-}" ] && [ "$MASTER_IP" != "127.0.0.1" ]; then
         echo -e "${BLUE}  → Fetching master DB password via SSH (master: ${MASTER_IP})...${NC}"
-        _master_db_pw="$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes root@${MASTER_IP} \
-            "grep '^POSTGRES_PASSWORD=' /opt/smsly-hosting/.env  | head -1 | cut -d= -f2"  || true)"
+        local _ssh_strict="accept-new"
+        local _ssh_kh=""
+        if [ -n "${MASTER_SSH_FINGERPRINT:-}" ]; then
+            _ssh_kh="$(mktemp /tmp/smsly-master-kh.XXXXXX)"
+            if ssh-keyscan -T 5 "${MASTER_IP}" 2>/dev/null > "$_ssh_kh" && \
+               ssh-keygen -lf "$_ssh_kh" 2>/dev/null | grep -qF "${MASTER_SSH_FINGERPRINT}"; then
+                _ssh_strict="yes"
+            else
+                echo -e "${RED}  ✗ Master SSH host key fingerprint verification failed for ${MASTER_IP}!${NC}"
+                rm -f "$_ssh_kh"
+                _ssh_kh=""
+                _master_db_pw=""
+            fi
+        fi
+        if [ -z "${MASTER_SSH_FINGERPRINT:-}" ] || [ -n "$_ssh_kh" ]; then
+            _master_db_pw="$(ssh -o StrictHostKeyChecking="${_ssh_strict}" ${_ssh_kh:+-o UserKnownHostsFile="$_ssh_kh"} -o ConnectTimeout=10 -o BatchMode=yes root@"${MASTER_IP}" \
+                "grep '^POSTGRES_PASSWORD=' /opt/smsly-hosting/.env  | head -1 | cut -d= -f2"  || true)"
+            [ -n "$_ssh_kh" ] && rm -f "$_ssh_kh"
+        fi
         if [ -n "${_master_db_pw:-}" ]; then
             POSTGRES_PASSWORD="$_master_db_pw"
             echo -e "${GREEN}  ✓ Retrieved master DB password${NC}"
@@ -377,43 +433,40 @@ except Exception:
         ENV_TRAEFIK_HTTPS_BIND="0.0.0.0:443"
         ENV_STARTUP_CADDY_SYNC="false"
     fi
-    # Auto-detect Redis Sentinel containers before writing .env.
-    if [ -z "${SENTINEL_HOSTS:-}" ]; then
-        _detected_sentinels=""
-        for _si in 1 2 3; do
-            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-redis-sentinel-${_si}$"; then
-                [ -n "$_detected_sentinels" ] && _detected_sentinels="${_detected_sentinels},"
-                _detected_sentinels="${_detected_sentinels}smsly-redis-sentinel-${_si}:26379"
-            fi
-        done
-        [ -n "$_detected_sentinels" ] && SENTINEL_HOSTS="$_detected_sentinels"
+    # Populate SENTINEL_HOSTS statically for local-ha non-lite tiers instead
+    # of probing docker ps before containers exist. Lite stays single-node.
+    if [ -z "${SENTINEL_HOSTS:-}" ] && [ "${DB_HA_ENABLED:-local-ha}" = "local-ha" ] && [ "$STACK_TIER" != "lite" ] && [ "${MODE_AGENT_LITE:-false}" != "true" ] && [ "${MODE_NODE:-false}" != "true" ]; then
+        SENTINEL_HOSTS="redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379"
     fi
-    # Compute effective compose profiles BEFORE the template: the
-    # observability stack is 'medium'-gated and the security/build-cache
-    # stack (Falco, SPIRE servers, apt-cacher, verdaccio) is 'full'-gated.
-    # Full is the default so a fresh install runs everything.
+    # Compute effective compose profiles BEFORE the template from STACK_TIER
+    # (<6GB=lite, 6-12GB=medium, >=12GB=full) + OPENAPPSEC_ENABLED (appsec
+    # profile). Caller-supplied COMPOSE_PROFILES is respected verbatim.
     # NOTE: this MUST live here, not inside the template heredoc below.
-    # Unquoted heredocs still run backtick/${} expansions, and the bare
-    # ${COMPOSE_PROFILES} + `medium`/`full` backticks that used to live in
-    # the template aborted generation under set -u with zero output,
-    # killing the whole install (2026-09-12).
-    COMPOSE_PROFILES="${COMPOSE_PROFILES:-${DB_HA_ENABLED:-local-ha}}"
-    case ",${COMPOSE_PROFILES}," in
-        *,medium,*) ;;
-        *) COMPOSE_PROFILES="${COMPOSE_PROFILES},medium" ;;
-    esac
-    case ",${COMPOSE_PROFILES}," in
-        *,full,*) ;;
-        *) COMPOSE_PROFILES="${COMPOSE_PROFILES},full" ;;
-    esac
+    _fc_db_ha="${DB_HA_ENABLED:-local-ha}"
+    if [ -z "$_caller_compose_profiles" ]; then
+        COMPOSE_PROFILES="$_fc_db_ha"
+        case "$STACK_TIER" in
+            medium)
+                [ "$_fc_db_ha" = "local-ha" ] && COMPOSE_PROFILES="${COMPOSE_PROFILES},local-ha-replica"
+                COMPOSE_PROFILES="${COMPOSE_PROFILES},redis-ha,medium"
+                ;;
+            full)
+                [ "$_fc_db_ha" = "local-ha" ] && COMPOSE_PROFILES="${COMPOSE_PROFILES},local-ha-replica"
+                COMPOSE_PROFILES="${COMPOSE_PROFILES},redis-ha,medium,full"
+                ;;
+        esac
+        if [ "$ENV_OPENAPPSEC_ENABLED" = "1" ]; then
+            COMPOSE_PROFILES="${COMPOSE_PROFILES},appsec"
+        fi
+    else
+        COMPOSE_PROFILES="$_caller_compose_profiles"
+    fi
+    unset _fc_db_ha _caller_compose_profiles
     # Size-aware runtime sizing BEFORE the template (same heredoc rule as
     # above: compute here, interpolate there). Small hosts idle lean:
     # fewer gunicorn workers, smaller Postgres shared buffers (pinned shm
     # is the largest fixed idle cost). Burst ceilings are NOT touched, so
     # heavy load can still consume up to the docker limits.
-    ENV_SCHED_CPUS="$(nproc 2>/dev/null || echo 4)"
-    ENV_SCHED_RAM_MB="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
-    [ -n "$ENV_SCHED_RAM_MB" ] || ENV_SCHED_RAM_MB=8192
     ENV_GUNICORN_WORKERS="${GUNICORN_WORKERS:-}"
     if [ -z "$ENV_GUNICORN_WORKERS" ]; then
         if [ "$ENV_SCHED_CPUS" -le 2 ]; then ENV_GUNICORN_WORKERS=2; else ENV_GUNICORN_WORKERS=4; fi
@@ -431,15 +484,29 @@ except Exception:
         else ENV_DB_EFFECTIVE_CACHE_SIZE=4GB; fi
     fi
     ENV_CELERY_QUEUES="${CELERY_QUEUES:-celery,fast,deploy}"
-    # WAF shadow follows host size: the 6-container shadow costs ~1-2GB
-    # real — on small hosts that erases the idle headroom this sizing
-    # exists to protect. On at >=8GB RAM, off below. An explicit operator
-    # value (env preset or existing .env) always wins.
-    ENV_OPENAPPSEC_ENABLED="${OPENAPPSEC_ENABLED:-}"
-    if [ -z "$ENV_OPENAPPSEC_ENABLED" ]; then
-        if [ "$ENV_SCHED_RAM_MB" -ge 8192 ]; then ENV_OPENAPPSEC_ENABLED=1; else ENV_OPENAPPSEC_ENABLED=0; fi
+    ENV_CELERY_AUTOSCALE="${CELERY_AUTOSCALE:-}"
+    if [ -z "$ENV_CELERY_AUTOSCALE" ]; then
+        if [ "$ENV_SCHED_RAM_MB" -le 4096 ]; then ENV_CELERY_AUTOSCALE="2,0"; else ENV_CELERY_AUTOSCALE="4,0"; fi
     fi
-    echo -e "${BLUE}  → Runtime sizing: ${ENV_GUNICORN_WORKERS} gunicorn workers, PG buffers ${ENV_DB_SHARED_BUFFERS}, WAF shadow ${ENV_OPENAPPSEC_ENABLED}, host ${ENV_SCHED_RAM_MB}MB/${ENV_SCHED_CPUS}CPU${NC}"
+    ENV_PG_WAL_KEEP_SIZE="${PG_WAL_KEEP_SIZE:-}"
+    if [ -z "$ENV_PG_WAL_KEEP_SIZE" ]; then
+        if [ "$STACK_TIER" = "lite" ] || [ "$ENV_SCHED_RAM_MB" -le 4096 ]; then
+            ENV_PG_WAL_KEEP_SIZE="64MB"
+        elif [ "$ENV_SCHED_RAM_MB" -le 8192 ]; then
+            ENV_PG_WAL_KEEP_SIZE="512MB"
+        else
+            ENV_PG_WAL_KEEP_SIZE="1GB"
+        fi
+    fi
+    ENV_PROMETHEUS_RETENTION="${PROMETHEUS_RETENTION:-}"
+    if [ -z "$ENV_PROMETHEUS_RETENTION" ]; then
+        if [ "$ENV_SCHED_RAM_MB" -lt 12288 ]; then ENV_PROMETHEUS_RETENTION="7d"; else ENV_PROMETHEUS_RETENTION="30d"; fi
+    fi
+    ENV_LOKI_RETENTION="${LOKI_RETENTION:-}"
+    if [ -z "$ENV_LOKI_RETENTION" ]; then
+        if [ "$ENV_SCHED_RAM_MB" -lt 12288 ]; then ENV_LOKI_RETENTION="7d"; else ENV_LOKI_RETENTION="30d"; fi
+    fi
+    echo -e "${BLUE}  → Runtime sizing: tier ${STACK_TIER}, ${ENV_GUNICORN_WORKERS} gunicorn workers, PG buffers ${ENV_DB_SHARED_BUFFERS}, WAF shadow ${ENV_OPENAPPSEC_ENABLED}, host ${ENV_SCHED_RAM_MB}MB/${ENV_SCHED_CPUS}CPU${NC}"
     cat <<EOF > "$ENV_TMP"
 # SMSLY Hosting Configuration — Generated $(date -Iseconds)
 ENVIRONMENT=production
@@ -467,13 +534,11 @@ DATABASE_CONNECT_TIMEOUT=5
 # Docker Compose natively honors COMPOSE_PROFILES from this file, so
 # every 'docker compose' call picks the right DB stack with no flags.
 DB_HA_ENABLED=${DB_HA_ENABLED:-local-ha}
-# Observability (Loki/Promtail/Grafana/cAdvisor/docker-labels/alertmanager)
-# is 'medium'-gated in docker-compose.prod.yml. Fresh installs previously
-# defaulted to profiles=local-ha only, so the entire monitoring stack
-# silently never started (Grafana embeds 502'd, Loki blackouts went
-# unnoticed, autoscaler Prometheus targets stayed incomplete). Always
-# include 'medium' and 'full' (Falco, SPIRE servers, apt-cacher,
-# verdaccio) so a fresh install runs everything by default.
+# Resource tier (<6GB=lite, 6-12GB=medium, >=12GB=full). Preserved
+# across updates so lite/medium hosts never balloon back to full.
+STACK_TIER=$STACK_TIER
+# Observability + local HA replicas are 'medium'-gated, Falco/SPIRE/caches
+# are 'full'-gated, and open-appsec is 'appsec'-gated (OPENAPPSEC_ENABLED=1).
 COMPOSE_PROFILES=$COMPOSE_PROFILES
 # PgCat upstream. patroni mode routes through HAProxy write/read ports.
 PGCAT_DB_HOST=${PGCAT_DB_HOST:-postgres-primary}
@@ -485,7 +550,7 @@ RABBITMQ_DEFAULT_USER=smsly_user
 RABBITMQ_DEFAULT_PASS=$RABBITMQ_PASSWORD
 REDIS_HOST=redis-primary
 REDIS_URL=redis://:$REDIS_PASSWORD@redis-primary:6379/0
-REDIS_MIN_REPLICAS_TO_WRITE=1
+REDIS_MIN_REPLICAS_TO_WRITE=0
 REDIS_MIN_REPLICAS_MAX_LAG=10
 # CELERY_ prefix is required for celery-redbeat to read this (see
 # backend/config/settings.py: CELERY_REDBEAT_REDIS_URL). Without the prefix
@@ -527,6 +592,9 @@ CROWDSEC_BOUNCER_KEY=$CROWDSEC_BOUNCER_KEY
 
 # GitHub webhook signature verification
 GITHUB_WEBHOOK_SECRET=$GITHUB_WEBHOOK_SECRET
+
+# Edge JWT signing secret for Traefik forward-auth and Caddy authorize
+EDGE_JWT_SECRET=${EDGE_JWT_SECRET:-}
 
 # Security
 ALLOWED_HOSTS=$DOMAIN,localhost,127.0.0.1
@@ -616,13 +684,14 @@ DB_EFFECTIVE_CACHE_SIZE=$ENV_DB_EFFECTIVE_CACHE_SIZE
 # Main celery worker drains ALL queues so burst workers (celery-fast,
 # celery-deploy) can idle-stop without stalling work.
 CELERY_QUEUES=$ENV_CELERY_QUEUES
+CELERY_AUTOSCALE=$ENV_CELERY_AUTOSCALE
 CELERY_AUTOSCALE_ENABLED=${CELERY_AUTOSCALE_ENABLED:-true}
+PG_WAL_KEEP_SIZE=$ENV_PG_WAL_KEEP_SIZE
 
 # Observability retention + Falco cap (operator-tunable; compose falls
-# back to the same defaults when unset, but persisting them here makes
-# .env the single record and lets small hosts pin 7d without compose edits).
-PROMETHEUS_RETENTION=${PROMETHEUS_RETENTION:-30d}
-LOKI_RETENTION=${LOKI_RETENTION:-30d}
+# back to defaults when unset; 7d on <12GB hosts, 30d on >=12GB).
+PROMETHEUS_RETENTION=$ENV_PROMETHEUS_RETENTION
+LOKI_RETENTION=$ENV_LOKI_RETENTION
 FALCO_MEMORY_LIMIT=${FALCO_MEMORY_LIMIT:-1024M}
 
 # The installer runs first-boot Django setup explicitly after the stack starts.
@@ -769,7 +838,5 @@ load_install_env_defaults "$INSTALL_DIR/.env"
 
 # Ensure all variables in .env are exported to the environment so they are inherited by docker compose
 if [ -f "$INSTALL_DIR/.env" ]; then
-    set -a
-    source "$INSTALL_DIR/.env"
-    set +a
+    env_load_file_safe "$INSTALL_DIR/.env"
 fi

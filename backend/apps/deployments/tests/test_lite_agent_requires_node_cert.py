@@ -31,7 +31,7 @@ class IsLiteAgentRequiresNodeCertificateTests(TestCase):
     def test_create_serializer_rejects_lite_agent_without_cert(self):
         ser = ManagedServerCreateSerializer(data={
             "name": "Edge",
-            "host": "198.51.100.5",
+            "host": "93.184.216.34",
             "is_lite_agent": True,
         })
         self.assertFalse(ser.is_valid())
@@ -40,7 +40,7 @@ class IsLiteAgentRequiresNodeCertificateTests(TestCase):
     def test_create_serializer_rejects_empty_cert(self):
         ser = ManagedServerCreateSerializer(data={
             "name": "Edge",
-            "host": "198.51.100.5",
+            "host": "93.184.216.34",
             "is_lite_agent": True,
             "node_certificate": "   ",
         })
@@ -50,7 +50,7 @@ class IsLiteAgentRequiresNodeCertificateTests(TestCase):
     def test_create_serializer_accepts_lite_agent_with_cert(self):
         ser = ManagedServerCreateSerializer(data={
             "name": "Edge",
-            "host": "198.51.100.5",
+            "host": "93.184.216.34",
             "is_lite_agent": True,
             "node_certificate": "PEM-CONTENT",
         })
@@ -62,7 +62,7 @@ class IsLiteAgentRequiresNodeCertificateTests(TestCase):
     def test_create_serializer_allows_non_lite_without_cert(self):
         ser = ManagedServerCreateSerializer(data={
             "name": "Edge",
-            "host": "198.51.100.5",
+            "host": "93.184.216.34",
             "is_lite_agent": False,
         })
         self.assertTrue(ser.is_valid(), f"Errors: {ser.errors}")
@@ -70,7 +70,7 @@ class IsLiteAgentRequiresNodeCertificateTests(TestCase):
     def test_provision_serializer_accepts_lite_agent_without_cert(self):
         ser = ManagedServerProvisionSerializer(data={
             "name": "EdgeProv",
-            "host": "198.51.100.5",
+            "host": "93.184.216.34",
             "ssh_auth_method": "password",
             "ssh_password": "secret",
             "is_lite_agent": True,
@@ -80,7 +80,7 @@ class IsLiteAgentRequiresNodeCertificateTests(TestCase):
     def test_provision_serializer_accepts_lite_agent_with_cert(self):
         ser = ManagedServerProvisionSerializer(data={
             "name": "EdgeProv",
-            "host": "198.51.100.5",
+            "host": "93.184.216.34",
             "ssh_auth_method": "password",
             "ssh_password": "secret",
             "is_lite_agent": True,
@@ -96,7 +96,7 @@ class IsLiteAgentRequiresNodeCertificateTests(TestCase):
             "/api/v1/servers/",
             {
                 "name": "Edge",
-                "host": "198.51.100.5",
+                "host": "93.184.216.34",
                 "is_lite_agent": True,
             },
             format="json",

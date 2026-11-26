@@ -1,12 +1,12 @@
 check_internet() {
     echo -e "${BLUE}  → Checking internet connectivity...${NC}"
-    if ! curl -Is --connect-timeout 5 https://google.com ; then
+    if ! curl -Is --connect-timeout 5 --max-time 15 https://google.com ; then
         echo -e "${RED}  ✗ No internet access. Check your firewall/network settings.${NC}"
         exit 1
     fi
-    if ! host github.com ; then
+    if ! timeout 15 host github.com ; then
          # Fallback to ping if host is missing
-         if ! ping -c 1 github.com ; then
+         if ! timeout 10 ping -c 1 github.com ; then
              echo -e "${RED}  ✗ DNS resolution failed for github.com.${NC}"
              exit 1
          fi
@@ -172,7 +172,7 @@ apt_run() {
         wait_for_apt_lock || return 1
         # SECURITY/HARDENING: avoid set +e / set -e toggling. Capture rc via
         # explicit conditional so set -e stays in effect the whole time.
-        if output="$("$@" )"; then
+        if output="$(timeout "${SMSLY_APT_CMD_TIMEOUT:-600}" "$@" )"; then
             rc=0
         else
             rc=$?

@@ -1,5 +1,6 @@
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$_SCRIPT_DIR/logging.sh"
+source "$_SCRIPT_DIR/env.sh"
 source "$_SCRIPT_DIR/validation.sh"
 source "$_SCRIPT_DIR/network.sh"
 source "$_SCRIPT_DIR/docker.sh"
@@ -76,7 +77,27 @@ ensure_compose_profiles() {
             return 0
         fi
     fi
-    export COMPOSE_PROFILES="local-ha,medium,full"
+    local tier="${STACK_TIER:-}"
+    if [ -z "$tier" ] && [ -f "$env_file" ]; then
+        tier="$(grep -E '^STACK_TIER=' "$env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]')"
+    fi
+    if [ -z "$tier" ]; then
+        local ram_mb=""
+        ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+        [ -n "$ram_mb" ] || ram_mb=8192
+        if [ "$ram_mb" -lt 6144 ]; then
+            tier="lite"
+        elif [ "$ram_mb" -lt 12288 ]; then
+            tier="medium"
+        else
+            tier="full"
+        fi
+    fi
+    case "$tier" in
+        lite)   export COMPOSE_PROFILES="local-ha" ;;
+        medium) export COMPOSE_PROFILES="local-ha,local-ha-replica,redis-ha,medium" ;;
+        *)      export COMPOSE_PROFILES="local-ha,local-ha-replica,redis-ha,medium,full,appsec" ;;
+    esac
 }
 
 acquire_install_lock() {
@@ -141,7 +162,7 @@ get_migration_database_alias() {
 
 diagnose_migration_locks() {
     local env_file="${INSTALL_DIR:-.}/.env"
-    [ -f "$env_file" ] && source "$env_file"  || true
+    env_load_file_safe "$env_file"
 
     echo -e "${YELLOW}  -> PostgreSQL activity snapshot (lock diagnosis):${NC}"
     timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
@@ -285,9 +306,8 @@ EOF
 reload_container_caddy() {
     should_manage_caddy || return 0
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    if command -v docker  && docker compose -f "$compose_f" ps -q caddy  | grep -q .; then
+    if command -v docker >/dev/null 2>&1 && docker compose -f "$compose_f" ps -q caddy  | grep -q .; then
         timeout -k 5 20 docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile < /dev/null || \
-            timeout -k 5 20 docker compose -f "$compose_f" restart caddy || \
             echo -e "${YELLOW}    ⚠ Caddy reload failed${NC}"
     fi
 }
@@ -487,15 +507,34 @@ sync_agent_lite_rabbitmq_password() {
 
 ensure_security_tools() {
     export PATH="/usr/local/bin:$PATH"
-    if ! command -v trivy  && [ ! -x "/usr/local/bin/trivy" ]; then
-        echo -e "${BLUE}  → Installing Trivy vulnerability scanner...${NC}"
-        curl -sfL --connect-timeout 15 --max-time 120 https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin  || true
+    if ! declare -F _harden_log >/dev/null 2>&1; then
+        _harden_log() {
+            local level="$1"; shift
+            case "$level" in
+                ok)   echo -e "${GREEN:-}  ✓ [harden] $*${NC:-}" ;;
+                warn) echo -e "${YELLOW:-}  ⚠ [harden] $*${NC:-}" ;;
+                err)  echo -e "${RED:-}  ✗ [harden] $*${NC:-}" ;;
+                info) echo -e "${BLUE:-}  → [harden] $*${NC:-}" ;;
+            esac
+        }
     fi
-    if ! command -v cosign  && [ ! -x "/usr/local/bin/cosign" ]; then
-        echo -e "${BLUE}  → Installing Cosign image attestation utility...${NC}"
-        local cosign_arch
-        cosign_arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
-        curl -sfL --connect-timeout 15 --max-time 120 -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${cosign_arch}"  && chmod +x /usr/local/bin/cosign || true
+    if ! declare -F _harden_trivy_bootstrap >/dev/null 2>&1; then
+        if [ -f "${_SCRIPT_DIR:-${INSTALL_DIR:-/opt/smsly-hosting}/lib}/harden_trivy.sh" ]; then
+            source "${_SCRIPT_DIR:-${INSTALL_DIR:-/opt/smsly-hosting}/lib}/harden_trivy.sh"
+        fi
+    fi
+    if declare -F _harden_trivy_bootstrap >/dev/null 2>&1; then
+        _harden_trivy_bootstrap || true
+    fi
+    if ! declare -F _cosign_ensure_binary >/dev/null 2>&1; then
+        local _cosign_script="${INSTALL_DIR:-/opt/smsly-hosting}/scripts/cosign-verify.sh"
+        [ -f "$_cosign_script" ] || _cosign_script="${_SCRIPT_DIR:-.}/../scripts/cosign-verify.sh"
+        if [ -f "$_cosign_script" ]; then
+            source "$_cosign_script" || true
+        fi
+    fi
+    if declare -F _cosign_ensure_binary >/dev/null 2>&1; then
+        _cosign_ensure_binary || true
     fi
     return 0
 }

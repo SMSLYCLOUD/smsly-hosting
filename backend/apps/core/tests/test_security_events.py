@@ -29,7 +29,8 @@ class SecurityEventsTests(TestCase):
         # The events view caches scrapes (90s): flush so each test's
         # subprocess mocks actually execute instead of hitting a stale entry.
         cache.clear()
-        self.user = User.objects.create_user(username="testsec", password="password123")
+        self.user = User.objects.create_user(username="testsec", password="password123", is_staff=True)
+        self.non_staff = User.objects.create_user(username="testsec-regular", password="password123")
         self.factory = APIRequestFactory()
 
     @patch("apps.core.views.security.subprocess.run")
@@ -259,3 +260,12 @@ class SecurityEventsTests(TestCase):
         self.assertIn("hardening_actions", data)
         self.assertTrue(isinstance(data["risk_score"], int))
         self.assertIn(data["threat_level"], ("LOW", "ELEVATED", "HIGH", "SEVERE"))
+
+    def test_non_staff_user_is_denied_403(self):
+        req_ev = self.factory.get("/api/v1/system/security-events/")
+        force_authenticate(req_ev, user=self.non_staff)
+        self.assertEqual(SecurityEventsView.as_view()(req_ev).status_code, 403)
+
+        req_an = self.factory.post("/api/v1/system/security-analysis/")
+        force_authenticate(req_an, user=self.non_staff)
+        self.assertEqual(SecurityAnalysisView.as_view()(req_an).status_code, 403)

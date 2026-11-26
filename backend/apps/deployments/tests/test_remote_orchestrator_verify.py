@@ -16,7 +16,7 @@ class TestRemoteOrchestratorVerify(TestCase):
 
         orchestrator = RemoteOrchestrator(server)
 
-        with patch('apps.deployments.services.remote_orchestrator.should_verify', return_value=True):
+        with patch('apps.deployments.services.tls_verify.should_verify', return_value=True):
             with patch("requests.request") as mock_request:
                 mock_request.return_value.status_code = 200
                 mock_request.return_value.json.return_value = {"id": "123"}
@@ -25,7 +25,7 @@ class TestRemoteOrchestratorVerify(TestCase):
                 _, kwargs = mock_request.call_args
                 self.assertTrue(kwargs.get("verify") is True)
 
-        with patch('apps.deployments.services.remote_orchestrator.should_verify', return_value=False):
+        with patch('apps.deployments.services.tls_verify.should_verify', return_value=False):
             with patch("requests.request") as mock_request:
                 mock_request.return_value.status_code = 200
                 mock_request.return_value.json.return_value = {"id": "123"}

@@ -8,6 +8,37 @@ MEDIA_NODE_INSTALL_DIR="/opt/smsly-hosting-media"
 MEDIA_NODE_ENV="$MEDIA_NODE_INSTALL_DIR/.env"
 MEDIA_NODE_LOG="/var/log/smsly-media-install.log"
 
+_media_load_env_safe() {
+    local env_file="${1:-}"
+    if declare -F env_load_file_safe >/dev/null 2>&1; then
+        env_load_file_safe "$env_file"
+        return $?
+    fi
+    [ -f "$env_file" ] || return 0
+    local _line="" _key="" _val=""
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        _line="${_line%$'\r'}"
+        [[ -z "$_line" || "$_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$_line" == export[[:space:]]* ]] && _line="${_line#export }"
+        [[ "$_line" == *=* ]] || continue
+        _key="${_line%%=*}"
+        _key="${_key#"${_key%%[![:space:]]*}"}"
+        _key="${_key%"${_key##*[![:space:]]}"}"
+        [[ "$_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        _val="${_line#*=}"
+        if [[ "$_val" == \"*\" && "$_val" == *\" && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+            _val="${_val//\\\"/\"}"
+            _val="${_val//\\\$/\$}"
+            _val="${_val//\\\`/\`}"
+            _val="${_val//\\\\/\\}"
+        elif [[ "$_val" == \'*\' && "$_val" == *\' && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+        fi
+        export "$_key=$_val"
+    done < "$env_file"
+}
+
 # ─── Detect media hardware ───────────────────────────────────────────────────
 detect_media_hardware() {
     echo -e "${BLUE}  → Detecting media hardware...${NC}"
@@ -356,10 +387,8 @@ template_media_configs() {
     local env_file="$1"
     echo -e "${BLUE}  → Templating env vars into media configs...${NC}"
 
-    # Source env for values
-    set -a
-    source "$env_file"
-    set +a
+    # Load env safely without shell execution
+    _media_load_env_safe "$env_file"
 
     # Kamailio
     if [ -f /etc/kamailio/kamailio.cfg ]; then
@@ -578,12 +607,7 @@ prepare_media_voice_database() {
     # Phase 2) — they are NOT in this shell's environment otherwise, and
     # referencing them unset under `set -u` kills the installer silently.
     local env_file="${MEDIA_NODE_ENV:-/opt/smsly-hosting-media/.env}"
-    if [ -f "$env_file" ]; then
-        set -a
-        # shellcheck disable=SC1090
-        source "$env_file"
-        set +a
-    fi
+    _media_load_env_safe "$env_file"
     local db_user="${MEDIA_DB_USER:-smsly_voice}"
     local db_password="${MEDIA_DB_PASSWORD:-}"
     local db_name="smsly_voice"
@@ -719,7 +743,7 @@ install_livekit() {
     fi
 
     # Render config (idempotent — re-run picks up rotated keys).
-    [ -f "$env_file" ] && { set -a; source "$env_file"; set +a; }
+    _media_load_env_safe "$env_file"
     mkdir -p /etc/livekit /var/lib/livekit
     cat > /etc/livekit/livekit.yaml <<EOF
 port: 7880
@@ -845,75 +869,6 @@ install_agent_stack() {
             echo -e "${YELLOW}  ⚠ Orchestrator build failed — agent calls unavailable until rebuilt (non-fatal)${NC}"
         fi
     fi
-}
-
-# ─── Install LiveKit SFU server ────────────────────────────────────────────
-# LiveKit ships no apt package: pin a GitHub release tarball, verify its
-# sha256, and render /etc/livekit/livekit.yaml from the node .env (API
-# keys are generated in Phase 2). TURN stays on standalone coturn, so the
-# built-in TURN relay is disabled; RTC media uses UDP 30000-31000 to match
-# the pre-flight port check.
-LIVEKIT_VERSION="${LIVEKIT_VERSION:-v1.13.6}"
-LIVEKIT_SHA256_AMD64="2b61abef2b9ba14b4b8ca38b37de9a37ffc682b9931d5fc03ceca2f0b77d3e33"
-LIVEKIT_SHA256_ARM64="5c75f09173199f3f8fe0c3c0d5a41171f9b306ffce6843d752c276d11e77d19b"
-
-install_livekit() {
-    local env_file="${1:-/opt/smsly-hosting-media/.env}"
-    echo -e "${BLUE}  → Installing LiveKit server ${LIVEKIT_VERSION}...${NC}"
-
-    local arch
-    case "$(dpkg --print-architecture 2>/dev/null || uname -m)" in
-        amd64|x86_64) arch="amd64"; local want_sha="$LIVEKIT_SHA256_AMD64" ;;
-        arm64|aarch64) arch="arm64"; local want_sha="$LIVEKIT_SHA256_ARM64" ;;
-        *) echo -e "${YELLOW}  ⚠ Unsupported architecture for LiveKit binaries (non-fatal)${NC}"; return 0 ;;
-    esac
-
-    if command -v livekit-server >/dev/null 2>&1 && livekit-server --version 2>/dev/null | grep -q "$LIVEKIT_VERSION"; then
-        echo -e "${GREEN}  ✓ LiveKit ${LIVEKIT_VERSION} already installed${NC}"
-    else
-        local url="https://github.com/livekit/livekit/releases/download/${LIVEKIT_VERSION}/livekit_${LIVEKIT_VERSION#v}_linux_${arch}.tar.gz"
-        rm -f /tmp/livekit.tgz
-        if ! curl -fsSL --max-time 300 "$url" -o /tmp/livekit.tgz; then
-            echo -e "${YELLOW}  ⚠ LiveKit download failed — WebRTC SFU unavailable (non-fatal)${NC}"
-            return 0
-        fi
-        local got_sha
-        got_sha="$(sha256sum /tmp/livekit.tgz | awk '{print $1}')"
-        if [ "$got_sha" != "$want_sha" ]; then
-            echo -e "${YELLOW}  ⚠ LiveKit checksum mismatch (got ${got_sha:0:12}…) — refusing to install (non-fatal)${NC}"
-            rm -f /tmp/livekit.tgz
-            return 0
-        fi
-        tar -xzf /tmp/livekit.tgz -C /tmp livekit-server
-        install -o root -g root -m 0755 /tmp/livekit-server /usr/local/bin/livekit-server
-        rm -f /tmp/livekit.tgz /tmp/livekit-server
-        echo -e "${GREEN}  ✓ LiveKit ${LIVEKIT_VERSION} installed${NC}"
-    fi
-
-    # Render config (idempotent — re-run picks up rotated keys).
-    [ -f "$env_file" ] && { set -a; source "$env_file"; set +a; }
-    mkdir -p /etc/livekit /var/lib/livekit
-    cat > /etc/livekit/livekit.yaml <<EOF
-port: 7880
-bind_addresses:
-  - "0.0.0.0"
-rtc:
-  tcp_port: 7881
-  port_range_start: 30000
-  port_range_end: 31000
-  use_external_ip: true
-  node_ip: "${PUBLIC_IP:-127.0.0.1}"
-keys:
-  "${LIVEKIT_API_KEY:-devkey}": "${LIVEKIT_API_SECRET:-secret}"
-room:
-  empty_timeout: 300
-  max_participants: 200
-turn:
-  enabled: false
-EOF
-    chmod 640 /etc/livekit/livekit.yaml
-    chown root:smsly /etc/livekit/livekit.yaml
-    echo -e "${GREEN}  ✓ LiveKit config rendered${NC}"
 }
 
 install_media_node() {

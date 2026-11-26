@@ -164,7 +164,9 @@ class AutoRollbackTests(TestCase):
             repository_url='https://github.com/test/crashy',
             branch='main',
             owner=self.user,
-            provider=self.provider
+            provider=self.provider,
+            auto_rollback_enabled=True,
+            auto_rollback_threshold=3,
         )
 
     @patch('apps.deployments.tasks.smart_deploy_task.delay')

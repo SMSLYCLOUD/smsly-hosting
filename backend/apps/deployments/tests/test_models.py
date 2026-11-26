@@ -24,7 +24,9 @@ class ServiceModelTests(TestCase):
 
     def test_str(self):
         svc = self._create_service(name='my-service')
-        self.assertEqual(str(svc), f'{svc.name} ({svc.slug})')
+        self.assertEqual(str(svc), 'my-service')
+        svc_named = self._create_service(name='My Named Service')
+        self.assertEqual(str(svc_named), f'{svc_named.name} ({svc_named.slug})')
 
     def test_slug_generated(self):
         svc = self._create_service(name='My Service')
@@ -47,7 +49,7 @@ class ServiceModelTests(TestCase):
 
     def test_slug_uniqueness(self):
         svc1 = self._create_service(name='dup-slug')
-        svc2 = self._create_service(name='dup-slug')
+        svc2 = self._create_service(name='Dup Slug')
         self.assertNotEqual(svc1.slug, svc2.slug)
 
     def test_public_domain_generated(self):

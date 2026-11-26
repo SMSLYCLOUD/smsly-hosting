@@ -111,13 +111,15 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         resources.mark_db_user_preexisting(_node_db_username)
 
     from ..helpers import (
-        _get_ssh_client,
+        _get_ssh_client as _helpers_get_ssh_client,
         _harden_master_firewall,
         _harden_node_ssh,
         _clear_ssh_password_after_success,
         _clear_ssh_key_backup_after_success,
         _restrict_ssh_key_to_master_ip,
     )
+    import apps.deployments.services.provisioner as _prov_pkg
+    _get_ssh_client = getattr(_prov_pkg, "_get_ssh_client", _helpers_get_ssh_client)
 
     ssh = None
     local_bundle_path = None

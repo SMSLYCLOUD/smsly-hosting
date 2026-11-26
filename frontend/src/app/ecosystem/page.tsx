@@ -21,6 +21,7 @@ import { AddServiceForm } from '@/components/ecosystem/AddServiceForm';
 import { BulkEnvDialog } from './components/BulkEnvDialog';
 import { CachedScanCard } from './components/CachedScanCard';
 import { PlanHistorySection } from './components/PlanHistorySection';
+import { usePermissions } from '@/hooks/usePermissions';
 
 // Types
 interface ServicePlan {
@@ -251,6 +252,8 @@ export default function EcosystemPage() {
 
     const [aiProviders, setAiProviders] = useState<any[]>([]);
     const [selectedProvider, setSelectedProvider] = useState<string>(() => loadState('aiProvider', 'auto'));
+    const { isStaff, isSuperuser } = usePermissions();
+    const canQueryAdminAi = isStaff || isSuperuser;
 
     // Bulk env dialog
     const [bulkEnvOpen, setBulkEnvOpen] = useState(false);
@@ -274,11 +277,17 @@ export default function EcosystemPage() {
         apiGet('/api/v1/servers/').then(data => {
             setServers(data.results || data || []);
         }).catch(() => {});
+    }, []);
 
+    useEffect(() => {
+        if (!canQueryAdminAi) {
+            setAiProviders([]);
+            return;
+        }
         apiGet('/api/v1/cloud/intelligence/providers/').then(data => {
             setAiProviders(data || []);
         }).catch(() => {});
-    }, []);
+    }, [canQueryAdminAi]);
 
     // Persist state to localStorage
     useEffect(() => { saveState('step', step); }, [step]);

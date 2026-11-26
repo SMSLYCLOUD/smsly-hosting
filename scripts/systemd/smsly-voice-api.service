@@ -16,7 +16,7 @@ LimitNOFILE=65536
 
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/log/smsly /run/smsly /var/lib/freeswitch
+ReadWritePaths=-/var/log/smsly -/run/smsly -/var/lib/freeswitch
 NoNewPrivileges=true
 
 [Install]

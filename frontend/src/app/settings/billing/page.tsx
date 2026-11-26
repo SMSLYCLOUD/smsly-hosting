@@ -138,17 +138,17 @@ export default function BillingSettingsPage() {
                 <div className="space-y-2">
                     <div className="flex justify-between text-sm">
                         <span>Services</span>
-                        <span>{usage?.active_services || 0} / {currentPlan?.max_services || '∞'}</span>
+                        <span>{usage?.active_services || 0} / {currentPlan?.max_services && currentPlan.max_services > 0 ? currentPlan.max_services : '∞'}</span>
                     </div>
-                    <Progress value={((usage?.active_services || 0) / (currentPlan?.max_services || 1)) * 100} />
+                    <Progress value={currentPlan?.max_services && currentPlan.max_services > 0 ? Math.min(100, ((usage?.active_services || 0) / currentPlan.max_services) * 100) : 0} />
                 </div>
 
                 <div className="space-y-2">
                     <div className="flex justify-between text-sm">
                         <span>Storage (GB)</span>
-                        <span>{usage?.storage_gb || 0} / {currentPlan?.max_storage_gb || '∞'} GB</span>
+                        <span>{usage?.storage_gb || 0} / {currentPlan?.max_storage_gb && currentPlan.max_storage_gb > 0 ? currentPlan.max_storage_gb : '∞'} GB</span>
                     </div>
-                    <Progress value={((usage?.storage_gb || 0) / (currentPlan?.max_storage_gb || 1)) * 100} />
+                    <Progress value={currentPlan?.max_storage_gb && currentPlan.max_storage_gb > 0 ? Math.min(100, ((usage?.storage_gb || 0) / currentPlan.max_storage_gb) * 100) : 0} />
                 </div>
 
                 <div className="space-y-2">

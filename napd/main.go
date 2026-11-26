@@ -32,6 +32,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"flag"
@@ -54,7 +55,71 @@ type tierConf struct {
 	name      string
 	services  []string
 	autosleep bool
+	critical  bool
 	idleSecs  int
+}
+
+var criticalControlPlaneServices = map[string]bool{
+	"db":                          true,
+	"postgres":                    true,
+	"postgres-primary":            true,
+	"postgres-replica":            true,
+	"pgcat":                       true,
+	"pgbouncer-tenants":           true,
+	"etcd":                        true,
+	"patroni1":                    true,
+	"patroni2":                    true,
+	"patroni3":                    true,
+	"haproxy":                     true,
+	"redis":                       true,
+	"redis-primary":               true,
+	"redis-replica":               true,
+	"redis-sentinel-1":            true,
+	"redis-sentinel-2":            true,
+	"redis-sentinel-3":            true,
+	"rabbitmq":                    true,
+	"registry":                    true,
+	"coredns":                     true,
+	"backend":                     true,
+	"frontend":                    true,
+	"celery":                      true,
+	"celery-beat":                 true,
+	"celery-fast":                 true,
+	"celery-deploy":               true,
+	"caddy":                       true,
+	"traefik":                     true,
+	"route-fallback":              true,
+	"socket-proxy":                true,
+	"traefik-socket-proxy":        true,
+	"sablier":                     true,
+	"sablier-socket-proxy":        true,
+	"crowdsec":                    true,
+	"crowdsec-cloudflare-bouncer": true,
+	"frps":                        true,
+	"spire-server":                true,
+	"spire-server-ecosystem":      true,
+	"spire-agent":                 true,
+	"spire-agent-ecosystem":       true,
+	"alertmanager":                true,
+	"cryptd":                      true,
+	"grid-cryptd":                 true,
+	"edge-sidecar":                true,
+	"napd":                        true,
+}
+
+func isCriticalTier(tc *tierConf) bool {
+	if tc == nil {
+		return true
+	}
+	if tc.critical {
+		return true
+	}
+	for _, svc := range tc.services {
+		if criticalControlPlaneServices[strings.ToLower(strings.TrimSpace(svc))] {
+			return true
+		}
+	}
+	return false
 }
 
 type config struct {
@@ -108,6 +173,8 @@ func parseTierConf(name, path string) (*tierConf, error) {
 			tc.services = strings.Fields(val)
 		case "SMSLY_TIER_AUTOSLEEP":
 			tc.autosleep = val == "1"
+		case "SMSLY_TIER_CRITICAL":
+			tc.critical = val == "1" || strings.EqualFold(val, "true")
 		case "SMSLY_TIER_IDLE_SECS":
 			if n, err := strconv.Atoi(val); err == nil && n > 0 {
 				tc.idleSecs = n
@@ -144,13 +211,17 @@ func (d *daemon) tierLock(name string) *sync.Mutex {
 // scriptEnv mirrors the systemd unit environment so smsly-tier.sh uses
 // the same dirs whether napd or systemd invoked it.
 func (d *daemon) scriptEnv() []string {
-	return []string{
+	env := []string{
 		"SMSLY_INSTALL_DIR=" + d.cfg.installDir,
 		"SMSLY_TIER_DIR=" + d.cfg.tierDir,
 		"SMSLY_TIER_STATE_DIR=" + d.cfg.stateDir,
 		"SMSLY_TIER_WAKE_DIR=" + d.cfg.wakeDir,
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
+	if home := os.Getenv("HOME"); home != "" {
+		env = append(env, "HOME="+home)
+	}
+	return env
 }
 
 func (d *daemon) runTier(ctx context.Context, verb, tier string) (string, error) {
@@ -181,7 +252,7 @@ func runningServices(ctx context.Context) map[string]bool {
 	return out
 }
 
-func (d *daemon) awake(ctx context.Context, tc *tierConf) bool {
+func (d *daemon) anyAwake(ctx context.Context, tc *tierConf) bool {
 	running := runningServices(ctx)
 	for _, svc := range tc.services {
 		if running[svc] {
@@ -191,23 +262,56 @@ func (d *daemon) awake(ctx context.Context, tc *tierConf) bool {
 	return false
 }
 
-func (d *daemon) markWake(tier string) {
+func (d *daemon) allAwake(ctx context.Context, tc *tierConf) bool {
+	if len(tc.services) == 0 {
+		return false
+	}
+	running := runningServices(ctx)
+	for _, svc := range tc.services {
+		if !running[svc] {
+			return false
+		}
+	}
+	return true
+}
+
+func (d *daemon) persistStateLocked() {
 	statePath := filepath.Join(d.cfg.stateDir, "napd-state.json")
+	raw, _ := json.Marshal(d.lastWake)
+	tmp := statePath + ".tmp"
+	if os.WriteFile(tmp, raw, 0o600) == nil {
+		_ = os.Chmod(tmp, 0o600)
+		_ = os.Rename(tmp, statePath)
+	}
+}
+
+func (d *daemon) markWake(tier string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.lastWake == nil {
 		d.lastWake = map[string]time.Time{}
 	}
 	d.lastWake[tier] = time.Now()
-	raw, _ := json.Marshal(d.lastWake)
-	tmp := statePath + ".tmp"
-	if os.WriteFile(tmp, raw, 0o644) == nil {
-		_ = os.Rename(tmp, statePath)
+	d.persistStateLocked()
+}
+
+func (d *daemon) clearWake(tier string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.lastWake == nil {
+		return
 	}
+	if _, ok := d.lastWake[tier]; !ok {
+		return
+	}
+	delete(d.lastWake, tier)
+	d.persistStateLocked()
 }
 
 func (d *daemon) loadState() {
-	raw, err := os.ReadFile(filepath.Join(d.cfg.stateDir, "napd-state.json"))
+	statePath := filepath.Join(d.cfg.stateDir, "napd-state.json")
+	_ = os.Chmod(statePath, 0o600)
+	raw, err := os.ReadFile(statePath)
 	if err != nil {
 		return
 	}
@@ -225,7 +329,9 @@ func (d *daemon) checkSecret(r *http.Request) bool {
 	if got == "" {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(got), []byte(d.cfg.secret)) == 1
+	gotSum := sha256.Sum256([]byte(got))
+	expSum := sha256.Sum256([]byte(d.cfg.secret))
+	return subtle.ConstantTimeCompare(gotSum[:], expSum[:]) == 1
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -305,7 +411,12 @@ func (d *daemon) wakeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	timeoutSecs := 120
 	if n, err := strconv.Atoi(r.URL.Query().Get("timeout")); err == nil {
-		timeoutSecs = max(10, min(n, 600))
+		if n < 10 {
+			n = 10
+		} else if n > 600 {
+			n = 600
+		}
+		timeoutSecs = n
 	}
 	lock := d.tierLock(tier)
 	lock.Lock()
@@ -321,7 +432,7 @@ func (d *daemon) wakeHandler(w http.ResponseWriter, r *http.Request) {
 	d.markWake(tier)
 	deadline := time.Now().Add(time.Duration(timeoutSecs) * time.Second)
 	for {
-		if d.awake(ctx, tc) {
+		if d.allAwake(ctx, tc) {
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "tier": tier})
 			return
 		}
@@ -358,6 +469,10 @@ func (d *daemon) sleepHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	force := r.URL.Query().Get("force") == "1"
+	if isCriticalTier(tc) {
+		http.Error(w, "cannot sleep critical control-plane tier", http.StatusForbidden)
+		return
+	}
 	if !tc.autosleep && !force {
 		http.Error(w, "tier is not autosleepable (pass force=1 to override)", http.StatusForbidden)
 		return
@@ -372,6 +487,7 @@ func (d *daemon) sleepHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "tier": tier, "error": "tier down failed"})
 		return
 	}
+	d.clearWake(tier)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "tier": tier})
 }
 
@@ -388,13 +504,19 @@ func (d *daemon) reap() {
 			continue
 		}
 		tc, err := parseTierConf(name, filepath.Join(d.cfg.tierDir, e.Name()))
-		if err != nil || !tc.autosleep || tc.idleSecs <= 0 {
+		if err != nil || !tc.autosleep || tc.idleSecs <= 0 || isCriticalTier(tc) {
 			continue
 		}
 		d.mu.Lock()
 		lw := d.lastWake[name]
 		d.mu.Unlock()
 		if lw.IsZero() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			awake := d.anyAwake(ctx, tc)
+			cancel()
+			if awake {
+				d.markWake(name)
+			}
 			continue
 		}
 		if time.Since(lw) < time.Duration(tc.idleSecs)*time.Second {
@@ -408,13 +530,15 @@ func (d *daemon) reap() {
 			defer lock.Unlock()
 			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 			defer cancel()
-			if !d.awake(ctx, tc) {
+			if !d.anyAwake(ctx, tc) {
+				d.clearWake(name)
 				return
 			}
 			if out, err := d.runTier(ctx, "down", name); err != nil {
 				log.Printf("reap %s: tier down failed: %v (%s)", name, err, out)
 				return
 			}
+			d.clearWake(name)
 			log.Printf("reap %s: slept after %ds awake", name, tc.idleSecs)
 		}()
 	}
@@ -437,7 +561,7 @@ func main() {
 	flag.StringVar(&cfg.listen, "listen", getenv("NAPD_LISTEN", "0.0.0.0:8972"), "listen address (0.0.0.0: backend containers arrive via bridge gateway IP)")
 	flag.StringVar(&cfg.tierDir, "tiers-dir", getenv("SMSLY_TIER_DIR", "/etc/smsly/tiers.d"), "tier definitions dir")
 	flag.StringVar(&cfg.stateDir, "state-dir", getenv("SMSLY_TIER_STATE_DIR", "/var/lib/smsly/tiers"), "tier state dir (shares .asleep markers with smsly-tier.sh)")
-	flag.StringVar(&cfg.wakeDir, "wake-dir", getenv("SMSLY_TIER_WAKE_DIR", "/run/smsly/tier-wake"), "wake sentinel dir")
+	flag.StringVar(&cfg.wakeDir, "wake-dir", getenv("SMSLY_TIER_WAKE_DIR", "/run/smsly-tier-wake"), "wake sentinel dir")
 	flag.StringVar(&cfg.installDir, "install-dir", getenv("SMSLY_INSTALL_DIR", "/opt/smsly-hosting"), "repo install dir")
 	flag.StringVar(&cfg.tierScript, "tier-script", getenv("SMSLY_TIER_SCRIPT", "/opt/smsly-hosting/scripts/smsly-tier.sh"), "tier lifecycle script")
 	flag.StringVar(&cfg.secretFile, "secret-file", getenv("NAPD_SECRET_FILE", ""), "file holding NAPD_SHARED_SECRET")
@@ -450,11 +574,14 @@ func main() {
 	// Unit RuntimeDirectory/StateDirectory cover /run/smsly and
 	// /var/lib/smsly; subdirs are created here (first boot after a
 	// /run wipe would otherwise fail writes, not the process).
-	for _, dir := range []string{cfg.stateDir, cfg.wakeDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			log.Fatalf("mkdir %s: %v", dir, err)
-		}
+	if err := os.MkdirAll(cfg.stateDir, 0o700); err != nil {
+		log.Fatalf("mkdir %s: %v", cfg.stateDir, err)
 	}
+	_ = os.Chmod(cfg.stateDir, 0o700)
+	if err := os.MkdirAll(cfg.wakeDir, 0o755); err != nil {
+		log.Fatalf("mkdir %s: %v", cfg.wakeDir, err)
+	}
+	_ = os.Chmod(cfg.wakeDir, 0o755)
 
 	d := &daemon{cfg: cfg}
 	d.loadState()
@@ -479,12 +606,7 @@ func main() {
 			}
 			for _, svc := range tc.services {
 				if running[svc] {
-					d.mu.Lock()
-					if d.lastWake == nil {
-						d.lastWake = map[string]time.Time{}
-					}
-					d.lastWake[name] = time.Now()
-					d.mu.Unlock()
+					d.markWake(name)
 					break
 				}
 			}
@@ -508,9 +630,16 @@ func main() {
 	mux.HandleFunc("/wake", d.wakeHandler)
 	mux.HandleFunc("/sleep", d.sleepHandler)
 
+	boundedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		}
+		mux.ServeHTTP(w, r)
+	})
+
 	srv := &http.Server{
 		Addr:              cfg.listen,
-		Handler:           mux,
+		Handler:           boundedHandler,
 		ReadTimeout:       10 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      620 * time.Second,

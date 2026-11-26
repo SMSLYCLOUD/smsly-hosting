@@ -14,11 +14,13 @@ import logging
 import uuid
 
 from django.conf import settings
+from django.db import IntegrityError
 from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from ..models.tunnels import Tunnel, TunnelRequest
+from ..models.tunnels import ReservedSubdomain, Tunnel, TunnelRequest
+from .subdomains import RESERVED_LABELS
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +79,17 @@ class TunnelCreateSerializer(serializers.Serializer):
     type = serializers.ChoiceField(
         choices=['http', 'tcp'], default='http', required=False)
 
+    def validate_local_port(self, value):
+        if value in DENIED_TUNNEL_PORTS:
+            raise serializers.ValidationError(
+                f'Port {value} is a reserved service port and cannot be tunneled.'
+            )
+        if value not in ALLOWED_TUNNEL_PORTS:
+            raise serializers.ValidationError(
+                f'Port {value} is outside the allowed tunnel port ranges (1024-9999, 20000-29999).'
+            )
+        return value
+
     def validate_subdomain(self, value):
         if not value:
             return ''
@@ -89,6 +102,19 @@ class TunnelCreateSerializer(serializers.Serializer):
         if value.startswith('-') or value.endswith('-'):
             raise serializers.ValidationError(
                 'Subdomain cannot start or end with a hyphen.')
+        if value in RESERVED_LABELS:
+            raise serializers.ValidationError(
+                f"Subdomain '{value}' is reserved and cannot be used.")
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        reserved_qs = ReservedSubdomain.objects.filter(
+            subdomain=value, is_active=True,
+        )
+        if user and getattr(user, 'is_authenticated', False):
+            reserved_qs = reserved_qs.exclude(owner=user)
+        if reserved_qs.exists():
+            raise serializers.ValidationError(
+                'This subdomain is reserved by another user.')
         # Check uniqueness
         if Tunnel.objects.filter(
             subdomain=value, is_active=True
@@ -109,6 +135,7 @@ class TunnelViewSet(viewsets.ModelViewSet):
     queryset = Tunnel.objects.all()
     serializer_class = TunnelSerializer
     permission_classes = [permissions.IsAuthenticated]
+    http_method_names = ['get', 'post', 'delete', 'head', 'options']
 
     def get_queryset(self):
         return self.queryset.filter(
@@ -126,7 +153,9 @@ class TunnelViewSet(viewsets.ModelViewSet):
 
     def create(self, request):
         """POST /api/v1/tunnels/ — create tunnel from dashboard."""
-        write_serializer = TunnelCreateSerializer(data=request.data)
+        write_serializer = TunnelCreateSerializer(
+            data=request.data, context={'request': request},
+        )
         write_serializer.is_valid(raise_exception=True)
 
         local_port = write_serializer.validated_data['local_port']
@@ -136,14 +165,25 @@ class TunnelViewSet(viewsets.ModelViewSet):
         if not subdomain:
             subdomain = f"{request.user.username}-{uuid.uuid4().hex[:6]}"
 
-        tunnel = Tunnel.objects.create(
-            owner=request.user,
-            subdomain=subdomain,
-            local_port=local_port,
-            type=tunnel_type,
-            public_url=f"https://{subdomain}.{get_tunnel_base_domain()}",
-            is_active=True,
-        )
+        # Free any legacy soft-deleted tunnel row holding this unique subdomain slot
+        for stale in Tunnel.objects.filter(subdomain=subdomain, is_active=False):
+            stale.subdomain = f"{stale.subdomain[:45]}--del-{uuid.uuid4().hex[:8]}"
+            stale.save(update_fields=['subdomain'])
+
+        try:
+            tunnel = Tunnel.objects.create(
+                owner=request.user,
+                subdomain=subdomain,
+                local_port=local_port,
+                type=tunnel_type,
+                public_url=f"https://{subdomain}.{get_tunnel_base_domain()}",
+                is_active=True,
+            )
+        except IntegrityError:
+            return Response(
+                {'error': 'This subdomain is already in use.'},
+                status=status.HTTP_409_CONFLICT,
+            )
 
         return Response(
             TunnelSerializer(tunnel).data,
@@ -155,7 +195,8 @@ class TunnelViewSet(viewsets.ModelViewSet):
         """DELETE /api/v1/tunnels/{id}/ — soft-delete (deactivate)."""
         tunnel = self.get_object()
         tunnel.is_active = False
-        tunnel.save(update_fields=['is_active'])
+        tunnel.subdomain = f"{tunnel.subdomain[:45]}--del-{uuid.uuid4().hex[:8]}"
+        tunnel.save(update_fields=['is_active', 'subdomain'])
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     # ── Requests Inspector ───────────────────────────────────────────────
@@ -235,22 +276,76 @@ class TunnelViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'])
     def register(self, request):
         """POST /api/v1/tunnels/register/ — register tunnel from CLI tool"""
-        subdomain = request.data.get('subdomain')
-        local_port = request.data.get('local_port')
+        subdomain = str(request.data.get('subdomain') or '').strip().lower()
+        raw_port = request.data.get('local_port')
 
-        if not subdomain or not local_port:
+        if not subdomain or raw_port is None or isinstance(raw_port, bool):
             return Response(
-                {'error': 'subdomain and local_port required'},
+                {'error': 'subdomain and integer local_port required'},
                 status=status.HTTP_400_BAD_REQUEST)
 
-        tunnel, created = Tunnel.objects.update_or_create(
-            subdomain=subdomain,
-            owner=request.user,
-            defaults={
-                'local_port': local_port,
-                'public_url': f"https://{subdomain}.{get_tunnel_base_domain()}",
-                'is_active': True,
-            })
+        try:
+            local_port = int(raw_port)
+        except (TypeError, ValueError):
+            return Response(
+                {'error': 'local_port must be an integer.'},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        if local_port in DENIED_TUNNEL_PORTS:
+            return Response(
+                {'error': f'Port {local_port} is a reserved service port and cannot be tunneled.'},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        if local_port not in ALLOWED_TUNNEL_PORTS:
+            return Response(
+                {'error': f'Port {local_port} is outside the allowed tunnel ranges (1024-9999, 20000-29999).'},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        if (
+            not all(c.isalnum() or c == '-' for c in subdomain)
+            or subdomain.startswith('-')
+            or subdomain.endswith('-')
+            or len(subdomain) > 63
+        ):
+            return Response(
+                {'error': 'Subdomain must contain only letters, numbers, and hyphens.'},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        if subdomain in RESERVED_LABELS:
+            return Response(
+                {'error': f"Subdomain '{subdomain}' is reserved and cannot be used."},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        if ReservedSubdomain.objects.filter(
+            subdomain=subdomain, is_active=True,
+        ).exclude(owner=request.user).exists():
+            return Response(
+                {'error': 'This subdomain is reserved by another user.'},
+                status=status.HTTP_409_CONFLICT)
+
+        if Tunnel.objects.filter(subdomain=subdomain, is_active=True).exclude(owner=request.user).exists():
+            return Response(
+                {'error': 'This subdomain is already in use.'},
+                status=status.HTTP_409_CONFLICT)
+
+        # Free any legacy soft-deleted tunnel row from another owner holding this slot
+        for stale in Tunnel.objects.filter(subdomain=subdomain, is_active=False).exclude(owner=request.user):
+            stale.subdomain = f"{stale.subdomain[:45]}--del-{uuid.uuid4().hex[:8]}"
+            stale.save(update_fields=['subdomain'])
+
+        try:
+            tunnel, created = Tunnel.objects.update_or_create(
+                subdomain=subdomain,
+                owner=request.user,
+                defaults={
+                    'local_port': local_port,
+                    'public_url': f"https://{subdomain}.{get_tunnel_base_domain()}",
+                    'is_active': True,
+                })
+        except IntegrityError:
+            return Response(
+                {'error': 'This subdomain is already in use.'},
+                status=status.HTTP_409_CONFLICT)
 
         return Response(
             TunnelSerializer(tunnel).data,

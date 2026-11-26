@@ -77,10 +77,11 @@ echo ""
 
 # ─── Step 3: Pull latest code ──────────────────────────────────────────
 echo -e "${BLUE}[1/5] Pulling latest installer code...${NC}"
+FIX_BRANCH="${SMSLY_BRANCH:-master}"
 git config --global --add safe.directory "$INSTALL_DIR"  || true
 git stash  || true
-git fetch origin main  || { echo -e "${YELLOW}  ⚠ Git fetch failed; continuing with current code.${NC}"; }
-git checkout -B main origin/main  || { echo -e "${YELLOW}  ⚠ Git checkout failed; continuing with current code.${NC}"; }
+timeout 120 git fetch origin "$FIX_BRANCH"  || { echo -e "${YELLOW}  ⚠ Git fetch failed; continuing with current code.${NC}"; }
+git checkout -B "$FIX_BRANCH" "origin/$FIX_BRANCH"  || { echo -e "${YELLOW}  ⚠ Git checkout failed; continuing with current code.${NC}"; }
 echo -e "${GREEN}  ✓ Code updated${NC}"
 
 # ─── Step 4: Fix .env ──────────────────────────────────────────────────
@@ -133,9 +134,13 @@ echo -e "${BLUE}[3/5] Syncing PlatformConfig in database...${NC}"
 BACKEND_CONTAINER=$(docker compose -f "$COMPOSE_FILE" ps -q backend  || true)
 if [ -z "$BACKEND_CONTAINER" ]; then
     echo -e "${YELLOW}  ⚠ Backend container not running. Starting stack...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d db $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}"  && echo "pgcat") redis rabbitmq socket-proxy || echo -e "${YELLOW}    ⚠ Stack start failed (backend may not be ready)${NC}"
+    REDIS_SVC="redis"
+    if [ -f "$COMPOSE_FILE" ] && grep -q "^  *redis-replica:" "$COMPOSE_FILE"; then
+        REDIS_SVC="redis-primary"
+    fi
+    timeout 120 docker compose -f "$COMPOSE_FILE" up -d db $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}" && echo "pgcat") "$REDIS_SVC" rabbitmq socket-proxy || echo -e "${YELLOW}    ⚠ Stack start failed (backend may not be ready)${NC}"
     sleep 10
-    docker compose -f "$COMPOSE_FILE" up -d backend || echo -e "${YELLOW}    ⚠ Backend start failed${NC}"
+    timeout 120 docker compose -f "$COMPOSE_FILE" up -d backend || echo -e "${YELLOW}    ⚠ Backend start failed${NC}"
     sleep 15
 fi
 
@@ -155,17 +160,30 @@ echo -e "${GREEN}  ✓ PlatformConfig synced${NC}"
 # ─── Step 6: Regenerate Caddyfile ──────────────────────────────────────
 echo -e "${BLUE}[4/5] Regenerating Caddyfile...${NC}"
 
-# Write a proper Caddyfile for this domain
-if command -v caddy ; then
-    # Use the install script's safe Caddyfile generator
-    bash install.sh --verify  || true
+CADDY_SYNCED=false
+if docker compose -f "$COMPOSE_FILE" ps -q backend | grep -q .; then
+    SYNC_OUT="$(timeout -k 5 300 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell <<'PYEOF' 2>&1 || true
+from apps.deployments.models import PlatformConfig
+from apps.deployments.services.caddy_manager import apply_caddyfile, generate_caddyfile
+config = PlatformConfig.load()
+content = generate_caddyfile(config)
+cf_token = (getattr(config, 'cloudflare_api_token', '') or '').strip()
+result = apply_caddyfile(content, cloudflare_token=cf_token, preserve_existing_token=True)
+print('CADDY_SYNC_OK' if result.get('ok') else 'CADDY_SYNC_FAIL: ' + str(result.get('message', ''))[:200])
+PYEOF
+)"
+    if echo "$SYNC_OUT" | grep -q "CADDY_SYNC_OK"; then
+        echo -e "${GREEN}  ✓ Caddyfile regenerated via Django caddy_manager${NC}"
+        CADDY_SYNCED=true
+    else
+        echo -e "${YELLOW}  ⚠ Django Caddy sync failed — falling back to minimal proxy stub${NC}"
+        echo "$SYNC_OUT" | tail -n 5 || true
+    fi
 fi
 
-# Direct fallback: write Caddyfile
-CADDY_FILE="/opt/smsly-hosting/caddy-config/Caddyfile"
-if [ -f "$CADDY_FILE" ] || [ -d "/etc/caddy" ]; then
-    cat > "$CADDY_FILE" <<CADDYEOF
-# SMSLY Caddyfile — Fixed by fix-domain.sh
+if [ "$CADDY_SYNCED" != "true" ] && [ -d "$INSTALL_DIR/caddy-config" ]; then
+    cat > "$INSTALL_DIR/caddy-config/Caddyfile" <<CADDYVOL
+# SMSLY Caddyfile — Emergency stub (fixed by fix-domain.sh)
 {
     on_demand_tls {
         ask http://backend:8000/api/v1/services/check-domain/
@@ -173,8 +191,7 @@ if [ -f "$CADDY_FILE" ] || [ -d "/etc/caddy" ]; then
 }
 
 $DOMAIN {
-    reverse_proxy backend:8000
-    reverse_proxy frontend:3000
+    reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     encode gzip
     log {
         output file /var/log/caddy/access.log
@@ -191,66 +208,19 @@ $DOMAIN {
     }
     redir @redirectable https://{host}{uri} 308
     handle {
-        reverse_proxy backend:8000
-        reverse_proxy frontend:3000
-    }
-}
-CADDYEOF
-    echo -e "${GREEN}  ✓ Host Caddyfile written${NC}"
-fi
-
-# Also update container Caddyfile (shared volume)
-if [ -d "caddy-config" ]; then
-    cat > caddy-config/Caddyfile <<CADDYVOL
-# SMSLY Caddyfile — Container (fixed by fix-domain.sh)
-{
-    on_demand_tls {
-        ask http://backend:8000/api/v1/services/check-domain/
-    }
-}
-
-$DOMAIN {
-    reverse_proxy backend:8000
-    reverse_proxy frontend:3000
-    encode gzip
-    log {
-        output file /var/log/caddy/access.log
-    }
-}
-
-:80 {
-    @redirectable {
-        not header_regexp host ^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(:[0-9]+)?$
-        not host localhost
-        not host 127.0.0.1
-        not host *.local
-        header_regexp host .+
-    }
-    redir @redirectable https://{host}{uri} 308
-    handle {
-        reverse_proxy backend:8000
-        reverse_proxy frontend:3000
+        reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
 }
 CADDYVOL
-    echo -e "${GREEN}  ✓ Container Caddyfile written${NC}"
+    echo -e "${GREEN}  ✓ Container Caddyfile stub written${NC}"
 fi
 
-# ─── Step 7: Restart Caddy ─────────────────────────────────────────────
-echo -e "${BLUE}[5/5] Restarting Caddy...${NC}"
+# ─── Step 7: Reload Caddy ─────────────────────────────────────────────
+echo -e "${BLUE}[5/5] Reloading Caddy...${NC}"
 
-# Host Caddy
-    if docker compose ps -q caddy  | grep -q .; then
-    if command -v caddy  && caddy validate --config /opt/smsly-hosting/caddy-config/Caddyfile ; then
-    true
-        echo -e "${GREEN}  ✓ Host Caddy reloaded${NC}"
-    fi
-fi
-
-# Container Caddy
 if docker compose -f "$COMPOSE_FILE" ps -q caddy  | grep -q .; then
-    timeout 15 docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile  || \
-        docker compose -f "$COMPOSE_FILE" restart caddy || echo -e "${YELLOW}    ⚠ Caddy restart failed${NC}"
+    timeout 20 docker compose -f "$COMPOSE_FILE" exec -T caddy caddy reload --config /etc/caddy/Caddyfile || \
+        echo -e "${YELLOW}    ⚠ Caddy reload failed${NC}"
     echo -e "${GREEN}  ✓ Container Caddy reloaded${NC}"
 fi
 
@@ -268,10 +238,6 @@ echo -e "  .env DOMAIN:  ${GREEN}$ENV_DOMAIN${NC}"
 echo -e "  .env USE_SSL: ${GREEN}$ENV_SSL${NC}"
 
 # Check Caddy
-if command -v caddy ; then
-    CADDY_ACTIVE=$(true  || echo "inactive")
-    echo -e "  Caddy (host): ${GREEN}$CADDY_ACTIVE${NC}"
-fi
 if docker compose -f "$COMPOSE_FILE" ps -q caddy  | grep -q .; then
     CADDY_STATUS=$(docker compose -f "$COMPOSE_FILE" ps caddy --format "{{.Status}}"  || echo "unknown")
     echo -e "  Caddy (container): ${GREEN}$CADDY_STATUS${NC}"

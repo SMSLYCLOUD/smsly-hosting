@@ -24,8 +24,8 @@ smsly_cryptd_install() {
         go_bin="/usr/local/go/bin/go"
     fi
 
-    mkdir -p "$env_dir" /var/lib/smsly/keystore /var/lib/smsly/encrypted-volumes
-    chmod 0700 /var/lib/smsly/keystore /var/lib/smsly/encrypted-volumes 2>/dev/null || true
+    mkdir -p "$env_dir" /var/lib/smsly/keystore /var/lib/smsly/encrypted-volumes /var/lib/smsly/volume-keys
+    chmod 0700 /var/lib/smsly/keystore /var/lib/smsly/encrypted-volumes /var/lib/smsly/volume-keys 2>/dev/null || true
 
     # Build static binary atomically; replace only when bytes actually change (AGENTS.md #4).
     local build_dir=""
@@ -37,9 +37,10 @@ smsly_cryptd_install() {
         if (cd "$src_dir" && timeout 180 env CGO_ENABLED=0 "$go_bin" build -trimpath -ldflags="-s -w" -o "$tmp_bin" ./cmd/grid-cryptd); then
             build_ok=1
         fi
-    elif command -v docker >/dev/null 2>&1 && timeout 10 docker info >/dev/null 2>&1; then
+    fi
+    if [ "$build_ok" -ne 1 ] && command -v docker >/dev/null 2>&1 && timeout 10 docker info >/dev/null 2>&1; then
         local go_image="${CRYPTD_GO_IMAGE:-golang:1.22}"
-        echo "[cryptd] Host Go not found; building grid-cryptd via ${go_image} container..."
+        echo "[cryptd] Host Go unavailable or build failed; building grid-cryptd via ${go_image} container..."
         if timeout 300 docker run --rm \
             -v "${src_dir}:/src:ro" \
             -v "${build_dir}:/out" \
@@ -49,7 +50,7 @@ smsly_cryptd_install() {
             go build -trimpath -ldflags="-s -w" -o "/out/grid-cryptd" ./cmd/grid-cryptd; then
             build_ok=1
         fi
-    else
+    elif [ "$build_ok" -ne 1 ] && [ -z "$go_bin" ]; then
         rm -rf "$build_dir"
         echo "[cryptd] Neither Go toolchain nor Docker daemon available; skipping grid-cryptd build." >&2
         return 0
@@ -74,10 +75,10 @@ smsly_cryptd_install() {
     local root_env="$install_dir/.env"
     local shared_sec="${CRYPTD_SHARED_SECRET:-}"
     if [ -z "$shared_sec" ] && [ -f "$root_env" ]; then
-        shared_sec="$(grep -E '^CRYPTD_SHARED_SECRET=' "$root_env" | tail -n 1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//' || true)"
+        shared_sec="$(grep -E '^CRYPTD_SHARED_SECRET=' "$root_env" | tail -n 1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^["'\'']//' -e 's/["'\'']$//' || true)"
     fi
     if [ -z "$shared_sec" ] && [ -f "$env_file" ]; then
-        shared_sec="$(grep -E '^CRYPTD_SHARED_SECRET=' "$env_file" | tail -n 1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//' || true)"
+        shared_sec="$(grep -E '^CRYPTD_SHARED_SECRET=' "$env_file" | tail -n 1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^["'\'']//' -e 's/["'\'']$//' || true)"
     fi
     if [ -z "$shared_sec" ]; then
         if command -v openssl >/dev/null 2>&1; then
@@ -90,17 +91,35 @@ smsly_cryptd_install() {
         printf '\nCRYPTD_SHARED_SECRET=%s\n' "$shared_sec" >> "$root_env" || true
     fi
 
-    # Seed /etc/smsly/cryptd.env once if missing.
+    # Seed /etc/smsly/cryptd.env once if missing, then idempotently reconcile
+    # CRYPTD_ENABLED, CRYPTD_SHARED_SECRET, CRYPTD_VAULT_PROVIDER, and
+    # CRYPTD_VAULT_ENDPOINT from .env into /etc/smsly/cryptd.env.
     # Bind 0.0.0.0:9105 so Docker containers (backend/celery) reach host systemd via host.docker.internal
     # (port stays host-local / blocked in UFW; every endpoint except /health requires X-Cryptd-Secret).
+    local env_changed=0
+    local _desired_enabled="${CRYPTD_ENABLED:-}"
+    local _desired_provider="${CRYPTD_VAULT_PROVIDER:-}"
+    local _desired_endpoint="${CRYPTD_VAULT_ENDPOINT:-}"
+    if [ -f "$root_env" ]; then
+        if [ -z "$_desired_enabled" ]; then
+            _desired_enabled="$(grep -E '^CRYPTD_ENABLED=' "$root_env" | tail -n 1 | cut -d= -f2- | tr -d "\r\"'" | tr '[:upper:]' '[:lower:]' || true)"
+        fi
+        if [ -z "$_desired_provider" ]; then
+            _desired_provider="$(grep -E '^CRYPTD_VAULT_PROVIDER=' "$root_env" | tail -n 1 | cut -d= -f2- | tr -d "\r\"'" || true)"
+        fi
+        if [ -z "$_desired_endpoint" ]; then
+            _desired_endpoint="$(grep -E '^CRYPTD_VAULT_ENDPOINT=' "$root_env" | tail -n 1 | cut -d= -f2- | tr -d "\r\"'" || true)"
+        fi
+    fi
+
     if [ ! -f "$env_file" ]; then
         {
             echo "# Trulay Grid Cryptographic Controller (opt-in: set CRYPTD_ENABLED=true and configure external vault)"
-            echo "CRYPTD_ENABLED=${CRYPTD_ENABLED:-false}"
+            echo "CRYPTD_ENABLED=${_desired_enabled:-false}"
             echo "CRYPTD_LISTEN_ADDR=0.0.0.0:9105"
             echo "CRYPTD_SHARED_SECRET=$shared_sec"
-            echo "CRYPTD_VAULT_PROVIDER=${CRYPTD_VAULT_PROVIDER:-http_vault}"
-            echo "CRYPTD_VAULT_ENDPOINT=${CRYPTD_VAULT_ENDPOINT:-}"
+            echo "CRYPTD_VAULT_PROVIDER=${_desired_provider:-http_vault}"
+            echo "CRYPTD_VAULT_ENDPOINT=${_desired_endpoint:-}"
             echo "CRYPTD_EPOCH_DURATION=168h"
             echo "CRYPTD_GRACE_DURATION=24h"
             echo "CRYPTD_KEYSTORE_DIR=/var/lib/smsly/keystore"
@@ -113,6 +132,51 @@ smsly_cryptd_install() {
             echo "# CRYPTD_REDIS_UPSTREAM=127.0.0.1:6379"
         } > "$env_file"
         chmod 0600 "$env_file"
+        env_changed=1
+    else
+        local _reconcile_tmp="${env_file}.tmp.$$"
+        cp "$env_file" "$_reconcile_tmp"
+        python3 - "$_reconcile_tmp" "${_desired_enabled}" "${shared_sec}" "${_desired_provider}" "${_desired_endpoint}" <<'PY'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+updates = {}
+if sys.argv[2]:
+    updates["CRYPTD_ENABLED"] = sys.argv[2].lower()
+if sys.argv[3]:
+    updates["CRYPTD_SHARED_SECRET"] = sys.argv[3]
+if sys.argv[4]:
+    updates["CRYPTD_VAULT_PROVIDER"] = sys.argv[4]
+if sys.argv[5]:
+    updates["CRYPTD_VAULT_ENDPOINT"] = sys.argv[5]
+
+lines = p.read_text().splitlines()
+seen = set()
+out = []
+for line in lines:
+    matched = False
+    for k, v in updates.items():
+        if line.startswith(f"{k}="):
+            if k not in seen:
+                out.append(f"{k}={v}")
+                seen.add(k)
+            matched = True
+            break
+    if not matched:
+        out.append(line)
+for k, v in updates.items():
+    if k not in seen:
+        out.append(f"{k}={v}")
+p.write_text("\n".join(out) + "\n")
+PY
+        chmod 0600 "$_reconcile_tmp"
+        if ! cmp -s "$_reconcile_tmp" "$env_file"; then
+            mv -f "$_reconcile_tmp" "$env_file"
+            env_changed=1
+        else
+            rm -f "$_reconcile_tmp"
+        fi
     fi
 
     local unit_changed=0
@@ -122,8 +186,12 @@ smsly_cryptd_install() {
             unit_changed=1
         fi
     fi
+    local vault_systemd_dst="/etc/systemd/system/smsly-root-vault.service"
     if [ -f "$vault_unit_src" ]; then
-        cp "$vault_unit_src" /etc/systemd/system/smsly-root-vault.service 2>/dev/null || true
+        if [ ! -f "$vault_systemd_dst" ] || ! cmp -s "$vault_unit_src" "$vault_systemd_dst"; then
+            cp "$vault_unit_src" "$vault_systemd_dst" 2>/dev/null || true
+            unit_changed=1
+        fi
     fi
 
     if command -v systemctl >/dev/null 2>&1; then
@@ -134,14 +202,14 @@ smsly_cryptd_install() {
         # Opt-in guard (user chooses to enable CRYPTD_ENABLED=true or not).
         local enabled_flag="false"
         if [ -f "$env_file" ]; then
-            enabled_flag="$(grep -E '^CRYPTD_ENABLED=' "$env_file" | tail -n 1 | cut -d= -f2- | tr -d '"' | tr '[:upper:]' '[:lower:]' || echo false)"
+            enabled_flag="$(grep -E '^CRYPTD_ENABLED=' "$env_file" | tail -n 1 | cut -d= -f2- | tr -d "\r\"'" | tr '[:upper:]' '[:lower:]' || echo false)"
         fi
         if [ "${CRYPTD_ENABLED:-$enabled_flag}" = "true" ]; then
             if [ -f "$root_env" ] && ! grep -qE '^SMSLY_CRYPTD_URL=' "$root_env"; then
                 printf 'SMSLY_CRYPTD_URL=http://host.docker.internal:9105\n' >> "$root_env" || true
             fi
             timeout 30 systemctl enable smsly-cryptd >/dev/null 2>&1 || true
-            if [ "$bin_changed" -eq 1 ] || [ "$unit_changed" -eq 1 ] || ! systemctl is-active --quiet smsly-cryptd; then
+            if [ "$bin_changed" -eq 1 ] || [ "$unit_changed" -eq 1 ] || [ "$env_changed" -eq 1 ] || ! systemctl is-active --quiet smsly-cryptd; then
                 timeout 60 systemctl restart smsly-cryptd || echo "[cryptd] WARN: smsly-cryptd failed to start (check external vault config)" >&2
             fi
         fi

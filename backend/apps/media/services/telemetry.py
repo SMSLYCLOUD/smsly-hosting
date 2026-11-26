@@ -51,18 +51,15 @@ class TelemetryService:
         )
 
     def get_all_node_status(self) -> dict:
-        """O(1) lookup of all node statuses from Redis.
+        """Lookup all registered node heartbeat statuses from cache."""
+        from ..models import MediaNodeProfile
 
-        Uses SCAN instead of KEYS to avoid blocking the event loop.
-        """
         result = {}
-        cursor = 0
-        while True:
-            cursor, keys = cache._client.scan(cursor=cursor, match="media:heartbeat:*", count=100)  # noqa: SLF001
-            for key in keys:
-                result[key] = cache.get(key)
-            if cursor == 0:
-                break
+        for server_id in MediaNodeProfile.objects.values_list("server_id", flat=True):
+            key = f"media:heartbeat:{server_id}"
+            val = cache.get(key)
+            if val is not None:
+                result[key] = val
         return result
 
     def _log_recovery(self, node_id: str):

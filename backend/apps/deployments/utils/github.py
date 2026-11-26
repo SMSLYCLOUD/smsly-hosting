@@ -6,16 +6,26 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def get_github_token_for_repo(user, repo_full_name: str) -> str | None:
+def get_github_token_for_repo(
+    user, repo_full_name: str, *, allow_unscoped: bool = False
+) -> str | None:
     _repo = (repo_full_name or "").strip()
     if not _repo or "/" not in _repo or len(_repo.split("/")) < 2:
         return get_github_oauth_token_for_user(user)
 
     try:
         from apps.deployments.services.github_app import get_installation_token_for_repo
-        app_token = get_installation_token_for_repo(_repo)
-        if app_token:
-            return app_token
+        is_privileged = bool(
+            allow_unscoped or (user is not None and getattr(user, "is_superuser", False))
+        )
+        if is_privileged:
+            app_token = get_installation_token_for_repo(_repo, allow_unscoped=True)
+            if app_token:
+                return app_token
+        elif user is not None:
+            app_token = get_installation_token_for_repo(_repo, user=user, allow_unscoped=False)
+            if app_token:
+                return app_token
     except Exception as exc:
         logger.warning(
             "GitHub App token fetch failed for %s, falling back to OAuth: %s",

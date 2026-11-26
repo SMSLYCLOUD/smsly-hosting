@@ -86,7 +86,7 @@ class TransferRollbackStopsTargetServiceTests(TestCase):
     def test_rollback_invokes_target_stop_and_env_revert(self):
         self._wire_stubs()
 
-        with patch('apps.deployments.services.transfer_service.PlatformConfig.load') as mock_cfg:
+        with patch('apps.deployments.services.transfer_service.mixins.transfer.PlatformConfig.load') as mock_cfg:
             mock_cfg.return_value = MagicMock(
                 cloudflare_api_token='', domain='',
             )
@@ -99,7 +99,7 @@ class TransferRollbackStopsTargetServiceTests(TestCase):
     def test_target_stop_runs_before_caddyfile_regen(self):
         self._wire_stubs()
 
-        with patch('apps.deployments.services.transfer_service.PlatformConfig.load') as mock_cfg:
+        with patch('apps.deployments.services.transfer_service.mixins.transfer.PlatformConfig.load') as mock_cfg:
             mock_cfg.return_value = MagicMock(
                 cloudflare_api_token='', domain='',
             )
@@ -118,16 +118,14 @@ class TransferRollbackStopsTargetServiceTests(TestCase):
         svc = ServerTransferService(self.transfer)
         svc.ssh = MagicMock()
         svc._log = MagicMock()
+        svc._node_api_request = MagicMock(return_value={'status': 'stopped'})
 
         svc._stop_target_service_on_rollback()
 
-        safe = _safe_service_name(self.service.name)
-        joined = ' '.join(
-            str(c) for c in svc.ssh.exec_command.call_args_list
+        svc._node_api_request.assert_called_once_with(
+            'incoming/stop-container',
+            body={'container_name': self.service.name},
         )
-        self.assertIn(f'docker stop {safe}', joined)
-        self.assertIn(f'docker rm -f {safe}', joined)
-        self.assertIn('2>/dev/null', joined)
 
     def test_target_stop_is_noop_for_full_transfer(self):
         self.transfer.transfer_type = 'FULL'
@@ -152,7 +150,7 @@ class TransferRollbackStopsTargetServiceTests(TestCase):
     def test_rollback_resets_service_server_to_source(self):
         self._wire_stubs()
 
-        with patch('apps.deployments.services.transfer_service.PlatformConfig.load') as mock_cfg:
+        with patch('apps.deployments.services.transfer_service.mixins.transfer.PlatformConfig.load') as mock_cfg:
             mock_cfg.return_value = MagicMock(
                 cloudflare_api_token='', domain='',
             )
@@ -164,7 +162,7 @@ class TransferRollbackStopsTargetServiceTests(TestCase):
     def test_rollback_marks_transfer_rolled_back(self):
         self._wire_stubs()
 
-        with patch('apps.deployments.services.transfer_service.PlatformConfig.load') as mock_cfg:
+        with patch('apps.deployments.services.transfer_service.mixins.transfer.PlatformConfig.load') as mock_cfg:
             mock_cfg.return_value = MagicMock(
                 cloudflare_api_token='', domain='',
             )
@@ -258,7 +256,7 @@ class TransferRollbackStatusTransitionTests(TestCase):
         svc._stop_target_service_on_rollback = MagicMock()
         svc._revert_target_platform_env = MagicMock()
 
-        with patch('apps.deployments.services.transfer_service.PlatformConfig.load') as mock_cfg:
+        with patch('apps.deployments.services.transfer_service.mixins.transfer.PlatformConfig.load') as mock_cfg:
             mock_cfg.return_value = MagicMock(
                 cloudflare_api_token='', domain='',
             )

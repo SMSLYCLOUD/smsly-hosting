@@ -358,7 +358,7 @@ export default function ServersPage() {
                 });
                 return;
             }
-            setTestResult({ ok: true, message: `Host "${host}" looks reachable. (Final SSH check happens during provisioning.)` });
+            setTestResult({ ok: true, message: `Host "${host}" format is valid and not yet registered. (SSH reachability and credentials are verified during provisioning.)` });
         } catch (err: any) {
             setTestResult({ ok: false, message: err.message || 'Test failed' });
         }
@@ -501,8 +501,11 @@ export default function ServersPage() {
         if (!await confirm({ title: 'Remove server?', message: 'Are you sure you want to remove this server?', variant: 'destructive', confirmText: 'Remove' })) return;
         try {
             await apiFetch(`/api/v1/servers/${id}/`, 'DELETE');
+            toast({ title: 'Server removed' });
             fetchServers();
-        } catch { /* ignore */ }
+        } catch (err: any) {
+            toast({ title: 'Failed to remove server', description: err?.message || 'Could not remove server.', variant: 'destructive' });
+        }
     };
 
     const healthCheck = async (id: string) => {
@@ -510,17 +513,23 @@ export default function ServersPage() {
         try {
             await apiFetch(`/api/v1/servers/${id}/health_check/`, 'POST');
             await fetchServers();
-        } catch { /* ignore */ }
-        setServerChecking(prev => ({ ...prev, [id]: false }));
+        } catch (err: any) {
+            toast({ title: 'Health check failed', description: err?.message || 'Could not reach server.', variant: 'destructive' });
+        } finally {
+            setServerChecking(prev => ({ ...prev, [id]: false }));
+        }
     };
 
     const checkAll = async () => {
         setChecking(true);
         try {
             await apiFetch('/api/v1/servers/check_all/', 'POST');
-            fetchServers();
-        } catch { /* ignore */ }
-        setChecking(false);
+            await fetchServers();
+        } catch (err: any) {
+            toast({ title: 'Fleet health check failed', description: err?.message || 'Could not check servers.', variant: 'destructive' });
+        } finally {
+            setChecking(false);
+        }
     };
 
     const handleGenerateKey = async () => {
@@ -564,25 +573,26 @@ export default function ServersPage() {
 
     return (
         <DashboardShell>
-            <div className="flex-1 p-8 relative z-10">
+            <div className="flex-1 p-4 sm:p-8 relative z-10">
                 <motion.div
                     className="max-w-6xl mx-auto space-y-8"
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                 >
                     {/* Header */}
-                    <div className="flex items-center justify-between">
-                        <div>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="min-w-0">
                             <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
-                                <Monitor className="text-blue-500" size={28} />
+                                <Monitor className="text-blue-500 shrink-0" size={28} />
                                 Server Fleet
                             </h1>
                             <p className="text-muted-foreground mt-1">
                                 Manage multiple Grid nodes from one dashboard
                             </p>
                         </div>
-                        <div className="flex items-center gap-3">
+                        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                             <button
+                                type="button"
                                 onClick={checkAll}
                                 disabled={checking}
                                 className="px-4 py-2 rounded-lg border border-border text-sm flex items-center gap-2 hover:bg-muted/50 transition-colors"
@@ -591,6 +601,7 @@ export default function ServersPage() {
                                 Check All
                             </button>
                             <button
+                                type="button"
                                 onClick={() => { setShowAdd(!showAdd); setTestResult(null); }}
                                 className="px-4 py-2 rounded-lg bg-gradient-to-r from-blue-500 to-cyan-600 text-white text-sm font-semibold flex items-center gap-2 shadow-lg shadow-blue-500/25"
                             >
@@ -623,13 +634,14 @@ export default function ServersPage() {
                                 initial={{ opacity: 0, height: 0 }}
                                 animate={{ opacity: 1, height: 'auto' }}
                                 exit={{ opacity: 0, height: 0 }}
-                                className="bg-card border border-border rounded-xl p-6 space-y-5"
+                                className="bg-card border border-border rounded-xl p-4 sm:p-6 space-y-5"
                             >
                                 {/* Mode Tabs */}
-                                <div className="flex items-center gap-1 p-1 bg-muted/50 rounded-lg w-fit">
+                                <div className="flex flex-wrap items-center gap-1 p-1 bg-muted/50 rounded-lg w-full sm:w-fit">
                                     <button
+                                        type="button"
                                         onClick={() => { setAddMode('provision'); setTestResult(null); }}
-                                        className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all ${
+                                        className={`px-3 sm:px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 whitespace-nowrap transition-all ${
                                             addMode === 'provision'
                                                 ? 'bg-gradient-to-r from-blue-500 to-cyan-600 text-white shadow-md'
                                                 : 'text-muted-foreground hover:text-foreground'
@@ -639,8 +651,9 @@ export default function ServersPage() {
                                         Provision New
                                     </button>
                                     <button
+                                        type="button"
                                         onClick={() => { setAddMode('connect'); setTestResult(null); }}
-                                        className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all ${
+                                        className={`px-3 sm:px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 whitespace-nowrap transition-all ${
                                             addMode === 'connect'
                                                 ? 'bg-gradient-to-r from-blue-500 to-cyan-600 text-white shadow-md'
                                                 : 'text-muted-foreground hover:text-foreground'
@@ -650,8 +663,9 @@ export default function ServersPage() {
                                         Connect Existing
                                     </button>
                                     <button
+                                        type="button"
                                         onClick={() => { setAddMode('batch'); setTestResult(null); }}
-                                        className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all ${
+                                        className={`px-3 sm:px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 whitespace-nowrap transition-all ${
                                             addMode === 'batch'
                                                 ? 'bg-gradient-to-r from-blue-500 to-cyan-600 text-white shadow-md'
                                                 : 'text-muted-foreground hover:text-foreground'
@@ -661,8 +675,9 @@ export default function ServersPage() {
                                         Batch Provision
                                     </button>
                                     <button
+                                        type="button"
                                         onClick={() => { setAddMode('self'); setTestResult(null); setBootstrapCommand(null); }}
-                                        className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all ${
+                                        className={`px-3 sm:px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 whitespace-nowrap transition-all ${
                                             addMode === 'self'
                                                 ? 'bg-gradient-to-r from-emerald-500 to-cyan-600 text-white shadow-md'
                                                 : 'text-muted-foreground hover:text-foreground'
@@ -732,7 +747,7 @@ export default function ServersPage() {
                                                 Generate a one-time bootstrap command. Run it on the target server — it installs Grid and registers with the master. No SSH access needed from here.
                                             </p>
                                         </div>
-                                        <div className="grid grid-cols-2 gap-4">
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                             <div>
                                                 <label className="text-xs font-medium text-muted-foreground">Server Name</label>
                                                 <input
@@ -787,8 +802,8 @@ export default function ServersPage() {
                                                 <p className="text-xs text-emerald-500 font-semibold flex items-center gap-1.5">
                                                     <Terminal size={12} /> Run this on the target server
                                                 </p>
-                                                <div className="flex items-center gap-2">
-                                                    <pre className="flex-1 p-3 rounded-md bg-zinc-950 border border-zinc-800 text-[11px] font-mono text-emerald-300 overflow-x-auto whitespace-pre-wrap break-all">
+                                                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                                                    <pre className="flex-1 min-w-0 p-3 rounded-md bg-zinc-950 border border-zinc-800 text-[11px] font-mono text-emerald-300 overflow-x-auto whitespace-pre-wrap break-all">
                                                         {bootstrapCommand}
                                                     </pre>
                                                     <button
@@ -972,7 +987,7 @@ function NodeModePicker({ value, onChange, idPrefix, media, onMediaChange }: {
     return (
         <div>
             <label className="text-xs font-medium text-muted-foreground block mb-2">Node Mode</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <label
                     htmlFor={`${idPrefix}-full`}
                     className={`flex items-start gap-2 p-3 rounded-lg border cursor-pointer transition-all ${
@@ -1077,7 +1092,7 @@ function NodeComponents({ value, onChange, show }: {
     return (
         <div>
             <label className="text-xs font-medium text-muted-foreground block mb-2">Node Components</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {items.map(({ key, icon: Icon, label, desc, active, inactive, iconColor }) => (
                     <label
                         key={key}
@@ -1147,7 +1162,7 @@ function ProvisionForm({
                     Enter your VPS SSH credentials. Grid will be automatically installed and configured.
                 </p>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label className="text-xs font-medium text-muted-foreground">Server Name</label>
                     <input
@@ -1344,8 +1359,8 @@ function ProvisionForm({
                 )}
             </div>
 
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-4">
                     <label className="flex items-center gap-2 text-sm">
                         <input
                             type="checkbox"
@@ -1409,7 +1424,7 @@ function ConnectForm({
                     Connect to a server that already has Grid installed.
                 </p>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label className="text-xs font-medium text-muted-foreground">Name</label>
                     <input
@@ -1503,7 +1518,7 @@ function ConnectForm({
                         className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
                     />
                 </div>
-                <div className="col-span-2">
+                <div className="col-span-1 sm:col-span-2">
                     <label className="text-xs font-medium text-muted-foreground">SSH Key <span className="text-muted-foreground/60">(optional)</span></label>
                     <textarea
                         value={form.ssh_key}
@@ -1544,8 +1559,8 @@ function ConnectForm({
                 />
             )}
 
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-4">
                     <label className="flex items-center gap-2 text-sm">
                         <input
                             type="checkbox"
@@ -1919,7 +1934,7 @@ function ServerCard({
             )}
 
             {/* Actions */}
-            <div className="flex items-center justify-between pt-2 border-t border-border" onClick={e => e.stopPropagation()}>
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border" onClick={e => e.stopPropagation()}>
                 <div className="flex items-center gap-2 flex-wrap">
                     {server.api_url && (
                         <>
@@ -2147,6 +2162,8 @@ function ProvisioningLogPanel({
 
             <pre
                 ref={logRef}
+                role="region"
+                aria-label="Server provisioning terminal logs"
                 className="p-4 text-xs font-mono text-emerald-400 overflow-auto max-h-96 leading-relaxed whitespace-pre-wrap"
             >
                 {logs || (status === 'PENDING' ? 'Queued for provisioning...' : 'Waiting for provisioning to start...')}

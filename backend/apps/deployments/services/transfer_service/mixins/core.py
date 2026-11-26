@@ -1,7 +1,9 @@
 """CoreMixin extracted from ServerTransferService."""
 
+import contextlib
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -13,6 +15,7 @@ import time
 
 import requests
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -53,10 +56,22 @@ class CoreMixin:
         self.transfer.save(update_fields=['logs'])
         logger.info("Transfer %s: %s", self.transfer.id, _redact_transfer_text(message))
 
+    _WIREGUARD_MESH_NETWORK = ipaddress.ip_network("10.100.0.0/16")
+
     def _target_is_local(self):
         ip = (self.transfer.target_server_ip or '').strip()
         if not ip:
             return True
+        try:
+            addr = ipaddress.ip_address(ip)
+            if addr in self._WIREGUARD_MESH_NETWORK:
+                raise ValueError(
+                    f"Target IP {ip!r} is inside the WireGuard mesh range 10.100.0.0/16; "
+                    "pass the host's public/direct IP instead."
+                )
+        except ValueError as exc:
+            if "10.100.0.0/16" in str(exc):
+                raise
         local_ips = {'127.0.0.1', 'localhost', ''}
         try:
             cfg = PlatformConfig.load()
@@ -64,7 +79,46 @@ class CoreMixin:
                 local_ips.add(cfg.server_ip.strip())
         except Exception as exc:
             logger.debug("Failed to load PlatformConfig for local IP check: %s", exc)
-        return ip in local_ips or ip.startswith('10.100.0.')
+        return ip in local_ips
+
+    @staticmethod
+    def _poll_until(check_fn, timeout: float = 120.0, interval: float = 2.0) -> bool:
+        import sys as _sys
+        _ts_mod = _sys.modules.get("apps.deployments.services.transfer_service")
+        _time = getattr(_ts_mod, "time", None) or time
+        deadline = _time.monotonic() + timeout
+        while True:
+            try:
+                if check_fn():
+                    return True
+            except Exception:
+                pass
+            if _time.monotonic() >= deadline:
+                return False
+            _time.sleep(interval)
+
+    def _set_status(self, new_status: str) -> None:
+        from ....models.transfer import ServerTransfer
+        with transaction.atomic():
+            locked = ServerTransfer.objects.select_for_update().get(pk=self.transfer.pk)
+            locked.status = new_status
+            locked.save(update_fields=['status'])
+            self.transfer.status = new_status
+
+    def _cleanup_uploaded_remote_backup(self) -> None:
+        path = getattr(self, '_uploaded_remote_backup_path', None)
+        self._uploaded_remote_backup_path = None
+        if not path:
+            return
+        if self._target_is_local():
+            with contextlib.suppress(OSError):
+                if os.path.exists(path):
+                    os.remove(path)
+            return
+        ssh = getattr(self, 'ssh', None)
+        if ssh is not None:
+            with contextlib.suppress(Exception):
+                ssh.exec_command(f"rm -f {shlex.quote(path)}", raise_on_error=False)
 
     def _node_api_url(self):
         ip = self.transfer.target_server_ip or '127.0.0.1'
@@ -130,10 +184,10 @@ class CoreMixin:
             # secret instead.
             logger.warning(
                 "Transfer %s: no gateway_secret for target %s — falling back "
-                "to SECRET_KEY for HMAC (fails closed unless shared).",
+                "to GATEWAY_SECRET for HMAC (fails closed unless shared).",
                 getattr(self.transfer, 'id', '?'), target_ip,
             )
-            secret = str(getattr(settings, 'GATEWAY_SECRET', '') or getattr(settings, 'SECRET_KEY', '')).strip()
+            secret = str(getattr(settings, 'GATEWAY_SECRET', '') or '').strip()
 
         timestamp = str(int(time.time()))
         nonce = secrets.token_hex(16)
@@ -250,11 +304,9 @@ class CoreMixin:
         if not secret:
             logger.warning(
                 "Transfer sync headers: no gateway_secret for target — "
-                "falling back to SECRET_KEY (fails closed unless shared)."
+                "falling back to GATEWAY_SECRET (fails closed unless shared)."
             )
-            secret = str(
-                getattr(settings, 'GATEWAY_SECRET', '') or getattr(settings, 'SECRET_KEY', '')
-            ).strip()
+            secret = str(getattr(settings, 'GATEWAY_SECRET', '') or '').strip()
 
         if secret:
             timestamp = str(int(time.time()))
@@ -307,26 +359,21 @@ class CoreMixin:
 
     def execute(self):
         try:
-            self.transfer.status = 'PREPARING'
-            self.transfer.save(update_fields=['status'])
+            self._set_status('PREPARING')
             self._sync_target_dashboard()
             self._prepare()
 
-            self.transfer.status = 'UPLOADING'
-            self.transfer.save(update_fields=['status'])
+            self._set_status('UPLOADING')
             self._upload()
 
-            self.transfer.status = 'RESTORING'
-            self.transfer.save(update_fields=['status'])
+            self._set_status('RESTORING')
             self._restore()
 
-            self.transfer.status = 'DNS_CUTOVER'
-            self.transfer.save(update_fields=['status'])
+            self._set_status('DNS_CUTOVER')
             self._stop_source_service()
             self._dns_cutover()
 
-            self.transfer.status = 'VERIFYING'
-            self.transfer.save(update_fields=['status'])
+            self._set_status('VERIFYING')
             self._verify()
 
             self._complete()
@@ -334,12 +381,22 @@ class CoreMixin:
             self._handle_failure(exc)
 
     def _prepare(self):
+        import sys as _sys
+        _ts_mod = _sys.modules.get("apps.deployments.services.transfer_service")
+        _BackupSvc = getattr(_ts_mod, "BackupService", None) or BackupService
         self._update(5, 'Pre-flight: checking target server...')
 
         if not self._target_is_local():
-            result = self._node_api_request('incoming/ensure-docker')
-            if not result.get('docker_available'):
-                self._log("Docker not detected on target — will be installed by the platform.")
+            ssh = getattr(self, 'ssh', None)
+            if ssh is not None and not ssh.check_docker():
+                self._log("Docker not detected on target — installing Docker...")
+                ssh.install_docker()
+                if not self._poll_until(lambda: ssh.check_docker(), timeout=120.0, interval=2.0):
+                    self._log("Docker installation on target did not become ready within 120s.")
+            else:
+                result = self._node_api_request('incoming/ensure-docker')
+                if not result.get('docker_available'):
+                    self._log("Docker not detected on target — will be installed by the platform.")
 
         # PRE-TRANSFER SAFETY BACKUP: create a non-transfer safety backup
         # of the service's current state BEFORE the transfer backup. If the
@@ -349,7 +406,7 @@ class CoreMixin:
         # uploaded/extracted on the target.
         if self.transfer.transfer_type == 'SERVICE' and self.transfer.service:
             try:
-                safety = backup_svc = BackupService().backup_service(
+                safety = _BackupSvc().backup_service(
                     self.transfer.service.id,
                     backup_type='PRE_TRANSFER',
                 )
@@ -362,7 +419,7 @@ class CoreMixin:
 
         self._update(10, 'Creating backup on source server...')
 
-        backup_svc = BackupService()
+        backup_svc = _BackupSvc()
         if self.transfer.transfer_type == 'SERVICE':
             if not self.transfer.service:
                 raise ValueError("Service ID required for SERVICE transfer.")
@@ -390,11 +447,26 @@ class CoreMixin:
         self._log(step)
 
     def _handle_failure(self, error):
-        self.transfer.status = 'FAILED'
-        self.transfer.error_message = _redact_transfer_text(str(error))[:TRANSFER_ERROR_LIMIT]
-        self.transfer.target_ssh_key = ''
-        self.transfer.target_ssh_password = ''
-        self.transfer.source_ssh_key = ''
-        self.transfer.source_ssh_password = ''
-        self.transfer.save(update_fields=['status', 'error_message', 'target_ssh_key', 'target_ssh_password', 'source_ssh_key', 'source_ssh_password'])
+        from ....models.transfer import ServerTransfer
+        with contextlib.suppress(Exception):
+            self._cleanup_uploaded_remote_backup()
+        with transaction.atomic():
+            locked = ServerTransfer.objects.select_for_update().get(pk=self.transfer.pk)
+            locked.status = 'FAILED'
+            locked.error_message = _redact_transfer_text(str(error))[:TRANSFER_ERROR_LIMIT]
+            locked.target_ssh_key = ''
+            locked.target_ssh_password = ''
+            locked.source_ssh_key = ''
+            locked.source_ssh_password = ''
+            locked.save(update_fields=[
+                'status', 'error_message',
+                'target_ssh_key', 'target_ssh_password',
+                'source_ssh_key', 'source_ssh_password',
+            ])
+            self.transfer.status = locked.status
+            self.transfer.error_message = locked.error_message
+            self.transfer.target_ssh_key = ''
+            self.transfer.target_ssh_password = ''
+            self.transfer.source_ssh_key = ''
+            self.transfer.source_ssh_password = ''
         self._log(f"CRITICAL FAILURE: {error}")

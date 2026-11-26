@@ -43,13 +43,13 @@ class FallbackRedisCache(RedisCache):
         return self._degraded
 
     def _maybe_use_sentinel(self):
-        """Swap the underlying Redis connection pool for a Sentinel-managed
-        one when SENTINEL_HOSTS is configured.
+        """Swap the underlying RedisCacheClient pools for Sentinel-managed
+        pools when SENTINEL_HOSTS is configured.
 
-        Django 5.0's RedisCache uses a RedisCacheClient which wraps a
-        redis.Redis instance.  We replace that inner client's connection
-        pool with a SentinelConnectionPool so writes route to the
-        current master automatically.
+        Django 5.0's RedisCache uses RedisCacheClient which holds connection
+        pools in ``_pools`` (keyed by server index), rather than a single
+        ``_client.connection_pool``. Updating ``_pools`` and wiring
+        ``SentinelRedisCacheClient`` ensures writes route to the current master.
         """
         from config.redis_sentinel import SENTINEL_ENABLED, get_master_connection
         if not SENTINEL_ENABLED:
@@ -66,14 +66,23 @@ class FallbackRedisCache(RedisCache):
             sentinel_client = get_master_connection(password=password, db=db)
             if sentinel_client is None:
                 return
-            # Replace the connection pool on the RedisCacheClient's inner
-            # redis.Redis instance so the cache API (set/get/delete) works.
-            inner = getattr(self._cache, '_client', None) or self._cache
-            if hasattr(inner, 'connection_pool'):
-                inner.connection_pool = sentinel_client.connection_pool
+            from config.sentinel_redis_cache import SentinelRedisCacheClient
+            self._class = SentinelRedisCacheClient
+            cache_client = self._cache
+            if hasattr(cache_client, '_pools') and isinstance(cache_client._pools, dict):
+                num_servers = max(len(getattr(cache_client, '_servers', []) or [0]), 1)
+                for idx in range(num_servers):
+                    cache_client._pools[idx] = sentinel_client.connection_pool
                 logger.info(
-                    "Cache backend using Sentinel master for db=%d", db,
+                    "Cache backend using Sentinel master pool for db=%d", db,
                 )
+            else:
+                inner = getattr(cache_client, '_client', None) or cache_client
+                if hasattr(inner, 'connection_pool'):
+                    inner.connection_pool = sentinel_client.connection_pool
+                    logger.info(
+                        "Cache backend using Sentinel master for db=%d", db,
+                    )
         except Exception as exc:
             logger.warning(
                 "Sentinel unavailable for cache, falling back to direct: %s",

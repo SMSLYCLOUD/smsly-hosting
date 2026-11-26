@@ -5,16 +5,29 @@ ADMIN → manage members, teams, SSO config
 MEMBER → view and use org resources
 """
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied
 
 from .models import OrganizationMembership
 
 
+def _active_unexpired_filter():
+    return Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())
+
+
 def get_role(user, organization):
     """Return the user's role in an organization, or None."""
-    membership = OrganizationMembership.objects.filter(
-        user=user, organization=organization,
-    ).first()
+    if not user or not getattr(user, 'is_authenticated', False):
+        return None
+    if getattr(organization, 'owner_id', None) == getattr(user, 'id', None):
+        return 'OWNER'
+    membership = (
+        OrganizationMembership.objects.filter(
+            user=user, organization=organization, is_active=True,
+        )
+        .filter(_active_unexpired_filter())
+        .first()
+    )
     return membership.role if membership else None
 
 
@@ -65,7 +78,13 @@ def get_org_from_resource(obj):
 
 def get_org_q_filter(user):
     """Return a Q filter scoping queries to the user's organizations."""
-    org_ids = OrganizationMembership.objects.filter(
-        user=user,
-    ).values_list('organization_id', flat=True)
+    if not user or not getattr(user, 'is_authenticated', False):
+        return Q(pk__in=[])
+    org_ids = (
+        OrganizationMembership.objects.filter(
+            user=user, is_active=True,
+        )
+        .filter(_active_unexpired_filter())
+        .values_list('organization_id', flat=True)
+    )
     return Q(id__in=list(org_ids)) | Q(owner=user)

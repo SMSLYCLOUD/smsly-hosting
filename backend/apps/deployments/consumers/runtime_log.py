@@ -46,8 +46,11 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
         self.deployment_id = None
         self.group_name = None
         self.user = None
+        self.api_token = None
+        self._accepted = False
         self._stream_task = None
         self._proc = None
+        self._log_proc = None
         self._disconnected = False
 
     async def connect(self):
@@ -55,18 +58,19 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
 
         try:
             self.user = self.scope.get('user')
+            self.api_token = self.scope.get('api_token')
+            subproto = get_websocket_subprotocol(self.scope)
 
             if not self.user or self.user.is_anonymous:
-                await self.send(text_data=json.dumps({'error': 'Authentication required'}))
                 await self.close(code=4002)
                 return
 
             if not await self._verify_ownership():
-                await self.send(text_data=json.dumps({'error': 'Access denied'}))
                 await self.close(code=4003)
                 return
 
-            await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
+            await self.accept(subprotocol=subproto)
+            self._accepted = True
 
             self.group_name = f"runtime_logs_{self.deployment_id}"
             await self.channel_layer.group_add(
@@ -98,9 +102,41 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
 
         except Exception as e:
             logger.error("RuntimeLogConsumer.connect() failed: %s", e, exc_info=True)
-            with contextlib.suppress(Exception):
-                await self.send(text_data=json.dumps({'error': 'Internal error'}))
+            if self._accepted:
+                with contextlib.suppress(Exception):
+                    await self.send(text_data=json.dumps({'error': 'Internal error'}))
             await self.close(code=4000)
+
+    def _reap_proc(self):
+        proc = getattr(self, '_log_proc', None) or getattr(self, '_proc', None)
+        if not proc:
+            return
+        try:
+            if getattr(proc, 'stdout', None):
+                with contextlib.suppress(Exception):
+                    proc.stdout.close()
+            if proc.poll() is None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                except (ProcessLookupError, OSError):
+                    with contextlib.suppress(Exception):
+                        proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except (ProcessLookupError, OSError):
+                        with contextlib.suppress(Exception):
+                            proc.kill()
+                    with contextlib.suppress(Exception):
+                        proc.wait(timeout=2)
+            else:
+                with contextlib.suppress(Exception):
+                    proc.wait(timeout=2)
+        finally:
+            self._proc = None
+            self._log_proc = None
 
     async def disconnect(self, _code):
         self._disconnected = True
@@ -108,12 +144,7 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
             self._stream_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._stream_task
-        if self._proc and self._proc.poll() is None:
-            try:
-                os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
-            except (ProcessLookupError, OSError):
-                pass
-            self._proc = None
+        self._reap_proc()
         if self.group_name:
             with contextlib.suppress(Exception):
                 await self.channel_layer.group_discard(
@@ -129,9 +160,11 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                     await self.send(text_data=json.dumps({'type': 'pong'}))
                 elif data.get('type') == 'refresh':
                     # Client requests a full log refresh
-                    state = await self._get_initial_state(
-                        data.get('tail', 200)
-                    )
+                    try:
+                        req_tail = max(1, min(int(data.get('tail', 200)), 2000))
+                    except (TypeError, ValueError):
+                        req_tail = 200
+                    state = await self._get_initial_state(req_tail)
                     await self.send(text_data=json.dumps({
                         'type': 'initial_state',
                         **state,
@@ -148,7 +181,11 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
         }))
 
     async def _verify_ownership(self):
-        return await verify_deployment_ownership(self.user, self.deployment_id)
+        return await verify_deployment_ownership(
+            self.user,
+            self.deployment_id,
+            api_token=getattr(self, 'api_token', None),
+        )
 
     @database_sync_to_async
     def _get_initial_state(self, tail=200):
@@ -273,14 +310,15 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
 
             container_name = container.name
         except Exception as e:
+            logger.warning("Failed to resolve runtime container for %s: %s", self.deployment_id, e)
             await self.send(text_data=json.dumps({
                 'type': 'error',
-                'error': f'Failed to resolve container: {e}',
+                'error': 'Failed to resolve container.',
             }))
             return
 
         try:
-            self._proc = subprocess.Popen(
+            self._log_proc = self._proc = subprocess.Popen(
                 ['docker', 'logs', '--tail', '0', '-f', '--timestamps', container_name],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -306,12 +344,7 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.warning("Runtime log stream ended for %s: %s", self.deployment_id, e)
         finally:
-            if self._proc:
-                try:
-                    os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
-                except (ProcessLookupError, OSError):
-                    pass
-                self._proc = None
+            self._reap_proc()
 
     async def _authenticate_token(self, token_key):
         return await authenticate_ws_token(token_key)

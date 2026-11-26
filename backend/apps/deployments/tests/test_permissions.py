@@ -26,6 +26,12 @@ TEST_CACHES = {
 }
 
 
+def _list_results(data):
+    if isinstance(data, dict):
+        return data.get("results", [])
+    return data
+
+
 def _make_user(username):
     return User.objects.create_user(
         username=username, email=f"{username}@test.com", password="testpass123"
@@ -50,7 +56,7 @@ class OwnerServiceVisibilityTests(APITestCase):
         self.client.force_authenticate(user=self.owner)
         response = self.client.get("/api/v1/services/")
         self.assertEqual(response.status_code, http_status.HTTP_200_OK)
-        ids = [s.get("id") or s.get("name") for s in response.data]
+        ids = [s.get("id") or s.get("name") for s in _list_results(response.data)]
         self.assertIn(str(self.service.id), [str(i) for i in ids])
 
     def test_owner_can_retrieve_own_service(self):
@@ -64,7 +70,7 @@ class OwnerServiceVisibilityTests(APITestCase):
         self.client.force_authenticate(user=self.other)
         response = self.client.get("/api/v1/services/")
         self.assertEqual(response.status_code, http_status.HTTP_200_OK)
-        ids = [str(s.get("id", "")) for s in response.data]
+        ids = [str(s.get("id", "")) for s in _list_results(response.data)]
         self.assertNotIn(str(self.service.id), ids)
 
     def test_other_user_cannot_retrieve_owner_service(self):
@@ -116,7 +122,7 @@ class TeamMemberVisibilityTests(APITestCase):
         self.client.force_authenticate(user=self.member)
         response = self.client.get("/api/v1/services/")
         self.assertEqual(response.status_code, http_status.HTTP_200_OK)
-        ids = [str(s.get("id", "")) for s in response.data]
+        ids = [str(s.get("id", "")) for s in _list_results(response.data)]
         self.assertIn(str(self.team_service.id), ids)
 
     def test_viewer_can_list_team_service(self):
@@ -124,7 +130,7 @@ class TeamMemberVisibilityTests(APITestCase):
         self.client.force_authenticate(user=self.viewer)
         response = self.client.get("/api/v1/services/")
         self.assertEqual(response.status_code, http_status.HTTP_200_OK)
-        ids = [str(s.get("id", "")) for s in response.data]
+        ids = [str(s.get("id", "")) for s in _list_results(response.data)]
         self.assertIn(str(self.team_service.id), ids)
 
     def test_admin_can_list_team_service(self):
@@ -132,7 +138,7 @@ class TeamMemberVisibilityTests(APITestCase):
         self.client.force_authenticate(user=self.admin)
         response = self.client.get("/api/v1/services/")
         self.assertEqual(response.status_code, http_status.HTTP_200_OK)
-        ids = [str(s.get("id", "")) for s in response.data]
+        ids = [str(s.get("id", "")) for s in _list_results(response.data)]
         self.assertIn(str(self.team_service.id), ids)
 
     def test_non_member_cannot_see_team_service(self):
@@ -140,7 +146,7 @@ class TeamMemberVisibilityTests(APITestCase):
         self.client.force_authenticate(user=self.non_member)
         response = self.client.get("/api/v1/services/")
         self.assertEqual(response.status_code, http_status.HTTP_200_OK)
-        ids = [str(s.get("id", "")) for s in response.data]
+        ids = [str(s.get("id", "")) for s in _list_results(response.data)]
         self.assertNotIn(str(self.team_service.id), ids)
 
 
@@ -258,7 +264,7 @@ class SuperuserBypassTests(APITestCase):
         self.client.force_authenticate(user=self.su)
         response = self.client.get("/api/v1/services/")
         self.assertEqual(response.status_code, http_status.HTTP_200_OK)
-        ids = [str(s.get("id", "")) for s in response.data]
+        ids = [str(s.get("id", "")) for s in _list_results(response.data)]
         self.assertIn(str(self.service.id), ids)
 
     def test_superuser_can_retrieve_any_service(self):

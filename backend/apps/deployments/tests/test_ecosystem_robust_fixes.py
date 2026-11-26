@@ -1020,11 +1020,11 @@ class TestSpiffeConvergence(TestCase):
         with patch.object(spiffe, "_list_spire_entries", return_value=entries), \
              patch.object(spiffe, "_live_ecosystem_agent_id", return_value=self._LIVE), \
              patch.object(spiffe, "_create_spire_entry",
-                          side_effect=lambda n, parent_id=None: created.append(n) or True), \
+                          side_effect=lambda n, parent_id=None, **kw: created.append(n) or True), \
              patch.object(spiffe, "_reparent_spire_entry",
-                          side_effect=lambda eid, p, s, par: reparented.append(eid) or True), \
+                          side_effect=lambda eid, p, s, par, **kw: reparented.append(eid) or True), \
              patch.object(spiffe, "_delete_spire_entry_by_id",
-                          side_effect=lambda eid: deleted.append(eid) or True), \
+                          side_effect=lambda eid, **kw: deleted.append(eid) or True), \
              patch.dict("sys.modules", {"apps.mtls.models": mock_mtls_models,
                                         "apps.deployments.models.platform": mock_platform_models}):
             # The task imports MtlsConfig/PlatformConfig from the modules

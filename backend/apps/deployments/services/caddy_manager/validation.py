@@ -70,11 +70,11 @@ def _block_reverse_proxies_to_control_plane(block: str) -> list[str]:
         brace_depth += line.count("{") - line.count("}")
         if challenge_depth and brace_depth < challenge_depth:
             challenge_depth = 0
-        if not line.startswith("reverse_proxy "):
+        parts = line.split()
+        if not parts or parts[0] != "reverse_proxy":
             continue
         if challenge_depth:
             continue  # path-scoped challenge proxy, not a hijack
-        parts = line.split()
         if len(parts) < 2:
             continue
         upstream = parts[1].strip("{").strip()
@@ -107,15 +107,15 @@ def _wildcard_has_safe_service_handlers(block_lines: list[str], service_domains:
             handle_name = stripped.split()[1].lstrip("@").rstrip("{").strip()
             in_handle_for = handle_name
             continue
-        if in_handle_for and stripped.startswith("reverse_proxy "):
-            parts = stripped.split()
+        parts = stripped.split()
+        if in_handle_for and parts and parts[0] == "reverse_proxy":
             if len(parts) >= 2:
                 upstream = parts[1].strip("{").strip()
                 if upstream not in CONTROL_PLANE_UPSTREAMS:
                     matchers[in_handle_for] = upstream
             in_handle_for = None
             continue
-        if in_handle_for and (stripped == "}" or (not stripped.startswith("reverse_proxy") and stripped.endswith("}"))):
+        if in_handle_for and (stripped == "}" or ((not parts or parts[0] != "reverse_proxy") and stripped.endswith("}"))):
             in_handle_for = None
 
     # If any matcher that references a service domain routes safely, the block is safe
@@ -259,10 +259,12 @@ def validate_secure_headers_present(content: str) -> list[str]:
             errors.append("Caddyfile is missing the (secure_headers) snippet definition.")
             return errors
         # Plain-:80 blocks carry no TLS/HSTS by design — only TLS sites
-        # must carry the headers (inline or via import).
+        # (and the :443 fallback listener) must carry the headers
+        # (inline or via import).
+        site_labels = extract_site_labels(text)
         tls_blocks = [
             body for label, body in blocks.items()
-            if label in extract_site_labels(text)
+            if (label in site_labels or label == ":443")
             and not label.startswith("(")
             and not label.rstrip().endswith(":80")
         ]
@@ -278,7 +280,7 @@ def validate_secure_headers_present(content: str) -> list[str]:
     site_labels = extract_site_labels(text)
     blocks = _split_site_blocks(text)
     for label, body in blocks.items():
-        if label not in site_labels:
+        if label not in site_labels and label != ":443":
             continue
         if label.startswith("("):
             # Snippet DEFINITIONS (e.g. `(secure_headers) {`) start at

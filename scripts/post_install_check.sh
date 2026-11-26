@@ -15,7 +15,8 @@ done
 echo ""
 echo "--- install_tier.sh syntax + tier profiles ---"
 bash -n scripts/install_tier.sh || FAIL=1; echo "install_tier syntax: OK"
-for t in lite medium full; do bash -c "source .env 2>/dev/null; echo $t -> profile \$(echo \$COMPOSE_PROFILES)"; done
+_cp_val=$(grep -E '^COMPOSE_PROFILES=' .env 2>/dev/null | tail -n 1 | cut -d= -f2- || true)
+for t in lite medium full; do echo "$t -> profile ${_cp_val}"; done
 
 echo ""
 echo "--- Docker compose profile matrix (local-ha, patroni, full) ---"

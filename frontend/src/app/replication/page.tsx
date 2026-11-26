@@ -3,6 +3,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/use-toast';
 import {
     Database, RefreshCw, Loader2, Crown, Server, AlertTriangle,
@@ -57,6 +61,7 @@ interface MeshNetwork {
 
 export default function ReplicationPage() {
     const { toast } = useToast();
+    const confirm = useConfirm();
     const [meshes, setMeshes] = useState<MeshNetwork[]>([]);
     const [selectedMesh, setSelectedMesh] = useState<string>('');
     const [health, setHealth] = useState<ReplicationHealth | null>(null);
@@ -74,6 +79,12 @@ export default function ReplicationPage() {
     // Scale out states
     const [availablePeers, setAvailablePeers] = useState<MeshPeer[]>([]);
     const [connectState, setConnectState] = useState<Record<string, { status: 'idle' | 'testing' | 'awaiting_approval' | 'connecting' | 'connected' }>>({});
+    const [connectDialogOpen, setConnectDialogOpen] = useState(false);
+    const [connectTargetWg, setConnectTargetWg] = useState<string>('');
+    const [connectDbPass, setConnectDbPass] = useState('');
+    const [connectAdminPass, setConnectAdminPass] = useState('');
+    const [connectReplPass, setConnectReplPass] = useState('');
+    const [connectDialogError, setConnectDialogError] = useState('');
 
     // External database replicas
     const [externalReplicas, setExternalReplicas] = useState<DatabaseReplica[]>([]);
@@ -195,26 +206,7 @@ export default function ReplicationPage() {
         }
     };
 
-    const confirmConnect = async (wgAddress: string) => {
-        // Need passwords to deploy - ideally we'd prompt for them, but for one-click simplicity
-        // we'll require the user to input them or generate new ones (if using auto).
-        // Since we don't store the db password in plaintext, we'll prompt the user for it if not auto-deploying.
-        let dbPass = dbPassword;
-        let adminPass = adminPassword;
-        let replPass = replPassword;
-
-        if (!dbPass || !adminPass) {
-            dbPass = prompt('Enter DB Superuser Password to connect this replica:') || '';
-            if (!dbPass) return;
-            adminPass = prompt('Enter Admin Password:') || '';
-            if (!adminPass) return;
-            replPass = prompt('Enter Replication Password:') || '';
-            if (!replPass || replPass === 'repl_pass') {
-                alert('Please enter a valid, non-default replication password.');
-                return;
-            }
-        }
-
+    const executeConnectReplica = async (wgAddress: string, dbPass: string, adminPass: string, replPass: string) => {
         setConnectState(prev => ({ ...prev, [wgAddress]: { status: 'connecting' } }));
         try {
             await api.post('/replication/connect-replica/', {
@@ -235,6 +227,38 @@ export default function ReplicationPage() {
                 variant: 'destructive'
             });
         }
+    };
+
+    const confirmConnect = async (wgAddress: string) => {
+        if (dbPassword && adminPassword && replPassword && replPassword !== 'repl_pass') {
+            await executeConnectReplica(wgAddress, dbPassword, adminPassword, replPassword);
+            return;
+        }
+        setConnectTargetWg(wgAddress);
+        setConnectDbPass(dbPassword);
+        setConnectAdminPass(adminPassword);
+        setConnectReplPass(replPassword === 'repl_pass' ? '' : replPassword);
+        setConnectDialogError('');
+        setConnectDialogOpen(true);
+    };
+
+    const handleConnectDialogSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!connectDbPass.trim() || !connectAdminPass.trim()) {
+            setConnectDialogError('DB superuser password and admin password are required.');
+            return;
+        }
+        if (!connectReplPass.trim() || connectReplPass.trim() === 'repl_pass') {
+            setConnectDialogError('Please enter a valid, non-default replication password.');
+            return;
+        }
+        const target = connectTargetWg;
+        const dbPass = connectDbPass;
+        const adminPass = connectAdminPass;
+        const replPass = connectReplPass;
+        setConnectDialogOpen(false);
+        setConnectDialogError('');
+        await executeConnectReplica(target, dbPass, adminPass, replPass);
     };
 
     const deployReplication = async () => {
@@ -320,7 +344,12 @@ export default function ReplicationPage() {
 
     const disableReplication = async () => {
         if (!selectedMesh) return;
-        if (!confirm('Disable replication on this mesh?')) return;
+        if (!await confirm({
+            title: 'Disable replication?',
+            message: 'Disable replication on this mesh?',
+            variant: 'destructive',
+            confirmText: 'Disable',
+        })) return;
         setDisabling(true);
         try {
             const res = await api.post('/replication/disable/', { mesh_id: selectedMesh });
@@ -335,7 +364,12 @@ export default function ReplicationPage() {
     };
 
     const triggerFailover = async (targetWgAddress: string) => {
-        if (!confirm(`Failover to ${targetWgAddress}? The current primary will be demoted.`)) return;
+        if (!await confirm({
+            title: 'Trigger failover?',
+            message: `Failover to ${targetWgAddress}? The current primary will be demoted.`,
+            variant: 'destructive',
+            confirmText: 'Failover',
+        })) return;
         try {
             await api.post('/replication/failover/', {
                 mesh_id: selectedMesh,
@@ -349,7 +383,12 @@ export default function ReplicationPage() {
     };
 
     const reinitReplica = async (targetWgAddress: string) => {
-        if (!confirm(`Reinitialize ${targetWgAddress}? This will rebuild it from scratch.`)) return;
+        if (!await confirm({
+            title: 'Reinitialize replica?',
+            message: `Reinitialize ${targetWgAddress}? This will rebuild it from scratch.`,
+            variant: 'destructive',
+            confirmText: 'Reinitialize',
+        })) return;
         try {
             await api.post('/replication/reinitialize/', {
                 mesh_id: selectedMesh,
@@ -1015,6 +1054,60 @@ export default function ReplicationPage() {
                     )}
                 </div>
             </div>
+
+            <Dialog open={connectDialogOpen} onOpenChange={setConnectDialogOpen}>
+                <DialogContent className="sm:max-w-[440px]">
+                    <DialogHeader>
+                        <DialogTitle>Connect Replica ({connectTargetWg})</DialogTitle>
+                        <DialogDescription>
+                            Enter cluster credentials to bootstrap streaming replication on this node.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <form onSubmit={handleConnectDialogSubmit} className="space-y-4 py-2">
+                        {connectDialogError && (
+                            <p className="text-xs text-red-500 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2">
+                                {connectDialogError}
+                            </p>
+                        )}
+                        <div className="space-y-1.5">
+                            <Label htmlFor="repl-connect-db-pass">DB Superuser Password</Label>
+                            <Input
+                                id="repl-connect-db-pass"
+                                type="password"
+                                value={connectDbPass}
+                                onChange={(e) => setConnectDbPass(e.target.value)}
+                                autoComplete="new-password"
+                            />
+                        </div>
+                        <div className="space-y-1.5">
+                            <Label htmlFor="repl-connect-admin-pass">Admin Password</Label>
+                            <Input
+                                id="repl-connect-admin-pass"
+                                type="password"
+                                value={connectAdminPass}
+                                onChange={(e) => setConnectAdminPass(e.target.value)}
+                                autoComplete="new-password"
+                            />
+                        </div>
+                        <div className="space-y-1.5">
+                            <Label htmlFor="repl-connect-repl-pass">Replication Password</Label>
+                            <Input
+                                id="repl-connect-repl-pass"
+                                type="password"
+                                value={connectReplPass}
+                                onChange={(e) => setConnectReplPass(e.target.value)}
+                                autoComplete="new-password"
+                            />
+                        </div>
+                        <DialogFooter>
+                            <Button type="button" variant="outline" onClick={() => setConnectDialogOpen(false)}>
+                                Cancel
+                            </Button>
+                            <Button type="submit">Connect Replica</Button>
+                        </DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
         </DashboardShell>
     );
 }

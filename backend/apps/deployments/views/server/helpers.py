@@ -299,7 +299,13 @@ def _refresh_managed_server_health(server):
                         pass
 
         try:
-            if not server.is_primary and (server.ssh_key or server.ssh_password):
+            owner = getattr(server, "owner", None)
+            if (
+                not server.is_primary
+                and (server.ssh_key or server.ssh_password)
+                and owner is not None
+                and (getattr(owner, "is_staff", False) or getattr(owner, "is_superuser", False))
+            ):
                 from apps.deployments.services.wireguard_service import WireGuardService
                 WireGuardService.ensure_server_in_default_mesh(
                     server,
@@ -495,11 +501,15 @@ def _build_remote_headers(server, method="GET", path="/api/v1/services/", body=b
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "X-SMSLY-Remote-Sync": "1",
     }
 
     token = str(server.api_token or "").strip()
     gateway_secret = str(server.gateway_secret or "").strip()
+    # Security: only send X-SMSLY-Remote-Sync to full trusted peer nodes
+    # that carry a gateway_secret; never send it to lite agents or
+    # untrusted/user-registered servers without a shared secret.
+    if not getattr(server, "is_lite_agent", False) and gateway_secret:
+        headers["X-SMSLY-Remote-Sync"] = "1"
 
     def _apply_token_auth():
         if not token:
@@ -643,14 +653,73 @@ def _fetch_remote_json_with_fallback(server, kind, api_path, timeout=15):
     )
 
 
+def _assert_server_write_access(request, server=None, *, require_staff: bool = False):
+    """Enforce owner/staff and APIToken write/project scope on mutating server actions."""
+    auth_obj = getattr(request, "auth", None)
+    if auth_obj is not None and hasattr(auth_obj, "has_scope"):
+        if not auth_obj.has_scope("write"):
+            return Response(
+                {"error": "Token lacks required write scope."},
+                status=403,
+            )
+        if hasattr(auth_obj, "project_scope") and auth_obj.project_scope() is not None:
+            if (
+                server is None
+                or not getattr(server, "project_id", None)
+                or not auth_obj.has_project(server.project_id)
+            ):
+                return Response(
+                    {"error": "Token lacks access to this server's project."},
+                    status=403,
+                )
+
+    user = getattr(request, "user", None)
+    is_privileged = bool(
+        user is not None
+        and (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
+    )
+    if require_staff and not is_privileged:
+        return Response(
+            {"error": "Only staff or superuser accounts can perform this action."},
+            status=403,
+        )
+    if server is not None and not is_privileged:
+        if getattr(server, "project_id", None):
+            from apps.teams.permissions import user_can_write
+            if not user_can_write(user, server):
+                return Response(
+                    {"error": "You do not have write permission on this server."},
+                    status=403,
+                )
+        elif getattr(server, "owner_id", None) != getattr(user, "id", None):
+            return Response(
+                {"error": "You do not have write permission on this server."},
+                status=403,
+            )
+    return None
+
+
 def _lite_agent_proxy_response(server, request, method: str, path: str) -> Response | None:
     """Serve safe lite-agent proxy reads from the shared controller database."""
     if not getattr(server, "is_lite_agent", False) or method != "GET":
         return None
 
+    user = getattr(request, "user", None)
+    is_super = bool(user is not None and getattr(user, "is_superuser", False))
+    auth_obj = getattr(request, "auth", None)
+    proj_scope = auth_obj.project_scope() if auth_obj is not None and hasattr(auth_obj, "project_scope") else None
+
+    def _scope_services(qs):
+        if not is_super:
+            from apps.teams.permissions import get_team_q_filter
+            qs = qs.filter(get_team_q_filter(user, request=request)).distinct()
+        if proj_scope is not None:
+            qs = qs.filter(project_id__in=proj_scope)
+        return qs
+
     path_only = path.split("?", 1)[0].rstrip("/")
     if path_only == "/api/v1/services":
-        services_qs = (
+        services_qs = _scope_services(
             Service.objects
             .filter(server=server)
             .exclude(status=Service.Status.DELETED)
@@ -677,12 +746,15 @@ def _lite_agent_proxy_response(server, request, method: str, path: str) -> Respo
         return Response({"status_code": 200, "data": {"results": data, "count": len(data)}})
 
     if path_only == "/api/v1/deployments":
-        deployments_qs = (
-            Deployment.objects
-            .filter(service__server=server)
-            .select_related("service")
-            .order_by("-created_at")[:50]
-        )
+        deployments_qs = Deployment.objects.filter(service__server=server).select_related("service")
+        if not is_super:
+            from apps.teams.permissions import get_team_q_filter
+            deployments_qs = deployments_qs.filter(
+                get_team_q_filter(user, prefix="service__", request=request)
+            ).distinct()
+        if proj_scope is not None:
+            deployments_qs = deployments_qs.filter(service__project_id__in=proj_scope)
+        deployments_qs = deployments_qs.order_by("-created_at")[:50]
         data = DeploymentSerializer(deployments_qs, many=True).data
         return Response({"status_code": 200, "data": {"results": data, "count": len(data)}})
 
@@ -693,13 +765,12 @@ def _lite_agent_proxy_response(server, request, method: str, path: str) -> Respo
             service_id = uuid.UUID(raw_id)
         except (TypeError, ValueError):
             return None
-        service = (
+        service = _scope_services(
             Service.objects
             .filter(id=service_id, server=server)
             .exclude(status=Service.Status.DELETED)
             .select_related("project")
-            .first()
-        )
+        ).first()
         if service:
             data = ServiceSerializer(service, context={"request": request}).data
             return Response({"status_code": 200, "data": data})
@@ -709,10 +780,10 @@ def _lite_agent_proxy_response(server, request, method: str, path: str) -> Respo
 
 SAFE_DOCKER_SUBCOMMANDS = frozenset({
     "ps", "logs", "stats", "inspect", "images", "info", "version",
-    "df", "top", "port", "events", "system",
+    "df", "top", "port", "events",
 })
 SAFE_DOCKER_COMPOSE_SUBCOMMANDS = frozenset({
-    "ps", "logs", "config", "ls", "top",
+    "ps", "logs", "ls", "top",
 })
 SAFE_SYSTEM_PREFIXES = (
     "df ", "free ", "ping -c ", "systemctl status ",
@@ -729,10 +800,10 @@ _REJECTED_DOCKER_SUBCOMMANDS = frozenset({
     "swarm", "system", "trust", "container", "compose", "daemon",
 })
 
-_FORBIDDEN_SHELL_METACHARS = re.compile(r'[;|&`$()<>\n\r\\]|\$\(')
+_FORBIDDEN_SHELL_METACHARS = re.compile(r'[;|&`$()<>\n\r\\*?\[\]]|\$\(')
 _SAFE_COMMANDS = (
     'docker', 'docker-compose', 'systemctl', 'journalctl',
-    'ls', 'cat', 'head', 'tail', 'grep', 'awk', 'sed',
+    'ls', 'cat', 'head', 'tail', 'grep',
     'ps', 'top', 'free', 'df', 'du', 'uptime',
     'ping', 'traceroute', 'ss', 'netstat', 'ip', 'ifconfig',
 )
@@ -743,6 +814,17 @@ FORBIDDEN_PATH_PATTERNS = (
     "/etc/shadow",
     "/etc/passwd",
     "/etc/sudoers",
+    "/proc",
+    "/sys",
+    "/root",
+    "/etc/ssh",
+    "/etc/caddy",
+    "/caddy-config",
+    "/opt/smsly-hosting",
+    "secret",
+    "token",
+    ".key",
+    ".pem",
 )
 
 
@@ -774,35 +856,54 @@ def _is_command_allowed(command: str) -> bool:
         return False
     if not parts:
         return False
-    if parts[0] not in _SAFE_COMMANDS:
-        return False
-    if parts[0] in ('docker', 'docker-compose') and len(parts) > 1 and parts[1] in _DOCKER_DENIED_SUBCOMMANDS:
+    cmd = parts[0]
+    if cmd not in _SAFE_COMMANDS:
         return False
     for arg in parts:
+        if any(ch in arg for ch in ('*', '?', '[', ']')):
+            return False
+        arg_lower = arg.lower()
         for bad in FORBIDDEN_PATH_PATTERNS:
-            if bad in arg:
+            if bad in arg_lower:
                 return False
-    # SEC (Issue 75): ``docker logs <name>`` lets a user read the logs of
-    # any container running on the host, including other tenants'.
-    # Restrict it to containers the calling user actually owns. The
-    # ``Service`` row is the authoritative owner record — its ``name``
-    # matches the docker container name.  We cross-check both
-    # ``Service.name == args[2]`` (the target the user wants to tail)
-    # and ``Service.owner == request.user`` so a tenant cannot pass
-    # another tenant's container name.
-    if (
-        len(parts) >= 3
-        and parts[0] == 'docker'
-        and parts[1] == 'logs'
-    ):
-        target_name = parts[2]
-        if target_name.startswith('-'):
+
+    if cmd == 'docker':
+        if len(parts) < 2 or parts[1].startswith('-'):
             return False
-        user = _current_request_user()
-        if user is None:
+        subcmd = parts[1]
+        if subcmd in _DOCKER_DENIED_SUBCOMMANDS or subcmd not in SAFE_DOCKER_SUBCOMMANDS:
             return False
-        if not _user_owns_container_name(user, target_name):
+        if subcmd in ('logs', 'inspect', 'top', 'port', 'stats'):
+            if subcmd == 'logs' and (len(parts) < 3 or parts[2].startswith('-')):
+                return False
+            user = _current_request_user()
+            if subcmd == 'logs' and user is None:
+                return False
+            if user is not None and not (getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False)):
+                target_args = [a for a in parts[2:] if not a.startswith('-')]
+                if not target_args:
+                    return False
+                if any(not _user_owns_container_name(user, target) for target in target_args):
+                    return False
+
+    if cmd == 'docker-compose':
+        if len(parts) < 2 or parts[1].startswith('-'):
             return False
+        if parts[1] in _DOCKER_DENIED_SUBCOMMANDS or parts[1] not in SAFE_DOCKER_COMPOSE_SUBCOMMANDS:
+            return False
+
+    if cmd == 'systemctl':
+        if len(parts) != 3 or parts[1] != 'status' or parts[2].startswith('-'):
+            return False
+
+    if cmd == 'ip':
+        if (
+            len(parts) < 3
+            or parts[1] not in ('addr', 'a', 'route', 'r', 'link')
+            or parts[2] not in ('show', 'list')
+        ):
+            return False
+
     return True
 
 

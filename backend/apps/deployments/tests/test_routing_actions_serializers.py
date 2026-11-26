@@ -76,8 +76,9 @@ class ActionRoutingTests(TestCase):
         mock_request.assert_called_once()
         self.assertIn("remotedep123", mock_request.call_args[1]['path'])
 
+    @patch('apps.deployments.services.remote_orchestrator.RemoteOrchestrator._search_remote_service', return_value='remote-svc-1')
     @patch('apps.deployments.services.remote_orchestrator.RemoteOrchestrator._request')
-    def test_restart_routed_to_active_host(self, mock_request):
+    def test_restart_routed_to_active_host(self, mock_request, _mock_search):
         self.client.post(f"/api/v1/services/{self.service.id}/restart/")
         mock_request.assert_called_once()
         self.assertIn("restart", mock_request.call_args[1]['path'])

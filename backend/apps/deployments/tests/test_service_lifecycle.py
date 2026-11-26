@@ -303,6 +303,7 @@ class ServiceDeployActionTests(APITestCase):
             name='node-2',
             host='203.0.113.42',
             status=ManagedServer.Status.ONLINE,
+            provision_status=ManagedServer.ProvisionStatus.DONE,
         )
 
         url = f'/api/v1/services/{self.service.id}/deploy/'

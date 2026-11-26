@@ -5,10 +5,11 @@ Documentation=https://github.com/SMSLYCLOUD/smsly-hosting
 [Path]
 # Any process can wake a tier without root by touching this file:
 #   smsly-tier.sh request <tier>
-# (it writes to $SMSLY_TIER_WAKE_DIR, mode 0755 on the dir)
-PathExists=/run/smsly/tier-wake/%i
+# (it writes to $SMSLY_TIER_WAKE_DIR, mode 01733 on the dir)
+PathExists=/run/smsly-tier-wake/%i
 Unit=smsly-tier@%i.service
 MakeDirectory=true
+DirectoryMode=01733
 
 [Install]
 WantedBy=paths.target

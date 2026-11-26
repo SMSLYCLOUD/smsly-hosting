@@ -233,6 +233,7 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 64)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
     env_ensure_var "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 64)" "FRP tunnel relay authentication token"
     env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
+    env_ensure_var "$env_file" "EDGE_JWT_SECRET" "$(gen_hex_secret 64)" "Edge JWT signing secret for Traefik forward-auth and Caddy authorize"
     env_ensure_var "$env_file" "PATRONI_SUPERUSER_PASSWORD" "$(gen_hex_secret 32)" "Patroni superuser password for HA cluster"
     env_ensure_var "$env_file" "NODE_SECURITY" "1" "Enable full hardening stack (auditd, kernel, docker, gVisor/Kata)"
     env_ensure_var "$env_file" "NODE_OBSERVABILITY" "1" "Enable node metrics stack (cadvisor, node-exporter, docker-labels)"
@@ -240,19 +241,57 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "NODE_FALCO" "1" "Enable Falco runtime security"
     env_ensure_var "$env_file" "NODE_SPIRE" "1" "Enable SPIRE mTLS"
     env_ensure_var "$env_file" "NODE_LOG_SHIPPING" "1" "Ship node access logs to master CrowdSec (security path, independent of observability metrics)"
-    # WAF shadow is default-on at >=8GB RAM, off below (the shadow costs
-    # ~1-2GB real). Fill-if-absent so an explicit operator value survives
-    # updates; mirrors the fresh_config sizing ladder.
+    # Resolve stack tier first (<6GB=lite, 6-12GB=medium, >=12GB=full) so
+    # existing lite/medium installs preserve their tier across --update.
+    local _db_ha_mode="" _prof_cur="" _prof_new="" _stack_tier="" _tier_ram_mb=""
+    _db_ha_mode="$(env_get_value "$env_file" "DB_HA_ENABLED")"
+    [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
+    env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
+
+    _prof_cur="$(env_get_value "$env_file" "COMPOSE_PROFILES")"
+    _stack_tier="$(env_get_value "$env_file" "STACK_TIER")"
+    case "$_stack_tier" in
+        lite|medium|full) ;;
+        *)
+            if [ -n "$_prof_cur" ]; then
+                case ",${_prof_cur}," in
+                    *,full,*) _stack_tier="full" ;;
+                    *,medium,*) _stack_tier="medium" ;;
+                    *) _stack_tier="lite" ;;
+                esac
+            else
+                _tier_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+                [ -n "$_tier_ram_mb" ] || _tier_ram_mb=8192
+                if [ "$_tier_ram_mb" -lt 6144 ]; then
+                    _stack_tier="lite"
+                elif [ "$_tier_ram_mb" -lt 12288 ]; then
+                    _stack_tier="medium"
+                else
+                    _stack_tier="full"
+                fi
+            fi
+            env_set_value "$env_file" "STACK_TIER" "$_stack_tier"
+            ;;
+    esac
+
+    # WAF shadow is default-on at >=12GB RAM (full tier), off below (costs
+    # ~1.5-2.2GB real). Fill-if-absent so an explicit operator value
+    # survives updates; mirrors the fresh_config sizing ladder.
     if [ -z "$(env_get_value "$env_file" "OPENAPPSEC_ENABLED")" ]; then
         local _waf_ram_mb=""
         _waf_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
         [ -n "$_waf_ram_mb" ] || _waf_ram_mb=8192
-        if [ "$_waf_ram_mb" -ge 8192 ]; then
+        if [ "$_waf_ram_mb" -ge 12288 ]; then
             env_set_value "$env_file" "OPENAPPSEC_ENABLED" "1"
         else
             env_set_value "$env_file" "OPENAPPSEC_ENABLED" "0"
         fi
+        if [ "$_stack_tier" != "full" ]; then
+            env_set_value "$env_file" "OPENAPPSEC_ENABLED" "0"
+        fi
     fi
+    local _waf_enabled=""
+    _waf_enabled="$(env_get_value "$env_file" "OPENAPPSEC_ENABLED")"
     env_ensure_var "$env_file" "OPENAPPSEC_MODE" "prevent" "WAF enforcement mode (prevent enforce vs detect-learn shadow); set from Settings → Security Scanning"
     env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'  || python3 -c 'import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
@@ -263,84 +302,94 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "REPLICATION_PASSWORD" "$(gen_hex_secret 32)" "PostgreSQL streaming replication password"
     env_ensure_var "$env_file" "SENTINEL_PASSWORD" "$(gen_hex_secret 32)" "Redis Sentinel authentication password"
     env_ensure_var "$env_file" "SENTINEL_SERVICE_NAME" "mymaster" "Redis Sentinel service name"
-    # Auto-detect sentinel containers and populate SENTINEL_HOSTS if empty.
-    # Sentinel containers are named smsly-redis-sentinel-{1,2,3} and listen
-    # on port 26379.  Without this, the backend falls back to direct
-    # redis-primary connection which breaks after sentinel failover.
-    local current_sentinel_hosts
+    # Populate SENTINEL_HOSTS only when Redis HA is active (medium/full);
+    # lite runs single-node Redis so SENTINEL_HOSTS stays empty.
+    local current_sentinel_hosts=""
     current_sentinel_hosts="$(env_get_value "$env_file" "SENTINEL_HOSTS")"
-    if [ -z "$current_sentinel_hosts" ]; then
-        local detected_sentinels=""
-        local _si
-        for _si in 1 2 3; do
-            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-redis-sentinel-${_si}$"; then
-                if [ -n "$detected_sentinels" ]; then
-                    detected_sentinels="${detected_sentinels},"
-                fi
-                detected_sentinels="${detected_sentinels}smsly-redis-sentinel-${_si}:26379"
-            fi
-        done
-        if [ -n "$detected_sentinels" ]; then
-            echo -e "${BLUE}  -> Auto-detected Redis Sentinels: ${detected_sentinels}${NC}"
-            env_set_value "$env_file" "SENTINEL_HOSTS" "$detected_sentinels"
-            echo -e "${GREEN}  OK SENTINEL_HOSTS set${NC}"
+    if [ "$_stack_tier" = "lite" ]; then
+        if [ "$current_sentinel_hosts" = "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379" ]; then
+            env_set_value "$env_file" "SENTINEL_HOSTS" ""
         fi
+    elif [ -z "$current_sentinel_hosts" ] && [ "$_db_ha_mode" = "local-ha" ] && [ "${MODE_AGENT_LITE:-false}" != "true" ] && [ "${MODE_NODE:-false}" != "true" ]; then
+        env_set_value "$env_file" "SENTINEL_HOSTS" "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379"
+        echo -e "${GREEN}  OK SENTINEL_HOSTS set for local-ha${NC}"
     fi
     env_ensure_var "$env_file" "REGISTRY_HTTP_SECRET" "$(gen_hex_secret 32)" "Docker registry HTTP secret"
-    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false" "SSH host key verification (True=strict, False=accept-first)"
-    # DB HA mode + compose profiles: without COMPOSE_PROFILES the profiled
-    # db/postgres services are never created and every backend crashes with
-    # "could not translate host name db" (2026-09-10 fresh-install incident).
-    # Default is full (run everything): local-ha|patroni|external + medium
-    # (observability) + full (Falco, SPIRE servers, apt-cacher, verdaccio).
-    local _db_ha_mode=""
-    _db_ha_mode="$(env_get_value "$env_file" "DB_HA_ENABLED")"
-    [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
-    env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
-    env_ensure_var "$env_file" "COMPOSE_PROFILES" "${_db_ha_mode},medium,full" "Compose profiles to activate (DB mode + observability + full stack)"
-    # Backfill older installs that predate the full default (local-ha or
-    # local-ha,medium): ensure the current DB mode + medium + full are
-    # present, and drop any STALE db-mode token (local-ha|patroni|external)
-    # so two postgres stacks never start side by side (haproxy :7000
-    # would clash with frps :7000). Idempotent, case-insensitive.
-    local _prof_cur="" _prof_new=""
+    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "true" "SSH host key verification (True=strict, False=accept-first)"
+    # Reconcile COMPOSE_PROFILES for (_db_ha_mode, _stack_tier, _waf_enabled):
+    # preserves STACK_TIER across --update and gates appsec strictly on
+    # OPENAPPSEC_ENABLED=1 while stripping stale DB-mode tokens.
+    local _default_profiles="$_db_ha_mode"
+    case "$_stack_tier" in
+        medium)
+            [ "$_db_ha_mode" = "local-ha" ] && _default_profiles="${_default_profiles},local-ha-replica"
+            _default_profiles="${_default_profiles},redis-ha,medium"
+            ;;
+        full)
+            [ "$_db_ha_mode" = "local-ha" ] && _default_profiles="${_default_profiles},local-ha-replica"
+            _default_profiles="${_default_profiles},redis-ha,medium,full"
+            ;;
+    esac
+    [ "$_waf_enabled" = "1" ] && _default_profiles="${_default_profiles},appsec"
+    env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_default_profiles" "Compose profiles to activate (DB mode + tier + optional appsec)"
     _prof_cur="$(env_get_value "$env_file" "COMPOSE_PROFILES")"
     if command -v python3 >/dev/null 2>&1; then
-        _prof_new="$(DB_MODE="$_db_ha_mode" CUR_PROF="$_prof_cur" python3 -c '
+        _prof_new="$(DB_MODE="$_db_ha_mode" STACK_TIER_VAL="$_stack_tier" WAF_VAL="$_waf_enabled" CUR_PROF="$_prof_cur" python3 -c '
 import os
-mode = os.environ.get("DB_MODE", "local-ha").strip() or "local-ha"
+mode = (os.environ.get("DB_MODE") or "local-ha").strip() or "local-ha"
+tier = (os.environ.get("STACK_TIER_VAL") or "full").strip().lower()
+waf = (os.environ.get("WAF_VAL") or "0").strip()
 cur = os.environ.get("CUR_PROF", "")
 db_modes = {"local-ha", "patroni", "external"}
+managed = {"local-ha-replica", "redis-ha", "medium", "full", "appsec"}
 seen = set()
 out = []
 for tok in [t.strip() for t in cur.split(",")]:
     if not tok:
         continue
     low = tok.lower()
-    if low in db_modes and low != mode.lower():
+    if low in db_modes or low in managed:
         continue
     if low not in seen:
         seen.add(low)
         out.append(tok)
-for want in [mode, "medium", "full"]:
-    if want.lower() not in seen:
-        seen.add(want.lower())
-        out.append(want)
-print(",".join(out))
+desired = [mode]
+if tier in ("medium", "full"):
+    if mode.lower() == "local-ha":
+        desired.append("local-ha-replica")
+    desired.extend(["redis-ha", "medium"])
+if tier == "full":
+    desired.append("full")
+if waf == "1":
+    desired.append("appsec")
+# Keep DB mode + tier profiles ordered deterministically, followed by custom tokens.
+final = []
+final_seen = set()
+for tok in desired + out:
+    low = tok.lower()
+    if low not in final_seen:
+        final_seen.add(low)
+        final.append(tok)
+print(",".join(final))
 ' || true)"
         if [ -n "$_prof_new" ] && [ "$_prof_new" != "$_prof_cur" ]; then
             env_set_value "$env_file" "COMPOSE_PROFILES" "$_prof_new"
         fi
     else
-        env_append_csv_values "$env_file" "COMPOSE_PROFILES" "$_db_ha_mode" "medium" "full" > /dev/null
+        env_set_value "$env_file" "COMPOSE_PROFILES" "$_default_profiles"
     fi
     # Read-replica routing must name the replica the compose stack actually
-    # starts. Empty here + compose-level default used to agree by accident;
-    # make it explicit so .env, pgcat, and the dashboard disagree never.
-    # External mode keeps operator-managed values (never overwrite).
+    # starts. Lite skips same-host postgres-replica; medium/full start it
+    # in local-ha mode. External mode keeps operator-managed values.
     local _replica_hosts=""
     _replica_hosts="$(env_get_value "$env_file" "DB_REPLICA_HOSTS")"
-    if [ -z "$_replica_hosts" ]; then
+    if [ "$_stack_tier" = "lite" ]; then
+        if [ "$_db_ha_mode" = "local-ha" ] && [ "$_replica_hosts" = "postgres-replica:5432" ]; then
+            env_set_value "$env_file" "DB_REPLICA_HOSTS" ""
+        elif [ "$_db_ha_mode" = "patroni" ] && [ -z "$_replica_hosts" ]; then
+            env_set_value "$env_file" "DB_REPLICA_HOSTS" "haproxy:5001"
+        fi
+    elif [ -z "$_replica_hosts" ]; then
         case "$_db_ha_mode" in
             patroni) env_set_value "$env_file" "DB_REPLICA_HOSTS" "haproxy:5001" ;;
             local-ha) env_set_value "$env_file" "DB_REPLICA_HOSTS" "postgres-replica:5432" ;;
@@ -354,18 +403,26 @@ print(",".join(out))
     _size_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
     [ -n "$_size_ram_mb" ] || _size_ram_mb=8192
     _size_cpus="$(nproc 2>/dev/null || echo 4)"
-    local _want_workers="" _want_buffers="" _want_cache=""
+    local _want_workers="" _want_buffers="" _want_cache="" _want_celery_autoscale="" _want_wal_keep="" _want_obs_retention=""
     if [ "$_size_cpus" -le 2 ]; then _want_workers=2; else _want_workers=4; fi
-    if [ "$_size_ram_mb" -le 4096 ]; then _want_buffers=256MB; _want_cache=1GB
-    elif [ "$_size_ram_mb" -le 8192 ]; then _want_buffers=512MB; _want_cache=2GB
-    else _want_buffers=1GB; _want_cache=4GB; fi
+    if [ "$_size_ram_mb" -le 4096 ]; then
+        _want_buffers=256MB; _want_cache=1GB; _want_celery_autoscale="2,0"; _want_wal_keep="64MB"
+    elif [ "$_size_ram_mb" -le 8192 ]; then
+        _want_buffers=512MB; _want_cache=2GB; _want_celery_autoscale="4,0"; _want_wal_keep="512MB"
+    else
+        _want_buffers=1GB; _want_cache=4GB; _want_celery_autoscale="4,0"; _want_wal_keep="1GB"
+    fi
+    if [ "$_stack_tier" = "lite" ]; then _want_wal_keep="64MB"; fi
+    if [ "$_size_ram_mb" -lt 12288 ]; then _want_obs_retention="7d"; else _want_obs_retention="30d"; fi
     env_ensure_var "$env_file" "GUNICORN_WORKERS" "$_want_workers" "Gunicorn workers (host-sized; burst via autoscaler)"
     env_ensure_var "$env_file" "DB_SHARED_BUFFERS" "$_want_buffers" "Postgres shared buffers (host-sized; pinned shm)"
     env_ensure_var "$env_file" "DB_EFFECTIVE_CACHE_SIZE" "$_want_cache" "Postgres planner cache hint (no RAM cost)"
     env_ensure_var "$env_file" "CELERY_QUEUES" "celery,fast,deploy" "Main worker drains all queues (burst workers idle-stop safely)"
+    env_ensure_var "$env_file" "CELERY_AUTOSCALE" "$_want_celery_autoscale" "Main Celery worker autoscale max,min"
     env_ensure_var "$env_file" "CELERY_AUTOSCALE_ENABLED" "true" "Idle-stop burst workers on empty queues"
-    env_ensure_var "$env_file" "PROMETHEUS_RETENTION" "30d" "Prometheus TSDB retention (main driver of metrics disk+RAM growth; 7d on small hosts)"
-    env_ensure_var "$env_file" "LOKI_RETENTION" "30d" "Loki log retention (set together with PROMETHEUS_RETENTION)"
+    env_ensure_var "$env_file" "PG_WAL_KEEP_SIZE" "$_want_wal_keep" "Postgres retained WAL floor (64MB lite, 512MB medium, 1GB full)"
+    env_ensure_var "$env_file" "PROMETHEUS_RETENTION" "$_want_obs_retention" "Prometheus TSDB retention (7d <12GB, 30d >=12GB)"
+    env_ensure_var "$env_file" "LOKI_RETENTION" "$_want_obs_retention" "Loki log retention (set together with PROMETHEUS_RETENTION)"
     env_ensure_var "$env_file" "FALCO_MEMORY_LIMIT" "1024M" "Falco runtime-security memory cap (1024M prevents modern_ebpf OOM)"
     # Registry public bind: without an explicit override the compose
     # fallback is a hardcoded IP from another host and the registry port

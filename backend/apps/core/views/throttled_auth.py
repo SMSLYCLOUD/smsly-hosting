@@ -80,6 +80,7 @@ class ThrottledLoginView(_BaseLoginView):
     ``POST /api/v1/auth/2fa/login/`` with a valid TOTP code, which is
     the ONLY path that mints the token for enrolled users.
     """
+    authentication_classes = []
     throttle_classes = [LoginRateThrottle]
 
     def login(self):
@@ -186,6 +187,7 @@ class ThrottledPasswordResetView(_BasePasswordResetView):
     reset emails to a victim (which is itself a denial-of-service
     attack against the victim's inbox).
     """
+    authentication_classes = []
     throttle_classes = [PasswordResetRateThrottle]
 
 
@@ -196,4 +198,24 @@ class ThrottledRegistrationView(_BaseRegistrationView):
     account-creation cap. Operators who need bulk accounts use
     the admin CLI.
     """
+    authentication_classes = []
     throttle_classes = [RegistrationRateThrottle]
+
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        token_key = None
+        if isinstance(getattr(response, 'data', None), dict):
+            token_key = response.data.get('key')
+        if not token_key and getattr(self, 'token', None) is not None:
+            token_key = getattr(self.token, 'key', None)
+        if token_key and response.status_code in (200, 201):
+            try:
+                set_auth_cookie(response, token_key)
+            except Exception:
+                pass
+            if (
+                not getattr(settings, 'SMSLY_TOKEN_IN_BODY', False)
+                and isinstance(getattr(response, 'data', None), dict)
+            ):
+                response.data.pop('key', None)
+        return response

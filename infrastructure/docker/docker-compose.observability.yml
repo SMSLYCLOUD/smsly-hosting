@@ -93,7 +93,7 @@ services:
     container_name: smsly-postgres-exporter-shared
     restart: unless-stopped
     environment:
-      - DATA_SOURCE_NAME=postgresql://smsly_monitor:${POSTGRES_EXPORTER_PASSWORD}@smsly-shared-postgres:5432/postgres?sslmode=require
+      - DATA_SOURCE_NAME=postgresql://smsly_monitor:${POSTGRES_EXPORTER_PASSWORD:-}@smsly-shared-postgres:5432/postgres?sslmode=require
       - PG_EXPORTER_AUTO_DISCOVER_DATABASES=true
       - PG_EXPORTER_EXCLUDE_DATABASES=template0,template1,test_smsly_hosting
     networks:
@@ -116,7 +116,7 @@ services:
     container_name: smsly-postgres-exporter-platform
     restart: unless-stopped
     environment:
-      - DATA_SOURCE_NAME=postgresql://smsly_monitor:${POSTGRES_EXPORTER_PASSWORD}@smsly-postgres-primary:5432/postgres?sslmode=prefer
+      - DATA_SOURCE_NAME=postgresql://smsly_monitor:${POSTGRES_EXPORTER_PASSWORD:-}@smsly-postgres-primary:5432/postgres?sslmode=prefer
       - PG_EXPORTER_AUTO_DISCOVER_DATABASES=true
       - PG_EXPORTER_EXCLUDE_DATABASES=template0,template1,test_smsly_hosting
     networks:
@@ -188,6 +188,7 @@ services:
       # smsly-prometheus container; keep them identical or updates will
       # recreate it back and forth).
       - '--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}'
+      - '--storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-8GB}'
     networks:
       - smsly-net
     healthcheck:
@@ -254,6 +255,10 @@ services:
       # triples cAdvisor's collection batching vs the 10s default.
       - --docker_only=true
       - --housekeeping_interval=30s
+      - --max_housekeeping_interval=35s
+      - --event_storage_event_limit=default=0
+      - --event_storage_age_limit=default=0
+      - --disable_metrics=percpu,sched,tcp,udp,disk,diskIO,hugetlb,referenced_memory,cpu_topology,resctrl,process,advtcp,memory_numa
     volumes:
       - /:/rootfs:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -274,7 +279,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${CADVISOR_MEMORY_LIMIT:-256M}
+          memory: ${CADVISOR_MEMORY_LIMIT:-384M}
 
   # Node Exporter - Host metrics
   node-exporter:
@@ -318,7 +323,7 @@ services:
       # healthcheck into "unhealthy".
       - REFRESH_INTERVAL=60
       - STATS_TIMEOUT=50
-      - MAX_WORKERS=8
+      - MAX_WORKERS=${DOCKER_LABELS_WORKERS:-4}
       - DOCKER_SOCK=/var/run/docker.sock
     volumes:
       - ../monitoring/docker-labels-exporter.py:/app/exporter.py:ro
@@ -357,7 +362,7 @@ services:
       # manage the same smsly-grafana container; a mismatch recreates it
       # back and forth on every update). Enabled = dashboard embeds work
       # without a login; admin actions still require auth.
-      - GF_AUTH_ANONYMOUS_ENABLED=${GRAFANA_ANON_ENABLED:-true}
+      - GF_AUTH_ANONYMOUS_ENABLED=${GRAFANA_ANON_ENABLED:-false}
       - GF_AUTH_ANONYMOUS_ORG_NAME=${GRAFANA_ANON_ORG:-Main Org.}
       - GF_AUTH_ANONYMOUS_ORG_ROLE=${GRAFANA_ANON_ROLE:-Viewer}
       - GF_AUTH_ANONYMOUS_HIDE_VERSION=true
@@ -385,7 +390,7 @@ services:
       - "traefik.http.routers.grafana.entrypoints=websecure"
       - "traefik.http.routers.grafana.tls=true"
       - "traefik.http.services.grafana.loadbalancer.server.port=3000"
-      - "traefik.docker.network=smsly-proxy"
+      - "traefik.docker.network=smsly-net"
       - "managed_by=smsly-hosting"
     deploy:
       resources:
@@ -400,9 +405,6 @@ volumes:
   alertmanager-data:
   pgbackrest-repo:
   # Live data volumes (external: owned by other stacks, never managed here).
-  smsly-shared-postgres-data:
-    external: true
-    name: smsly-shared-postgres-data
   smsly-hosting-postgres-data:
     external: true
     name: smsly-hosting_postgres-primary-data

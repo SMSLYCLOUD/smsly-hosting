@@ -16,3 +16,12 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule: { interval: "weekly" }
+  - package-ecosystem: "gomod"
+    directory: "/cryptd"
+    schedule: { interval: "weekly" }
+  - package-ecosystem: "gomod"
+    directory: "/napd"
+    schedule: { interval: "weekly" }
+  - package-ecosystem: "gomod"
+    directory: "/edge-sidecar"
+    schedule: { interval: "weekly" }

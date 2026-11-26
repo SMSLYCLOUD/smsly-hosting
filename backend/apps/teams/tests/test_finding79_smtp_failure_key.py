@@ -33,24 +33,28 @@ class Finding79SmtpFailureKeyTests(TestCase):
         self.client.force_authenticate(user=self.admin)
         self.url = f"/api/v1/teams/{self.team.id}/invite_member/"
 
-    def test_response_error_key_is_literally_smtp_failure(self):
+    def test_smtp_failure_commits_member_without_leaking_error(self):
         with patch(
             "apps.teams.views.send_mail",
             side_effect=SMTPException("SMTP 451 throttled"),
-        ):
+        ), self.captureOnCommitCallbacks(execute=True):
             resp = self.client.post(
                 self.url,
                 data={"email": self.invitee.email, "role": "MEMBER"},
                 format="json",
             )
-        self.assertEqual(resp.status_code, http_status.HTTP_502_BAD_GATEWAY)
-        self.assertEqual(resp.data["error"], "smtp_failure")
-        self.assertIn("mail_error", resp.data)
-        self.assertIn("SMTP 451", resp.data["mail_error"])
-        self.assertEqual(resp.data["mail_error"], "SMTP 451 throttled")
+        self.assertEqual(resp.status_code, http_status.HTTP_200_OK)
+        self.assertEqual(resp.data["status"], "invited")
+        self.assertNotIn("mail_error", resp.data)
+        self.assertTrue(
+            TeamMember.objects.filter(
+                team=self.team, user=self.invitee,
+            ).exists()
+        )
 
     def test_fail_silently_disabled_when_smtp_call_made(self):
-        with patch("apps.teams.views.send_mail") as send_mail_mock:
+        with patch("apps.teams.views.send_mail") as send_mail_mock, \
+                self.captureOnCommitCallbacks(execute=True):
             self.client.post(
                 self.url,
                 data={"email": self.invitee.email, "role": "MEMBER"},
@@ -66,7 +70,7 @@ class Finding79SmtpFailureKeyTests(TestCase):
         with patch(
             "apps.teams.views.send_mail",
             side_effect=SMTPException("relay refused"),
-        ):
+        ), self.captureOnCommitCallbacks(execute=True):
             self.client.post(
                 self.url,
                 data={"email": self.invitee.email, "role": "VIEWER"},
@@ -78,20 +82,19 @@ class Finding79SmtpFailureKeyTests(TestCase):
             ).exists()
         )
 
-    def test_smtp_exception_message_propagated_to_response(self):
+    def test_smtp_exception_message_redacted_from_response(self):
         secret_detail = (
             "454 4.7.1 <attacker@example.com>: Relay access denied"
         )
         with patch(
             "apps.teams.views.send_mail",
             side_effect=SMTPException(secret_detail),
-        ):
+        ), self.captureOnCommitCallbacks(execute=True):
             resp = self.client.post(
                 self.url,
                 data={"email": self.invitee.email, "role": "MEMBER"},
                 format="json",
             )
-        self.assertEqual(resp.status_code, http_status.HTTP_502_BAD_GATEWAY)
-        self.assertEqual(resp.data["error"], "smtp_failure")
-        self.assertIn("mail_error", resp.data)
-        self.assertEqual(resp.data["mail_error"], secret_detail)
+        self.assertEqual(resp.status_code, http_status.HTTP_200_OK)
+        self.assertNotIn("mail_error", resp.data)
+        self.assertNotIn("Relay access denied", str(resp.data))

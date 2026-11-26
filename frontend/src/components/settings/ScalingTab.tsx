@@ -114,7 +114,31 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
     }
   };
 
+  const normalizeSablierDuration = (raw: string): string | null => {
+    const trimmed = raw.trim().toLowerCase();
+    if (!trimmed) return "10m";
+    const candidate = /^\d+$/.test(trimmed) ? `${trimmed}m` : trimmed;
+    const match = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(candidate);
+    if (!match || (!match[1] && !match[2] && !match[3])) return null;
+    const totalSeconds =
+      (match[1] ? Number(match[1]) * 3600 : 0) +
+      (match[2] ? Number(match[2]) * 60 : 0) +
+      (match[3] ? Number(match[3]) : 0);
+    if (totalSeconds < 30 || totalSeconds > 7 * 86400) return null;
+    return candidate;
+  };
+
   const handleSave = async () => {
+    const normalizedSession = normalizeSablierDuration(sablierSession);
+    if (!normalizedSession) {
+      toast({
+        title: "Invalid idle session",
+        description: "Use a Go duration like 30s, 10m, or 1h (between 30s and 7d).",
+        variant: "destructive",
+      });
+      return;
+    }
+    setSablierSession(normalizedSession);
     setSaving(true);
     try {
       await servicesApi.update(service.id, {
@@ -125,7 +149,7 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
         vpa_enabled: vpaEnabled,
         edge_jwt_required: edgeJwt,
         sablier_enabled: sablier,
-        sablier_session: sablierSession,
+        sablier_session: normalizedSession,
         addon_placement: placement,
         waf_opt_out: wafOptOut,
       });
@@ -135,11 +159,16 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
         description: "The autoscaler will adjust replicas based on these rules.",
       });
       if (onUpdate) onUpdate();
-    } catch (error) {
+    } catch (error: unknown) {
       console.error(error);
+      const errData = (error as { response?: { data?: Record<string, unknown> } })?.response?.data;
+      const detail =
+        (Array.isArray(errData?.sablier_session) ? String(errData?.sablier_session[0]) : undefined) ||
+        (typeof errData?.detail === "string" ? errData.detail : undefined) ||
+        "Could not save scaling settings.";
       toast({
         title: "Update failed",
-        description: "Could not save scaling settings.",
+        description: detail,
         variant: "destructive",
       });
     } finally {
@@ -307,12 +336,12 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
             <div className="flex justify-between items-center">
               <Label>Replica Range (Min - Max)</Label>
               <span className="text-sm font-medium text-muted-foreground">
-                {minReplicas} - {maxReplicas} containers
+                {minReplicas === 0 ? `0 extra (scale-to-zero) - ${maxReplicas} containers` : `${minReplicas} - ${maxReplicas} containers`}
               </span>
             </div>
             <Slider
               value={[minReplicas, maxReplicas]}
-              min={1}
+              min={sablier ? 0 : 1}
               max={20}
               step={1}
               minStepsBetweenThumbs={0}
@@ -335,7 +364,7 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
               min={10}
               max={100}
               step={5}
-              onValueChange={(val) => setCpuTarget(val[0])}
+              onValueChange={(val) => { dirtyRef.current = true; setCpuTarget(val[0]); }}
               className="py-4"
             />
             <p className="text-xs text-muted-foreground">
@@ -370,7 +399,7 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
               {applyingVpa ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Apply Now
             </Button>
-            <Switch checked={vpaEnabled} onCheckedChange={setVpaEnabled} />
+            <Switch checked={vpaEnabled} onCheckedChange={(checked) => { dirtyRef.current = true; setVpaEnabled(checked); }} />
           </div>
         </CardContent>
       </Card>
@@ -389,28 +418,41 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
               <Label className="text-base">Scale to zero (Sablier)</Label>
               <p className="text-sm text-muted-foreground">Sleep when idle; wake on first request.</p>
             </div>
-            <Switch checked={sablier} onCheckedChange={setSablier} />
+            <Switch
+              checked={sablier}
+              onCheckedChange={(checked) => {
+                dirtyRef.current = true;
+                setSablier(checked);
+                if (checked && minReplicas > 0) {
+                  setMinReplicas(0);
+                } else if (!checked && minReplicas < 1) {
+                  setMinReplicas(1);
+                }
+              }}
+            />
           </div>
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
               <Label className="text-base">Idle session</Label>
-              <p className="text-sm text-muted-foreground">How long to stay awake after last request (e.g. 10m, 1h).</p>
+              <p className="text-sm text-muted-foreground">
+                Valid durations: e.g. 30s, 10m, 1h (min 30s). Running containers are automatically refreshed in-place when saved.
+              </p>
             </div>
-            <input value={sablierSession} onChange={(e) => setSablierSession(e.target.value)} className="w-24 px-2 py-1 text-sm rounded border border-border bg-background font-mono" />
+            <input value={sablierSession} onChange={(e) => { dirtyRef.current = true; setSablierSession(e.target.value); }} className="w-24 px-2 py-1 text-sm rounded border border-border bg-background font-mono" />
           </div>
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
               <Label className="text-base">Require edge JWT</Label>
               <p className="text-sm text-muted-foreground">401 at the edge without a valid edge token.</p>
             </div>
-            <Switch checked={edgeJwt} onCheckedChange={setEdgeJwt} />
+            <Switch checked={edgeJwt} onCheckedChange={(checked) => { dirtyRef.current = true; setEdgeJwt(checked); }} />
           </div>
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
               <Label className="text-base">Disable Coraza WAF</Label>
               <p className="text-sm text-muted-foreground">Opt out of OWASP CRS inspection for this service.</p>
             </div>
-            <Switch checked={wafOptOut} onCheckedChange={setWafOptOut} />
+            <Switch checked={wafOptOut} onCheckedChange={(checked) => { dirtyRef.current = true; setWafOptOut(checked); }} />
           </div>
         </CardContent>
       </Card>
@@ -429,7 +471,7 @@ export default function ScalingTab({ service, onUpdate }: ScalingTabProps) {
               <button
                 key={opt}
                 type="button"
-                onClick={() => setPlacement(opt)}
+                onClick={() => { dirtyRef.current = true; setPlacement(opt); }}
                 className={`rounded-full px-3 py-1 text-xs font-semibold transition-all ${
                   placement === opt
                     ? 'bg-emerald-500/20 text-emerald-300 shadow-[inset_0_0_0_1px_rgba(52,211,153,0.35)]'

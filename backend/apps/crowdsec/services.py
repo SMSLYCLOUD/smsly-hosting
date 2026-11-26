@@ -517,6 +517,54 @@ class CrowdSecService:
     def get_metrics(self) -> dict:
         return self._fetch_metrics_raw()
 
+    def add_decision(
+        self,
+        ip: str,
+        duration: str = "4h",
+        reason: str = "xdr_soar_ban",
+        decision_type: str = "ban",
+    ) -> bool:
+        """Add a CrowdSec decision (ban) for an IP address via cscli."""
+        import re as _re
+
+        try:
+            ip_str = str(ipaddress.ip_address(str(ip or "").strip()))
+        except ValueError:
+            logger.warning("add_decision rejected invalid IP: %r", ip)
+            return False
+
+        dur = str(duration or "4h").strip()
+        if not _re.fullmatch(r"\d+[smhd]", dur):
+            dur = "4h"
+
+        safe_reason = str(reason or "xdr_soar_ban").strip()[:120] or "xdr_soar_ban"
+        safe_type = decision_type if decision_type in ("ban", "captcha") else "ban"
+
+        cmd = [
+            "docker", "exec", "smsly-crowdsec",
+            "cscli", "decisions", "add",
+            "--ip", ip_str,
+            "--duration", dur,
+            "--type", safe_type,
+            "--reason", safe_reason,
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            if result.returncode == 0:
+                self._decisions_cache = None
+                self._alerts_cache = None
+                self._decisions_ts = 0
+                self._alerts_ts = 0
+                return True
+            logger.warning("add_decision cscli failed rc=%s: %s", result.returncode, result.stderr)
+            return False
+        except FileNotFoundError:
+            logger.warning("add_decision failed: docker CLI not available")
+            return False
+        except Exception:
+            logger.exception("add_decision failed")
+            return False
+
     def unban(self, ip: str, range_type: str = "Ip") -> dict:
         """Unban an IP or range. Returns {"status": ...} or {"error": ...}."""
         try:

@@ -186,6 +186,22 @@ def collect_metrics_task() -> None:
         if dep.service_id not in active_by_service:
             active_by_service[dep.service_id] = dep
 
+    replicas_by_service: dict = {}
+    try:
+        from apps.autoscaler.models.replica import ServiceReplica
+
+        for rep in (
+            ServiceReplica.objects.filter(
+                service_id__in=[s.id for s in services],
+                status='RUNNING',
+            )
+            .select_related('node')
+            .only('id', 'service_id', 'container_name', 'container_id', 'node__id', 'node__host', 'node__wg_address', 'node__api_token', 'node__is_lite_agent')
+        ):
+            replicas_by_service.setdefault(rep.service_id, []).append(rep)
+    except Exception:
+        pass
+
     collected = 0
     for service in services:
         if time.monotonic() >= deadline:
@@ -194,11 +210,52 @@ def collect_metrics_task() -> None:
         latest = active_by_service.get(service.id)
         container_id = getattr(latest, 'container_id', None) if latest else None
 
-        stats = _collect_remote_container_stats(service, latest) if latest else None
-        if stats is None:
-            stats = _collect_container_stats(container_id, service.cpu_cores)
-        if stats is None:
+        primary_stats = _collect_remote_container_stats(service, latest) if latest else None
+        if primary_stats is None:
+            primary_stats = _collect_container_stats(container_id, service.cpu_cores)
+
+        samples: list[dict] = [primary_stats] if primary_stats is not None else []
+        for rep in replicas_by_service.get(service.id, []):
+            ref = (rep.container_name or rep.container_id or '').strip()
+            if not ref:
+                continue
+            r_stats = None
+            if rep.node_id:
+                try:
+                    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+                    data = RemoteOrchestrator(rep.node).get_container_stats(ref)
+                    if data and data.get('cpu_usage') is not None:
+                        r_stats = {
+                            'cpu_usage': float(data.get('cpu_usage') or 0),
+                            'cpu_limit': float(service.cpu_cores or data.get('cpu_limit') or 1),
+                            'memory_usage': int(data.get('memory_usage') or 0),
+                            'memory_limit': int(data.get('memory_limit') or service.memory_mb or 512),
+                            'network_rx_bytes': int(data.get('network_rx_bytes') or 0),
+                            'network_tx_bytes': int(data.get('network_tx_bytes') or 0),
+                            'disk_read_bytes': int(data.get('disk_read_bytes') or 0),
+                            'disk_write_bytes': int(data.get('disk_write_bytes') or 0),
+                        }
+                except Exception:
+                    r_stats = None
+            else:
+                r_stats = _collect_container_stats(ref, service.cpu_cores)
+            if r_stats is not None:
+                samples.append(r_stats)
+
+        if not samples:
             continue
+
+        n = len(samples)
+        stats = {
+            'cpu_usage': round(sum(s['cpu_usage'] for s in samples) / n, 4),
+            'cpu_limit': samples[0]['cpu_limit'],
+            'memory_usage': int(sum(s['memory_usage'] for s in samples) / n),
+            'memory_limit': samples[0]['memory_limit'],
+            'network_rx_bytes': sum(s['network_rx_bytes'] for s in samples),
+            'network_tx_bytes': sum(s['network_tx_bytes'] for s in samples),
+            'disk_read_bytes': sum(s['disk_read_bytes'] for s in samples),
+            'disk_write_bytes': sum(s['disk_write_bytes'] for s in samples),
+        }
 
         ServiceMetric.objects.create(
             service=service,
@@ -207,8 +264,19 @@ def collect_metrics_task() -> None:
         )
         collected += 1
 
-        # Check resource thresholds and fire alerts
-        _check_metric_thresholds(service, stats, now)
+        # Check resource thresholds and fire alerts (include host disk usage without
+        # mutating stats passed into ServiceMetric.objects.create).
+        alert_stats = dict(stats)
+        if 'disk_percent' not in alert_stats:
+            try:
+                import shutil as _shutil
+                _disk_path = '/var/lib/docker' if os.path.exists('/var/lib/docker') else '/'
+                _du = _shutil.disk_usage(_disk_path)
+                if _du.total > 0:
+                    alert_stats['disk_percent'] = round((_du.used / _du.total) * 100.0, 2)
+            except OSError:
+                pass
+        _check_metric_thresholds(service, alert_stats, now)
 
     cutoff = now - timezone.timedelta(days=7)
     deleted, _ = ServiceMetric.objects.filter(timestamp__lt=cutoff).delete()
@@ -302,12 +370,18 @@ def _check_metric_thresholds(service, stats, now):
             from apps.notifications.models import ResourceAlert
             from apps.notifications.tasks import notify_health_alert
 
-            cache_key = f"metrics_alert:{service.id}:{now.strftime('%Y%m%d%H')}"
-            if cache.get(cache_key):
-                return
-            cache.set(cache_key, 1, 3600)  # 1 hour dedup
-
+            hour_bucket = now.strftime('%Y%m%d%H')
+            new_breaches = []
             for metric_name, cur_val, thresh_val, sev, msg_text in breaches:
+                b_key = f"metrics_alert:{service.id}:{metric_name}:{sev}:{hour_bucket}"
+                if not cache.get(b_key):
+                    cache.set(b_key, 1, 3600)  # 1 hour dedup per metric & severity
+                    new_breaches.append((metric_name, cur_val, thresh_val, sev, msg_text))
+
+            if not new_breaches:
+                return
+
+            for metric_name, cur_val, thresh_val, sev, msg_text in new_breaches:
                 try:
                     ResourceAlert.objects.create(
                         service=service,
@@ -320,8 +394,8 @@ def _check_metric_thresholds(service, stats, now):
                 except Exception as db_exc:
                     logger.debug("Failed to persist ResourceAlert for %s: %s", service.name, db_exc)
 
-            top = max(breaches, key=lambda b: (1 if b[3] == 'CRITICAL' else 0, b[1]))
-            overall_severity = 'CRITICAL' if any(b[3] == 'CRITICAL' for b in breaches) else 'WARNING'
+            top = max(new_breaches, key=lambda b: (1 if b[3] == 'CRITICAL' else 0, b[1]))
+            overall_severity = 'CRITICAL' if any(b[3] == 'CRITICAL' for b in new_breaches) else 'WARNING'
 
             notify_health_alert.delay(
                 service.owner_id,
@@ -330,7 +404,7 @@ def _check_metric_thresholds(service, stats, now):
                 current_value=round(top[1], 1),
                 threshold=round(top[2], 1),
                 severity=overall_severity,
-                message='; '.join(b[4] for b in breaches),
+                message='; '.join(b[4] for b in new_breaches),
             )
     except Exception as exc:
         logger.debug("Failed to check metric thresholds: %s", exc)

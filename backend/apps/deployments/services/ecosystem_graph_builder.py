@@ -306,6 +306,9 @@ class EcosystemGraphBuilder:
             elif check["type"] == "dynamic":
                 fn_name = check["fn"]
                 host, port = globals()[fn_name]()
+                path = check.get("path")
+                if path:
+                    return "healthy" if _check_http(host, port, path, timeout=2.0) else "down"
                 return "healthy" if _check_tcp(host, port, timeout=1.5) else "down"
         except Exception as exc:
             logger.debug("Health check failed for %s: %s", defn["id"], exc)

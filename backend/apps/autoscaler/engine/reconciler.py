@@ -10,10 +10,16 @@ hint, not an actual replica count), while ``tasks_autoscale.py`` and
 This module unifies on the actual replica-row approach (correct
 semantics) and additionally updates ``last_scale_at`` for cooldown.
 """
+import contextlib
 import logging
+import os
 import threading
+import time
+import uuid
 from collections import OrderedDict
 
+from django.conf import settings
+from django.core.cache import cache as django_cache
 from django.db import transaction
 from django.utils import timezone
 
@@ -113,14 +119,53 @@ class Reconciler:
         # the per-iteration headroom re-check in _scale_up plus the
         # pipeline dedup cache and spawning guards.
         with self._lock:
-            plan = self._plan_locked(recommendation)
-            if isinstance(plan, ScaleResult):
-                return plan
-            if plan.action == 'scale_up':
-                return self._scale_up(plan)
-            if plan.action == 'scale_down':
-                return self._scale_down(plan)
-            return ScaleResult(recommendation, applied=False)
+            dist_token = self._acquire_distributed_lock()
+            if dist_token is None:
+                return ScaleResult(
+                    recommendation,
+                    applied=False,
+                    error='reconcile lock busy in another worker',
+                )
+            try:
+                plan = self._plan_locked(recommendation)
+                if isinstance(plan, ScaleResult):
+                    return plan
+                if plan.action == 'scale_up':
+                    return self._scale_up(plan)
+                if plan.action == 'scale_down':
+                    return self._scale_down(plan)
+                return ScaleResult(recommendation, applied=False)
+            finally:
+                self._release_distributed_lock(dist_token)
+
+    def _dist_lock_key(self) -> str:
+        return f"autoscale:reconcile:{self.service.id}"
+
+    def _acquire_distributed_lock(self, ttl: int = 300, wait_seconds: float = 10.0) -> str | None:
+        """Best-effort Redis cache lock across Celery prefork processes."""
+        token = uuid.uuid4().hex
+        key = self._dist_lock_key()
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            try:
+                if django_cache.add(key, token, timeout=ttl):
+                    return token
+            except Exception:
+                # If cache backend is unavailable, fall back to DB row lock.
+                return ""
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.1)
+
+    def _release_distributed_lock(self, token: str) -> None:
+        if not token:
+            return
+        key = self._dist_lock_key()
+        try:
+            if django_cache.get(key) == token:
+                django_cache.delete(key)
+        except Exception:
+            pass
 
     @transaction.atomic
     def _plan_locked(self, rec: Recommendation) -> Recommendation | ScaleResult:
@@ -168,7 +213,10 @@ class Reconciler:
             )
 
         if rec.action == 'scale_down':
-            min_r = locked.min_replicas or 0
+            min_r = (
+                0 if getattr(locked, 'sablier_enabled', False) is True
+                else (locked.min_replicas or 0)
+            )
             if running <= min_r:
                 return ScaleResult(rec, applied=False, error='at min_replicas after lock')
             removable = running - min_r
@@ -195,75 +243,133 @@ class Reconciler:
         max_r = getattr(self.service, 'max_replicas', None) or 1
         return self._live_replica_count() < max_r
 
+    @transaction.atomic
+    def _reserve_spawning_replica(self, node, reason: str):
+        """Atomically re-verify max_replicas under row lock and create a SPAWNING row."""
+        from apps.autoscaler.models.replica import ServiceReplica
+        from apps.deployments.models.core import Service
+
+        locked = Service.objects.select_for_update().get(id=self.service.id)
+        self.service = locked
+        max_r = locked.max_replicas or 1
+        live = ServiceReplica.objects.filter(
+            service=locked, status__in=('RUNNING', 'SPAWNING')
+        ).count()
+        if live >= max_r:
+            return None
+        return ServiceReplica.objects.create(
+            service=locked,
+            node=node,
+            spawn_reason=reason,
+            status='SPAWNING',
+        )
+
+    def _resolve_primary_server(self):
+        try:
+            from apps.deployments.services.caddy_manager.config_generation import (
+                _resolve_effective_server,
+            )
+            return _resolve_effective_server(self.service)
+        except Exception:
+            return getattr(self.service, 'server', None)
+
+    def _spawn_loop_on_target(self, spawner, node, remaining: int, reason: str) -> tuple[int, bool]:
+        """Attempt up to *remaining* spawns on *node* (None = local)."""
+        spawned_here = 0
+        while spawned_here < remaining:
+            replica = self._reserve_spawning_replica(node, reason)
+            if replica is None:
+                logger.info("Headroom exhausted for %s — stopping scale-up", self.service.name)
+                return spawned_here, False
+            try:
+                if node is None:
+                    spawner.spawn_local(self.service, replica)
+                else:
+                    spawner.spawn(self.service, node, replica)
+                spawned_here += 1
+            except Exception as exc:
+                where = "Local" if node is None else f"Remote ({node.name})"
+                logger.warning("%s spawn failed for %s: %s", where, self.service.name, exc)
+                try:
+                    spawner.destroy(replica)
+                except Exception as dest_exc:
+                    logger.debug("Destroy replica after spawn failure: %s", dest_exc)
+                replica.status = 'DESTROYED'
+                replica.destroyed_at = timezone.now()
+                replica.save(update_fields=['status', 'destroyed_at'])
+                return spawned_here, True
+        return spawned_here, True
+
     # ── Scale up ─────────────────────────────────────────────────────────────
     def _scale_up(self, rec: Recommendation) -> ScaleResult:
         from apps.deployments.models.core import ManagedServer
-        from apps.autoscaler.models.replica import ServiceReplica
-        from apps.deployments.services.node_scorer import NodeScorer
+        from apps.deployments.services.node_scorer import NodeScorer, _get_min_score
+        from apps.deployments.services.server_guard import ServerGuard
         from apps.deployments.services.spawning_service import SpawningService
 
         spawned = 0
         try:
             spawner = SpawningService()
             remaining = rec.scale_up_by
+            primary_server = self._resolve_primary_server()
+            is_remote_primary = bool(
+                primary_server is not None
+                and not getattr(primary_server, 'is_primary', True)
+            )
 
-            # Priority 1: local spawn — horizontal scaling replicates on the
-            # same server for low-latency inter-replica communication.
-            # Headroom is re-checked every iteration (not just at plan
-            # time) so concurrent workers and slow sequential spawns
-            # cannot overshoot max_replicas.
-            local_ok = True
-            while spawned < remaining and local_ok:
-                if not self._has_headroom():
-                    logger.info("Headroom exhausted for %s — stopping scale-up", self.service.name)
-                    break
-                replica = ServiceReplica.objects.create(
-                    service=self.service, node=None,
-                    spawn_reason=rec.reason, status='SPAWNING',
+            # Priority 1: scale on the service's own primary host first
+            # (Master if local, or its assigned ManagedServer if remote).
+            if not is_remote_primary:
+                got, headroom_left = self._spawn_loop_on_target(
+                    spawner, None, remaining, rec.reason
                 )
-                try:
-                    spawner.spawn_local(self.service, replica)
-                    spawned += 1
-                except Exception as exc:
-                    logger.warning("Local spawn failed for %s: %s", self.service.name, exc)
-                    try:
-                        spawner.destroy(replica)
-                    except Exception as exc:
-                        logger.debug("Destroy replica after local spawn failure: %s", exc)
-                    replica.status = 'DESTROYED'
-                    replica.save(update_fields=['status'])
-                    local_ok = False
+                spawned += got
+                if not headroom_left:
+                    if spawned > 0:
+                        self._record_scale()
+                        return ScaleResult(rec, applied=True, spawned=spawned)
+                    return ScaleResult(rec, applied=False, error='Headroom exhausted')
+            elif getattr(primary_server, 'status', 'ONLINE') != 'OFFLINE':
+                got, headroom_left = self._spawn_loop_on_target(
+                    spawner, primary_server, remaining, rec.reason
+                )
+                spawned += got
+                if not headroom_left:
+                    if spawned > 0:
+                        self._record_scale()
+                        return ScaleResult(rec, applied=True, spawned=spawned)
+                    return ScaleResult(rec, applied=False, error='Headroom exhausted')
 
             if spawned >= remaining:
                 self._record_scale()
                 return ScaleResult(rec, applied=True, spawned=spawned)
 
-            # Priority 2: remote nodes — spread replicas across different
-            # servers for fault isolation whenever local capacity is
-            # exhausted. vpa_enabled remains a placement preference
-            # (prefer_remote), never a gate: a service with VPA off
-            # still scales remotely when local spawns fail, unless
-            # SMSLY_AUTOSCALE_REMOTE_OVERFLOW=false explicitly disables
-            # overflow (fail-closed default is overflow ON for parity).
-            import os as _os
-            _overflow = _os.getenv("SMSLY_AUTOSCALE_REMOTE_OVERFLOW", "true").lower() in ("1", "true", "yes", "on")
-            if spawned < remaining and not getattr(self.service, 'vpa_enabled', False):
-                if not _overflow:
-                    logger.info("Local capacity exhausted for %s — remote overflow disabled by env", self.service.name)
-                    if spawned > 0:
-                        self._record_scale()
-                        return ScaleResult(rec, applied=True, spawned=spawned)
-                    return ScaleResult(rec, applied=False,
-                                       error='Local spawn failed and remote overflow is disabled')
-                logger.info("Local capacity exhausted for %s — trying remote nodes (VPA off, remote as overflow)", self.service.name)
+            # Priority 2: remote overflow nodes — spread replicas across
+            # healthy remote servers when primary capacity is exhausted.
+            _overflow = os.getenv("SMSLY_AUTOSCALE_REMOTE_OVERFLOW", "true").lower() in (
+                "1", "true", "yes", "on"
+            )
+            if spawned < remaining and not getattr(self.service, 'vpa_enabled', False) and not _overflow:
+                logger.info("Primary capacity exhausted for %s — remote overflow disabled by env", self.service.name)
+                if spawned > 0:
+                    self._record_scale()
+                    return ScaleResult(rec, applied=True, spawned=spawned)
+                return ScaleResult(rec, applied=False,
+                                   error='Primary spawn failed and remote overflow is disabled')
 
-            candidates = ManagedServer.objects.filter(
+            candidates_qs = ManagedServer.objects.filter(
                 status=ManagedServer.Status.ONLINE,
                 allow_user_workloads=True,
             ).exclude(is_primary=True)
+            if is_remote_primary:
+                candidates_qs = candidates_qs.exclude(id=primary_server.id)
 
-            if not candidates.exists():
-                logger.info("No remote nodes for vertical scaling %s", self.service.name)
+            candidates = [
+                n for n in candidates_qs
+                if ServerGuard.check_user_workload_allowed(n).get('ok', False)
+            ]
+            if not candidates:
+                logger.info("No remote overflow nodes available for %s", self.service.name)
                 if spawned > 0:
                     self._record_scale()
                     return ScaleResult(rec, applied=True, spawned=spawned)
@@ -272,8 +378,6 @@ class Reconciler:
 
             scorer = NodeScorer()
             scores = scorer.score(candidates)
-
-            from apps.deployments.services.node_scorer import _get_min_score
             min_score = _get_min_score()
             qualified = [(n, s, r) for n, s, r in scores if s >= min_score]
             fallback = [(n, s, r) for n, s, r in scores if 0 <= s < min_score]
@@ -291,7 +395,7 @@ class Reconciler:
 
             nodes_to_try = qualified + fallback
             if not qualified:
-                best_node, best_score, best_res = fallback[0]
+                best_node, best_score, _ = fallback[0]
                 logger.warning(
                     "All nodes below min_score=%d for %s — trying best "
                     "node %s (score=%.1f) as fallback",
@@ -302,36 +406,19 @@ class Reconciler:
             for node, score, resources in nodes_to_try:
                 if spawned >= remaining:
                     break
-                if not self._has_headroom():
-                    logger.info("Headroom exhausted for %s — stopping scale-up", self.service.name)
-                    break
-                replica = ServiceReplica.objects.create(
-                    service=self.service, node=node,
-                    spawn_reason=rec.reason, status='SPAWNING',
+                got, headroom_left = self._spawn_loop_on_target(
+                    spawner, node, remaining - spawned, rec.reason
                 )
-                try:
-                    spawner.spawn(self.service, node, replica)
-                    spawned += 1
+                if got > 0:
+                    spawned += got
                     logger.info(
-                        "Auto-scaled %s: spawned on %s (score=%.1f, "
+                        "Auto-scaled %s: spawned %d on %s (score=%.1f, "
                         "mem=%.0f%% cpu=%.0f%% disk=%.0f%%)",
-                        self.service.name, node.name, score,
+                        self.service.name, got, node.name, score,
                         resources['mem'], resources['cpu'], resources['disk'],
                     )
-                except Exception as exc:
-                    logger.warning(
-                        "Remote spawn failed for %s on %s (score=%.1f, "
-                        "mem=%.0f%% cpu=%.0f%% disk=%.0f%%): %s",
-                        self.service.name, node.name, score,
-                        resources['mem'], resources['cpu'], resources['disk'],
-                        exc,
-                    )
-                    try:
-                        spawner.destroy(replica)
-                    except Exception as exc:
-                        logger.debug("Destroy replica after remote spawn failure: %s", exc)
-                    replica.status = 'DESTROYED'
-                    replica.save(update_fields=['status'])
+                if not headroom_left:
+                    break
 
             if spawned > 0:
                 self._record_scale()
@@ -342,16 +429,72 @@ class Reconciler:
             return ScaleResult(rec, applied=False, error=str(exc))
 
     # ── Scale down ───────────────────────────────────────────────────────────
-    def _scale_down(self, rec: Recommendation) -> ScaleResult:
+    @transaction.atomic
+    def _reserve_draining_replicas(self, target: int) -> list:
+        """Atomically re-check min_replicas under row locks and mark replicas DRAINING."""
         from apps.autoscaler.models.replica import ServiceReplica
+        from apps.deployments.models.core import Service
+
+        locked = Service.objects.select_for_update().get(id=self.service.id)
+        self.service = locked
+        min_r = (
+            0 if getattr(locked, 'sablier_enabled', False) is True
+            else (locked.min_replicas or 0)
+        )
+        running_replicas = list(
+            ServiceReplica.objects.select_for_update().filter(
+                service=locked, status='RUNNING',
+            ).order_by('created_at')
+        )
+        removable = len(running_replicas) - min_r
+        if removable <= 0:
+            return []
+        to_drain = min(max(target, 1), removable)
+        replicas = running_replicas[:to_drain]
+        if not replicas:
+            return []
+        ServiceReplica.objects.filter(
+            id__in=[r.id for r in replicas]
+        ).update(status='DRAINING')
+        for r in replicas:
+            r.status = 'DRAINING'
+        return replicas
+
+    def _scale_down(self, rec: Recommendation) -> ScaleResult:
         from apps.deployments.services.spawning_service import SpawningService
         destroyed = 0
         target = max(rec.scale_down_by, 1)
         try:
             spawner = SpawningService()
-            replicas = ServiceReplica.objects.filter(
-                service=self.service, status='RUNNING',
-            ).order_by('created_at')[:target]
+            replicas = self._reserve_draining_replicas(target)
+            if not replicas:
+                return ScaleResult(rec, applied=False, error='No replicas to destroy')
+
+            # Record DRAINING entry timestamp so stuck-spawn tracking ages
+            # from drain start while in-flight requests drain before teardown.
+            now_ts = time.time()
+            for r in replicas:
+                with contextlib.suppress(Exception):
+                    django_cache.set(
+                        f"autoscale:transitional:{r.id}:DRAINING",
+                        now_ts,
+                        timeout=3600,
+                    )
+
+            # Remove draining remote overflow nodes from Master Traefik /
+            # Caddy before tearing down containers so new traffic drains away.
+            with contextlib.suppress(Exception):
+                from apps.deployments.services.spawning_service import (
+                    _sync_routing_after_replica_change,
+                )
+                _sync_routing_after_replica_change(self.service)
+
+            drain_s = 0.0 if getattr(settings, 'IS_TESTING', False) else max(
+                0.0, float(os.environ.get('SCALE_DOWN_DRAIN_SECONDS', '3'))
+            )
+            if drain_s > 0:
+                time.sleep(min(drain_s, 30.0))
+
             for replica in replicas:
                 try:
                     spawner.destroy(replica)

@@ -75,8 +75,8 @@ if command -v docker ; then
     # Caddy container runs as uid 1000 (nextjs user); chown the volume
     # root so the container can read/write its ACME state. Same pattern
     # already used for backups_data in ensure_infrastructure_permissions.
-    if docker volume inspect smsly-hosting_caddy_data ; then
-        docker run --rm -v smsly-hosting_caddy_data:/data alpine chown -R 1000:1000 /data  || true
+    if docker volume inspect smsly-hosting_caddy_data >/dev/null 2>&1; then
+        timeout 90 docker run --rm -v smsly-hosting_caddy_data:/data alpine chown -R 1000:1000 /data  || true
     fi
 fi
 
@@ -120,7 +120,8 @@ _regen_registry_tls() {
     mv "${_tmp_dir}/registry.key" "$INSTALL_DIR/certs/registry.key"
     mv "${_tmp_dir}/registry.crt" "$INSTALL_DIR/certs/registry.crt"
     rm -rf "$_tmp_dir"
-    chmod 644 "$INSTALL_DIR/certs/registry.crt" "$INSTALL_DIR/certs/registry.key"
+    chmod 644 "$INSTALL_DIR/certs/registry.crt"
+    chmod 600 "$INSTALL_DIR/certs/registry.key"
 }
 
 _registry_tls_ok() {
@@ -311,7 +312,7 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
         if command -v trivy ; then
             echo -e "${BLUE}  → Scanning built images for vulnerabilities...${NC}"
             for _trivy_img in backend frontend; do
-                _trivy_tag="smsly/${_trivy_img}:latest"
+                _trivy_tag="smsly-hosting-${_trivy_img}:latest"
                 if docker image inspect "$_trivy_tag" ; then
                     echo -e "${BLUE}    ↳ Scanning $_trivy_tag...${NC}"
                     trivy image --insecure --scanners vuln --severity CRITICAL,HIGH --exit-code 0 --no-progress "$_trivy_tag"  || echo -e "${YELLOW}    ⚠ $_trivy_tag scan reported warnings — review output above${NC}"
@@ -333,22 +334,33 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
         docker compose -f "$COMPOSE_FILE" logs --tail=120  || true
         exit "$DEPLOY_RC"
     fi
-    if is_node_mode && command -v docker >/dev/null 2>&1; then
-        # Node mode skips fresh_caddy, so newly created caddy_data/caddy_logs
-        # named volumes stay root-owned while caddy runs as uid 1000.
+    if command -v docker >/dev/null 2>&1; then
         _nv=""
         _caddy_fixed=false
-        for _nv in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)(caddy_data|caddy_logs)$' || true); do
+        _caddy_pat='(^|_)(caddy_data|caddy_logs)$'
+        if is_node_mode; then
+            _caddy_pat='(^|_)(caddy_data|caddy_logs|caddy_config)$'
+        fi
+        for _nv in $(docker volume ls -q 2>/dev/null | grep -E "$_caddy_pat" || true); do
             timeout 60 docker run --rm -v "${_nv}:/data" alpine chown -R 1000:1000 /data >/dev/null 2>&1 && _caddy_fixed=true || true
         done
-        if [ "$_caddy_fixed" = "true" ]; then
-            docker compose -f "$COMPOSE_FILE" restart caddy >/dev/null 2>&1 || true
+        if is_node_mode && [ "$_caddy_fixed" = "true" ]; then
+            timeout 60 docker compose -f "$COMPOSE_FILE" restart caddy >/dev/null 2>&1 || true
         fi
-        unset _nv _caddy_fixed
+        for _nv in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)postgres-archive$' || true); do
+            timeout 60 docker run --rm -v "${_nv}:/data" alpine chown -R 70:70 /data >/dev/null 2>&1 || true
+        done
+        for _nv in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)verdaccio_data$' || true); do
+            timeout 60 docker run --rm -v "${_nv}:/data" alpine chown -R 10001:65533 /data >/dev/null 2>&1 || true
+        done
+        unset _nv _caddy_fixed _caddy_pat
     fi
+    _deploy_tier="${STACK_TIER:-}"
+    [ -n "$_deploy_tier" ] || _deploy_tier="$(env_get_value "$INSTALL_DIR/.env" "STACK_TIER" || true)"
+    [ -n "$_deploy_tier" ] || _deploy_tier="full"
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         sync_agent_lite_rabbitmq_password
-    else
+    elif [ "$_deploy_tier" != "lite" ]; then
         echo -e "${BLUE}  → Deploying Observability Stack...${NC}"
         # Ensure entrypoint.sh has execute permissions (git may not preserve +x)
         chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh  || true
@@ -363,18 +375,18 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
             docker compose -f infrastructure/docker/docker-compose.observability.yml up -d --pull always || \
                 echo -e "${YELLOW}  ⚠ Observability stack start failed (non-fatal)${NC}"
         fi
+    else
+        echo -e "${BLUE}  → Skipping Observability Stack (STACK_TIER=lite)${NC}"
     fi
     # ─── Build-cache services (apt-cacher-ng, verdaccio) ─────────────
-    # These are profile-gated in compose (full/build-cache) so a plain
-    # `up` never starts them — start explicitly by name (profile-proof,
-    # no --remove-orphans). They provide package caches on the platform
-    # network for builds configured to use a proxy; builds without
-    # proxy settings are unaffected. Non-fatal by design.
-    if [ "$MODE_AGENT_LITE" != "true" ]; then
+    # These are profile-gated in compose (full) so a plain `up` never
+    # starts them on lite/medium hosts — start explicitly on full only.
+    if [ "$MODE_AGENT_LITE" != "true" ] && [ "$_deploy_tier" = "full" ]; then
         echo -e "${BLUE}  → Starting build-cache services (apt-cacher, verdaccio)...${NC}"
-        timeout -k 5 240 docker compose -f "$COMPOSE_FILE" up -d apt-cacher verdaccio 2>&1 | tail -3 || \
+        timeout -k 5 240 docker compose -f "$COMPOSE_FILE" --profile full up -d apt-cacher verdaccio 2>&1 | tail -3 || \
             echo -e "${YELLOW}  ⚠ Build-cache services start failed (non-fatal)${NC}"
     fi
+    unset _deploy_tier
     # ─── Egress mirror (Alpine CDN rewrite for blocked networks) ───
     # Nixpacks app builds run `apk add` against dl-cdn.alpinelinux.org
     # with no mirror flag; on networks where that CDN is unreachable

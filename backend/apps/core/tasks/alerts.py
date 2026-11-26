@@ -68,6 +68,9 @@ def _dispatch_notification(
 ) -> dict[str, Any]:
     from apps.notifications.tasks import dispatch_notification
 
+    if not owner or not getattr(owner, "id", None):
+        return {"status": "skipped", "reason": "no_owner"}
+
     if channel_flags is None:
         channel_flags = {
             "in_app": _service_flag(env_map, "JULES_NOTIFY_IN_APP", default=True),
@@ -112,7 +115,10 @@ def _dispatch_notification(
 
 def _dispatch_failure_alert(deployment, error_message: str) -> dict[str, Any]:
     service = deployment.service
-    owner = service.owner
+    owner = getattr(service, "owner", None)
+    if not owner:
+        logger.warning("_dispatch_failure_alert: service %s has no owner", getattr(service, "id", "?"))
+        return {"status": "skipped", "reason": "no_owner"}
     env_map = _load_service_env(service)
 
     if not _service_flag(env_map, "JULES_RUNTIME_WATCH", default=True):
@@ -278,7 +284,7 @@ def notify_deployment_success(self, deployment_id: str) -> dict[str, Any]:
             f"SMSLY Hosting\n"
             f"Service: {service_name}\n"
             f"Status: DEPLOYED\n"
-            f"Commit: {deployment.commit_hash[:7]}"
+            f"Commit: {(deployment.commit_hash or '')[:7]}"
         )
 
         result = smsly_client.send_sms_sync(

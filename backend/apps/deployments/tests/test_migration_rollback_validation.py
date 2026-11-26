@@ -53,15 +53,23 @@ class MigrationRollbackValidationTests(TestCase):
         self.assertFalse(result)
         mock_adapter.executor.run.assert_not_called()
 
+    @patch("apps.deployments.services.safedeploy.migration_environment.build_migration_environment")
+    @patch("apps.deployments.services.safedeploy.deployment_pipeline._get_service_db_url", return_value="postgres://u:p@db:5432/app")
+    @patch("apps.cloud.services.git_manager.GitManager.clone_repo", return_value="/tmp/fake-repo")
+    @patch("apps.deployments.utils.get_github_oauth_token_for_user", return_value=None)
     @patch("apps.deployments.services.safedeploy.django_adapter.DjangoAdapter")
     @patch("apps.deployments.services.safedeploy.deployment_pipeline.DeploymentArtifact")
-    def test_valid_inputs_are_passed_through(self, mock_artifact, mock_adapter_cls):
+    def test_valid_inputs_are_passed_through(
+        self, mock_artifact, mock_adapter_cls, _mock_token, _mock_clone, _mock_db, mock_mig_env
+    ):
+        mock_mig_env.return_value = MagicMock(ok=True, python_bin="python", env={})
         mock_adapter = MagicMock()
         mock_adapter.detect.return_value = True
         mock_adapter.executor.run.return_value = (0, "", "")
         mock_adapter_cls.return_value = mock_adapter
 
         deployment = self._make_deployment()
+        deployment.service.repository_url = "https://github.com/org/repo"
         result = self.pipeline._attempt_migration_rollback(
             deployment,
             {"myapp": "0001_initial"},

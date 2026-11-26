@@ -21,8 +21,13 @@ Rules enforced here:
 from __future__ import annotations
 
 import logging
+import re
 
 logger = logging.getLogger(__name__)
+
+_ROUTER_RULE_RE = re.compile(r"^traefik\.http\.routers\.([^.]+)\.rule$")
+_SERVICE_KEY_RE = re.compile(r"^traefik\.http\.services\.([^.]+)\.")
+_TRANSIENT_CONTAINER_TAGS = ("-rollback-", "-green-", "-promoting-")
 
 
 class ReplicaParityError(RuntimeError):
@@ -45,10 +50,117 @@ def parse_env_list(env_list) -> dict:
     return env
 
 
-def traefik_service_block(labels: dict, service_name: str) -> dict:
+def resolve_traefik_service_name(labels: dict, service_name: str) -> str:
+    """Discover the effective Traefik service key defined on a container.
+
+    Handles exact canonical names (``<svc>``), blue-green promoted slots
+    (``<svc>-bg-<hex>``), sanitized ``.``/``_`` names (``my-app``), and
+    ``generate_traefik_labels`` suffixed names (``<router>-service``).
+    Falls back to *service_name* when no matching Traefik service exists.
+    """
+    labels = labels or {}
+    if not service_name:
+        return ""
+    exact_prefix = f"traefik.http.services.{service_name}."
+    if any(isinstance(k, str) and k.startswith(exact_prefix) for k in labels):
+        return service_name
+
+    sanitized_dash = service_name.replace(".", "-").replace("_", "-")
+    sanitized_under = service_name.replace("-", "_").replace(".", "_")
+
+    # 1. Router -> service binding on the live container (ignoring internal routers).
+    router_candidates: list[tuple[int, str]] = []
+    for key, val in labels.items():
+        if not isinstance(key, str):
+            continue
+        match = _ROUTER_RULE_RE.match(key)
+        if not match:
+            continue
+        rname = match.group(1)
+        rule = str(val or "").strip()
+        if not rule or rname.endswith("-internal") or rname.endswith("-staging") or "disabled.localhost" in rule:
+            continue
+        svc_ref = str(labels.get(f"traefik.http.routers.{rname}.service") or rname).strip()
+        if not svc_ref or not any(isinstance(k, str) and k.startswith(f"traefik.http.services.{svc_ref}.") for k in labels):
+            continue
+        priority = 2
+        if rname == sanitized_dash or rname.startswith(f"{sanitized_dash}-bg-") or rname == f"{sanitized_under}":
+            priority = 0
+        elif sanitized_dash in rname or sanitized_under in rname:
+            priority = 1
+        router_candidates.append((priority, svc_ref))
+    if router_candidates:
+        router_candidates.sort(key=lambda item: item[0])
+        return router_candidates[0][1]
+
+    # 2. Direct service label scan (sanitized, -bg-<slot>, or -service forms).
+    defined_services: list[str] = []
+    for key in labels:
+        if not isinstance(key, str):
+            continue
+        match = _SERVICE_KEY_RE.match(key)
+        if match:
+            svc_key = match.group(1)
+            if svc_key not in defined_services and not svc_key.endswith("-internal"):
+                defined_services.append(svc_key)
+
+    preferred_names = (
+        sanitized_dash,
+        f"{sanitized_dash}-service",
+        f"{service_name}-service",
+        sanitized_under,
+        f"{sanitized_under}-service",
+    )
+    for cand in preferred_names:
+        if cand in defined_services:
+            return cand
+    for svc_key in defined_services:
+        if svc_key.startswith(f"{sanitized_dash}-bg-") or svc_key.startswith(f"{service_name}-bg-"):
+            return svc_key
+    if len(defined_services) == 1:
+        return defined_services[0]
+    return service_name
+
+
+def traefik_service_block(
+    labels: dict,
+    service_name: str,
+    resolved_service_name: str | None = None,
+) -> dict:
     """Extract the ``traefik.http.services.<svc>.*`` label block."""
-    prefix = f"traefik.http.services.{service_name}."
-    return {k: v for k, v in (labels or {}).items() if k.startswith(prefix)}
+    target = resolved_service_name or resolve_traefik_service_name(labels, service_name)
+    if not target:
+        return {}
+    prefix = f"traefik.http.services.{target}."
+    return {k: v for k, v in (labels or {}).items() if isinstance(k, str) and k.startswith(prefix)}
+
+
+def replica_sablier_labels(service, ref_labels: dict | None = None) -> dict[str, str]:
+    """Return Sablier group/allow-nonrunning labels for a replica when enrolled.
+
+    Checks both the live reference container labels and the Service model
+    (guarding against MagicMock attributes in unit tests).
+    """
+    ref_labels = ref_labels or {}
+    ref_enrolled = str(ref_labels.get("sablier.enable", "")).strip().lower() == "true"
+    svc_sablier = getattr(service, "sablier_enabled", False) is True
+    if not ref_enrolled and not svc_sablier:
+        return {}
+    if not ref_enrolled:
+        try:
+            from apps.deployments.services.traefik_labels import service_supports_sablier
+            if not service_supports_sablier(service)[0]:
+                return {}
+        except Exception:
+            pass
+    group = str(ref_labels.get("sablier.group") or getattr(service, "name", "") or "").strip()
+    if not group:
+        return {}
+    return {
+        "sablier.enable": "true",
+        "sablier.group": group,
+        "traefik.docker.allownonrunning": "true",
+    }
 
 
 def sanitize_db_env(db_env: dict) -> dict:
@@ -111,15 +223,28 @@ def find_service_containers(client, service_name: str) -> list:
     return candidates
 
 
-def live_service_blocks(client, service_name: str) -> list:
-    """Traefik service blocks of every live service container (best effort)."""
+def live_service_blocks(
+    client,
+    service_name: str,
+    target_service_name: str | None = None,
+) -> list:
+    """Traefik service blocks of every live active service container (best effort)."""
     blocks = []
     for c in find_service_containers(client, service_name):
+        cname = str(getattr(c, "name", "") or "")
+        if any(tag in cname for tag in _TRANSIENT_CONTAINER_TAGS):
+            continue
         try:
             labels = (c.attrs or {}).get("Config", {}).get("Labels", {}) or {}
         except Exception:
             continue
-        blocks.append(traefik_service_block(labels, service_name))
+        blocks.append(
+            traefik_service_block(
+                labels,
+                service_name,
+                resolved_service_name=target_service_name,
+            )
+        )
     return blocks
 
 
@@ -144,23 +269,37 @@ def find_reference_container(client, service_name: str):
     return None
 
 
+def reference_details(client, service_name: str) -> tuple[dict, dict, dict, str]:
+    """Return ``(env, service_block, raw_labels, resolved_traefik_service_name)``.
+
+    Uses the live primary/sibling container so replicas mirror promoted
+    ``-bg-<slot>`` or sanitized Traefik service blocks identically.
+    """
+    ref = find_reference_container(client, service_name)
+    if ref is None:
+        return {}, {}, {}, service_name.replace(".", "-").replace("_", "-")
+    try:
+        attrs = ref.attrs or {}
+    except Exception:
+        return {}, {}, {}, service_name.replace(".", "-").replace("_", "-")
+    config = attrs.get("Config", {}) or {}
+    raw_labels = config.get("Labels", {}) or {}
+    resolved = resolve_traefik_service_name(raw_labels, service_name)
+    return (
+        parse_env_list(config.get("Env", []) or []),
+        traefik_service_block(raw_labels, service_name, resolved_service_name=resolved),
+        dict(raw_labels),
+        resolved,
+    )
+
+
 def reference_config(client, service_name: str) -> tuple[dict, dict]:
     """Return ``(env, traefik_service_labels)`` from the live reference.
 
     ``({}, {})`` when no reference container exists.
     """
-    ref = find_reference_container(client, service_name)
-    if ref is None:
-        return {}, {}
-    try:
-        attrs = ref.attrs or {}
-    except Exception:
-        return {}, {}
-    config = attrs.get("Config", {}) or {}
-    return (
-        parse_env_list(config.get("Env", []) or []),
-        traefik_service_block(config.get("Labels", {}) or {}, service_name),
-    )
+    env, block, _labels, _resolved = reference_details(client, service_name)
+    return env, block
 
 
 def assert_block_compatible(reference_blocks: list, new_block: dict,

@@ -27,7 +27,7 @@ class GitWebhookExemptionTests(SimpleTestCase):
         request.user = mock.Mock(is_authenticated=False)
         return self.middleware._should_verify_signature(request)
 
-    @override_settings(DEBUG=False)
+    @override_settings(DEBUG=False, SMSLY_DISABLE_SIGNATURE_CHECK=False)
     def test_github_webhook_path_is_exempt(self):
         self.assertFalse(
             self._is_enforced("/api/v1/webhooks/github/"),
@@ -36,22 +36,22 @@ class GitWebhookExemptionTests(SimpleTestCase):
             "X-Hub-Signature-256 inside the view.",
         )
 
-    @override_settings(DEBUG=False)
+    @override_settings(DEBUG=False, SMSLY_DISABLE_SIGNATURE_CHECK=False)
     def test_gitlab_webhook_path_is_exempt(self):
         self.assertFalse(self._is_enforced("/api/v1/services/webhook/gitlab/"))
 
-    @override_settings(DEBUG=False)
+    @override_settings(DEBUG=False, SMSLY_DISABLE_SIGNATURE_CHECK=False)
     def test_bitbucket_webhook_path_is_exempt(self):
         self.assertFalse(self._is_enforced("/api/v1/services/webhook/bitbucket/"))
 
-    @override_settings(DEBUG=False)
+    @override_settings(DEBUG=False, SMSLY_DISABLE_SIGNATURE_CHECK=False)
     def test_unrelated_api_paths_still_enforced(self):
         # The exemption must be narrowly scoped to the webhook receiver —
         # generic API routes still require the gateway/zero-trust checks.
         self.assertTrue(self._is_enforced("/api/v1/services/"))
         self.assertTrue(self._is_enforced("/api/v1/deployments/"))
 
-    @override_settings(DEBUG=False)
+    @override_settings(DEBUG=False, SMSLY_DISABLE_SIGNATURE_CHECK=False)
     def test_webhook_subpaths_not_open_endpoints(self):
         # The prefix covers only /api/v1/services/webhook/* — adjacent
         # service routes are NOT exempt.

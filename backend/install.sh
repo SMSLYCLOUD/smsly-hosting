@@ -36,11 +36,37 @@ RESUME_MODE=false
 COMPOSE_FILE="${COMPOSE_FILE:-/opt/smsly-hosting/docker-compose.prod.yml}"
 NO_SCREEN="${NO_SCREEN:-false}"
 
-# Read and export all variables from .env early if it exists
+# Safe line-by-line .env reader (no shell execution; lib/env.sh is not sourced yet)
+_install_load_env_safe() {
+    local env_file="$1"
+    [ -f "$env_file" ] || return 0
+    local _line="" _key="" _val=""
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        _line="${_line%$'\r'}"
+        [[ -z "$_line" || "$_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$_line" == export[[:space:]]* ]] && _line="${_line#export }"
+        [[ "$_line" == *=* ]] || continue
+        _key="${_line%%=*}"
+        _key="${_key#"${_key%%[![:space:]]*}"}"
+        _key="${_key%"${_key##*[![:space:]]}"}"
+        [[ "$_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        _val="${_line#*=}"
+        if [[ "$_val" == \"*\" && "$_val" == *\" && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+            _val="${_val//\\\"/\"}"
+            _val="${_val//\\\$/\$}"
+            _val="${_val//\\\`/\`}"
+            _val="${_val//\\\\/\\}"
+        elif [[ "$_val" == \'*\' && "$_val" == *\' && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+        fi
+        export "$_key=$_val"
+    done < "$env_file"
+}
+
+# Read and export all variables from .env early if it exists (without shell eval)
 if [ -f "/opt/smsly-hosting/.env" ]; then
-    set -a
-    source /opt/smsly-hosting/.env
-    set +a
+    _install_load_env_safe "/opt/smsly-hosting/.env"
     case "${NODE_TYPE:-}" in
         agent-lite|agent) _DETECTED_INSTALL_MODE="agent-lite" ;;
         node) _DETECTED_INSTALL_MODE="node" ;;
@@ -359,7 +385,24 @@ apply_agent_lite_env_overrides() {
 
     [ "$MODE_AGENT_LITE" = "true" ] || return 0
 
-    # --- Self-Healing: Recovery from existing .env if env vars are missing ---
+    # --- Self-Healing: Recovery from .agent_lite_seed and existing .env ---
+    local _seed_var=""
+    for _seed_var in \
+        MASTER_IP MASTER_MESH_IP MASTER_DB_USER MASTER_DB_PASSWORD \
+        MASTER_MQ_PASSWORD MASTER_REDIS_PASSWORD MASTER_GATEWAY_SECRET \
+        MASTER_BACKUP_ENCRYPTION_KEY MASTER_BACKUP_REQUIRE_ENCRYPTION \
+        MASTER_GITHUB_WEBHOOK_SECRET MASTER_AUTOSCALER_API_TOKEN \
+        MASTER_FRP_AUTH_TOKEN MASTER_PGCAT_ADMIN_PASSWORD \
+        MASTER_EDGE_JWT_SECRET MASTER_CADDY_ASK_SECRET \
+        SMSLY_NODE_ID SMSLY_NODE_QUEUE; do
+        if [ -z "${!_seed_var:-}" ] && [ -f "$seed_file" ]; then
+            local _seed_val=""
+            _seed_val="$(env_get_value "$seed_file" "$_seed_var" || true)"
+            if [ -n "$_seed_val" ]; then
+                printf -v "$_seed_var" '%s' "$_seed_val"
+            fi
+        fi
+    done
     if [ -z "${MASTER_IP:-}" ] && [ -f "$env_file" ]; then
         MASTER_IP="$(env_get_value "$env_file" "MASTER_IP")"
     fi
@@ -448,6 +491,8 @@ MASTER_GITHUB_WEBHOOK_SECRET="${MASTER_GITHUB_WEBHOOK_SECRET:-}"
 MASTER_AUTOSCALER_API_TOKEN="${MASTER_AUTOSCALER_API_TOKEN:-}"
 MASTER_FRP_AUTH_TOKEN="${MASTER_FRP_AUTH_TOKEN:-}"
 MASTER_PGCAT_ADMIN_PASSWORD="${MASTER_PGCAT_ADMIN_PASSWORD:-}"
+MASTER_EDGE_JWT_SECRET="${MASTER_EDGE_JWT_SECRET:-}"
+MASTER_CADDY_ASK_SECRET="${MASTER_CADDY_ASK_SECRET:-}"
 SMSLY_NODE_ID="$SMSLY_NODE_ID"
 SMSLY_NODE_QUEUE="$SMSLY_NODE_QUEUE"
 EOF
@@ -506,6 +551,8 @@ EOF
         "|AUTOSCALER_API_TOKEN:master's autoscaler-service bearer token"
         "|FRP_AUTH_TOKEN:master's FRP tunnel relay authentication token"
         "|PGCAT_ADMIN_PASSWORD:master's PgCat administration password"
+        "|EDGE_JWT_SECRET:master's Edge JWT signing secret for Traefik forward-auth"
+        "|CADDY_ASK_SECRET:master's Caddy on_demand_tls ask secret"
     )
     local _entry
     for _entry in "${_master_secrets_to_sync[@]}"; do
@@ -514,12 +561,15 @@ EOF
         # on ":". (Previously only the first of six secrets synced.)
         local _tmp="${_entry#|}"
         local _key="${_tmp%%:*}"
-        # Read the master secret from the master's .env file.
-        # MASTER_ENV_<KEY> env vars are NOT exported by the provisioner;
-        # secrets are written to a temporary file and read via env_get_value.
+        # Read from MASTER_ENV_FILE first, falling back to MASTER_<KEY>
+        # (including values recovered from .agent_lite_seed).
         local _master_val=""
-        if [ -f "$MASTER_ENV_FILE" ]; then
+        if [ -n "${MASTER_ENV_FILE:-}" ] && [ -f "$MASTER_ENV_FILE" ]; then
             _master_val="$(env_get_value "$MASTER_ENV_FILE" "$_key"  || true)"
+        fi
+        if [ -z "$_master_val" ]; then
+            local _master_var="MASTER_${_key}"
+            _master_val="${!_master_var:-}"
         fi
         if [ -n "$_master_val" ]; then
             env_set_value "$env_file" "$_key" "$_master_val"
@@ -577,6 +627,215 @@ NC='\033[0m'
 export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
 export NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}"
 # --- end lib/logging.sh ---
+# --- lib/env.sh ---
+gen_hex_secret() {
+    local bytes="${1:-16}"
+    python3 -c "import secrets; print(secrets.token_hex(${bytes}))"  || openssl rand -hex "$bytes"
+}
+
+env_load_file_safe() {
+    local env_file="${1:-}"
+    [ -f "$env_file" ] || return 0
+    local _line="" _key="" _val=""
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        _line="${_line%$'\r'}"
+        [[ -z "$_line" || "$_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$_line" == export[[:space:]]* ]] && _line="${_line#export }"
+        [[ "$_line" == *=* ]] || continue
+        _key="${_line%%=*}"
+        _key="${_key#"${_key%%[![:space:]]*}"}"
+        _key="${_key%"${_key##*[![:space:]]}"}"
+        [[ "$_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        _val="${_line#*=}"
+        if [[ "$_val" == \"*\" && "$_val" == *\" && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+            _val="${_val//\\\"/\"}"
+            _val="${_val//\\\$/\$}"
+            _val="${_val//\\\`/\`}"
+            _val="${_val//\\\\/\\}"
+        elif [[ "$_val" == \'*\' && "$_val" == *\' && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+        fi
+        export "$_key=$_val"
+    done < "$env_file"
+}
+
+env_get_value() {
+    local env_file="$1"
+    local var_name="$2"
+    grep -m1 "^${var_name}=" "$env_file"  | cut -d= -f2- | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//' || true
+}
+
+env_set_value() {
+    local env_file="$1"
+    local var_name="$2"
+    local var_value="$3"
+    python3 - "$env_file" "$var_name" "$var_value" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+prefix = f"{key}="
+
+def _format_val(val: str) -> str:
+    if val == "":
+        return ""
+    if any(c.isspace() or c in '#$`\\"\'&;|<>()*?[]~!' for c in val):
+        escaped = val.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
+        return f'"{escaped}"'
+    return val
+
+formatted = _format_val(value)
+
+if not env_path.exists():
+    env_path.write_text(f"{key}={formatted}\n")
+    sys.exit(0)
+
+lines = env_path.read_text().splitlines()
+updated = []
+found = False
+
+for line in lines:
+    if line.startswith(prefix):
+        if not found:
+            updated.append(f"{key}={formatted}")
+            found = True
+        # Skip any subsequent duplicates
+        continue
+    updated.append(line)
+
+if not found:
+    updated.append(f"{key}={formatted}")
+
+env_path.write_text("\n".join(updated) + "\n")
+PY
+}
+
+sanitize_node_identifier() {
+    local value="${1:-}"
+    value="$(printf '%s' "$value" | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+    if [ -z "$value" ]; then
+        value="$(hostname  | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+    fi
+    [ -n "$value" ] || value="agent"
+    printf '%s' "$value"
+}
+
+env_append_csv_values() {
+    local env_file="$1"
+    local var_name="$2"
+    shift 2
+
+    python3 - "$env_file" "$var_name" "$@" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+requested = [value.strip() for value in sys.argv[3:] if value.strip()]
+prefix = f"{key}="
+
+lines = env_path.read_text().splitlines() if env_path.exists() else []
+updated = []
+found = False
+changed = False
+
+for line in lines:
+    if line.startswith(prefix):
+        if not found:
+            values = [value.strip() for value in line[len(prefix):].split(",") if value.strip()]
+            seen = {value.lower() for value in values}
+            for value in requested:
+                if value.lower() not in seen:
+                    values.append(value)
+                    seen.add(value.lower())
+                    changed = True
+            updated.append(f"{key}={','.join(values)}")
+            found = True
+        else:
+            changed = True
+        continue
+    updated.append(line)
+
+if not found:
+    updated.append(f"{key}={','.join(requested)}")
+    changed = True
+
+if changed:
+    env_path.write_text("\n".join(updated) + "\n")
+
+print("changed" if changed else "unchanged")
+PY
+}
+
+sync_env_domain_allowlists() {
+    local env_file="$1"
+    local domain="${2:-}"
+    local public_ip="${3:-}"
+    local changed=false
+    local result=""
+    local allowed_hosts=("localhost" "127.0.0.1" "backend" "smsly-hosting-backend-1")
+    local csrf_origins=("http://localhost:8090")
+    local cors_origins=("http://localhost:8090")
+
+    [ -f "$env_file" ] || return 0
+
+    [ -n "$domain" ] || domain="$(env_get_value "$env_file" "DOMAIN")"
+    [ -n "$public_ip" ] || public_ip="$(env_get_value "$env_file" "PUBLIC_IP")"
+
+    if [ -n "$domain" ]; then
+        allowed_hosts+=("$domain")
+        csrf_origins+=("https://${domain}" "http://${domain}")
+        cors_origins+=("https://${domain}" "http://${domain}")
+    fi
+
+    if [ -n "$public_ip" ]; then
+        allowed_hosts+=("$public_ip")
+        csrf_origins+=("http://${public_ip}:8090" "http://${public_ip}")
+        cors_origins+=("http://${public_ip}:8090" "http://${public_ip}")
+    fi
+
+    # Automatically add all node IPs (including WireGuard VPN mesh IPs like 10.100.x.x)
+    local current_ips
+    current_ips="$(hostname -I  | tr -s ' ' '\n' | grep -v '^$' || true)"
+    if [ -n "$current_ips" ]; then
+        for ip in $current_ips; do
+            allowed_hosts+=("$ip")
+            csrf_origins+=("http://${ip}:8090" "http://${ip}" "https://${ip}")
+            cors_origins+=("http://${ip}:8090" "http://${ip}" "https://${ip}")
+        done
+    fi
+
+    result="$(env_append_csv_values "$env_file" "ALLOWED_HOSTS" "${allowed_hosts[@]}")"
+    [ "$result" = "changed" ] && changed=true
+    result="$(env_append_csv_values "$env_file" "CSRF_TRUSTED_ORIGINS" "${csrf_origins[@]}")"
+    [ "$result" = "changed" ] && changed=true
+    result="$(env_append_csv_values "$env_file" "CORS_ALLOWED_ORIGINS" "${cors_origins[@]}")"
+    [ "$result" = "changed" ] && changed=true
+
+    if [ "$changed" = true ]; then
+        echo -e "${GREEN}  ✓ Synced domain allowlists in .env${NC}"
+    fi
+}
+
+env_ensure_var() {
+    local env_file="$1"
+    local var_name="$2"
+    local var_value="$3"
+    local var_comment="${4:-}"
+    local current_val
+    current_val="$(env_get_value "$env_file" "$var_name")"
+
+    if [ -z "$current_val" ]; then
+        echo -e "${BLUE}  -> Setting $var_name in .env${NC}"
+        [ -n "$var_comment" ] && ! grep -q "# $var_comment" "$env_file"  && echo "# $var_comment" >> "$env_file"
+        env_set_value "$env_file" "$var_name" "$var_value"
+        echo -e "${GREEN}  OK $var_name set${NC}"
+    fi
+}
+# --- end lib/env.sh ---
 # --- lib/validation.sh ---
 is_valid_ipv4() {
     local ip="$1"
@@ -734,7 +993,13 @@ configure_docker_mirror() {
         local new
         new="$(cat /etc/docker/daemon.json  || echo '')"
         if [ "$prev" != "$new" ]; then
-            systemctl restart docker || true
+            local _smsly_ctrs=0
+            _smsly_ctrs="$(docker ps -q --filter "name=smsly-" 2>/dev/null | wc -l || echo 0)"
+            if [ "${_smsly_ctrs:-0}" -eq 0 ]; then
+                timeout 120 systemctl restart docker || true
+            else
+                echo -e "${YELLOW}  ⚠ Docker daemon config changed but $_smsly_ctrs SMSLY containers are running — deferring restart${NC}"
+            fi
         fi
     fi
 
@@ -1035,13 +1300,29 @@ ensure_infrastructure_permissions() {
     [ -f "$coredns_config_dir/mesh.hosts" ] && chmod 664 "$coredns_config_dir/mesh.hosts" || true
 
     if command -v docker ; then
-        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data|caddy_logs)$')"
+        local _vol_pattern='(^|_)(backups_data|caddy_data|caddy_logs)$'
+        if is_node_mode; then
+            _vol_pattern='(^|_)(backups_data|caddy_data|caddy_logs|caddy_config)$'
+        fi
+        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E "$_vol_pattern" || true)"
         for vol in ${_vol_names:-backups_data}; do
             if docker volume inspect "$vol" >/dev/null 2>&1; then
                 echo -e "${BLUE}     ↳ Setting permissions for volume: $vol...${NC}"
                 timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             else
                 echo -e "${YELLOW}     ⚠ $vol volume not found — skipping chown${NC}"
+            fi
+        done
+        for vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)postgres-archive$' || true); do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
+                echo -e "${BLUE}     ↳ Setting permissions for volume: $vol (70:70)...${NC}"
+                timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 70:70 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
+            fi
+        done
+        for vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)verdaccio_data$' || true); do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
+                echo -e "${BLUE}     ↳ Setting permissions for volume: $vol (10001:65533)...${NC}"
+                timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 10001:65533 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             fi
         done
     fi
@@ -1497,11 +1778,18 @@ refresh_runtime_services() {
         reload_container_caddy  || true
     fi
 
-    if [ "$MODE_AGENT_LITE" != "true" ]; then
+    local _refresh_tier="${STACK_TIER:-}"
+    if [ -z "$_refresh_tier" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        _refresh_tier="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "STACK_TIER" || true)"
+    fi
+    [ -n "$_refresh_tier" ] || _refresh_tier="full"
+    if [ "$MODE_AGENT_LITE" != "true" ] && [ "$_refresh_tier" != "lite" ]; then
         echo -e "${BLUE}  → Refreshing Observability Stack...${NC}"
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
-            docker compose -f infrastructure/docker/docker-compose.observability.yml pull || echo -e "${YELLOW}    ⚠ Observability pull failed${NC}"
-            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d || echo -e "${YELLOW}    ⚠ Observability up failed${NC}"
+            local _obs_env_args=()
+            [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && _obs_env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
+            timeout 300 docker compose "${_obs_env_args[@]}" -f infrastructure/docker/docker-compose.observability.yml pull || echo -e "${YELLOW}    ⚠ Observability pull failed${NC}"
+            timeout 300 docker compose "${_obs_env_args[@]}" -f infrastructure/docker/docker-compose.observability.yml up -d || echo -e "${YELLOW}    ⚠ Observability up failed${NC}"
             for obs_ctr in smsly-loki smsly-promtail smsly-prometheus smsly-cadvisor smsly-node-exporter smsly-grafana; do
                 i=0
                 while [ $i -lt 30 ]; do
@@ -2018,7 +2306,27 @@ ensure_compose_profiles() {
             return 0
         fi
     fi
-    export COMPOSE_PROFILES="local-ha,medium,full"
+    local tier="${STACK_TIER:-}"
+    if [ -z "$tier" ] && [ -f "$env_file" ]; then
+        tier="$(grep -E '^STACK_TIER=' "$env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]')"
+    fi
+    if [ -z "$tier" ]; then
+        local ram_mb=""
+        ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+        [ -n "$ram_mb" ] || ram_mb=8192
+        if [ "$ram_mb" -lt 6144 ]; then
+            tier="lite"
+        elif [ "$ram_mb" -lt 12288 ]; then
+            tier="medium"
+        else
+            tier="full"
+        fi
+    fi
+    case "$tier" in
+        lite)   export COMPOSE_PROFILES="local-ha" ;;
+        medium) export COMPOSE_PROFILES="local-ha,local-ha-replica,redis-ha,medium" ;;
+        *)      export COMPOSE_PROFILES="local-ha,local-ha-replica,redis-ha,medium,full,appsec" ;;
+    esac
 }
 
 acquire_install_lock() {
@@ -2083,7 +2391,7 @@ get_migration_database_alias() {
 
 diagnose_migration_locks() {
     local env_file="${INSTALL_DIR:-.}/.env"
-    [ -f "$env_file" ] && source "$env_file"  || true
+    env_load_file_safe "$env_file"
 
     echo -e "${YELLOW}  -> PostgreSQL activity snapshot (lock diagnosis):${NC}"
     timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
@@ -2227,9 +2535,8 @@ EOF
 reload_container_caddy() {
     should_manage_caddy || return 0
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    if command -v docker  && docker compose -f "$compose_f" ps -q caddy  | grep -q .; then
+    if command -v docker >/dev/null 2>&1 && docker compose -f "$compose_f" ps -q caddy  | grep -q .; then
         timeout -k 5 20 docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile < /dev/null || \
-            timeout -k 5 20 docker compose -f "$compose_f" restart caddy || \
             echo -e "${YELLOW}    ⚠ Caddy reload failed${NC}"
     fi
 }
@@ -2429,15 +2736,128 @@ sync_agent_lite_rabbitmq_password() {
 
 ensure_security_tools() {
     export PATH="/usr/local/bin:$PATH"
-    if ! command -v trivy  && [ ! -x "/usr/local/bin/trivy" ]; then
-        echo -e "${BLUE}  → Installing Trivy vulnerability scanner...${NC}"
-        curl -sfL --connect-timeout 15 --max-time 120 https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin  || true
+    if ! declare -F _harden_log >/dev/null 2>&1; then
+        _harden_log() {
+            local level="$1"; shift
+            case "$level" in
+                ok)   echo -e "${GREEN:-}  ✓ [harden] $*${NC:-}" ;;
+                warn) echo -e "${YELLOW:-}  ⚠ [harden] $*${NC:-}" ;;
+                err)  echo -e "${RED:-}  ✗ [harden] $*${NC:-}" ;;
+                info) echo -e "${BLUE:-}  → [harden] $*${NC:-}" ;;
+            esac
+        }
     fi
-    if ! command -v cosign  && [ ! -x "/usr/local/bin/cosign" ]; then
-        echo -e "${BLUE}  → Installing Cosign image attestation utility...${NC}"
-        local cosign_arch
-        cosign_arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
-        curl -sfL --connect-timeout 15 --max-time 120 -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${cosign_arch}"  && chmod +x /usr/local/bin/cosign || true
+    if ! declare -F _harden_trivy_bootstrap >/dev/null 2>&1; then
+        if [ -f "${_SCRIPT_DIR:-${INSTALL_DIR:-/opt/smsly-hosting}/lib}/harden_trivy.sh" ]; then
+# --- lib/harden_trivy.sh ---
+#!/bin/bash
+
+_harden_trivy_bootstrap() {
+    if command -v trivy ; then
+        return 0  # already installed
+    fi
+
+    _harden_log info "Installing Trivy vulnerability scanner..."
+    local trivy_version="v0.76.2"
+    local arch="" expected_deb_sha="" expected_tgz_sha=""
+    arch="$(uname -m)"
+    case "$arch" in
+        x86_64)
+            arch="64bit"
+            expected_deb_sha="7edaf64c8a2a0ae02137f776c6e56adf285fc36ec76b045274afdc462f20f092"
+            expected_tgz_sha="bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+            ;;
+        aarch64)
+            arch="ARM64"
+            expected_deb_sha="0c576cd78352a2084435d393ea31565a3637cc129dd052c422f1e72fd678ee76"
+            expected_tgz_sha="ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3"
+            ;;
+        *)       _harden_log warn "Trivy — unsupported architecture: $arch"; return 1 ;;
+    esac
+
+    local deb_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.deb"
+    local tmp_deb=""
+    tmp_deb="$(mktemp /tmp/trivy.XXXXXX.deb)"
+
+    # Attempt 1: Direct DEB download with pinned SHA256 verification
+    if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$deb_url" -o "$tmp_deb" ; then
+        if printf '%s  %s\n' "$expected_deb_sha" "$tmp_deb" | sha256sum -c - >/dev/null 2>&1; then
+            if ! dpkg -i "$tmp_deb" ; then
+                apt-get install -f -y  || true
+                dpkg -i "$tmp_deb"  || true
+            fi
+        else
+            _harden_log warn "Trivy DEB checksum mismatch — rejecting unverified artifact"
+        fi
+        rm -f "$tmp_deb"
+    else
+        rm -f "$tmp_deb"
+        _harden_log info "Direct DEB download failed — trying official verified tarball and APT repo..."
+    fi
+
+    # Attempt 2: Direct tar.gz release download with pinned SHA256 verification
+    if ! command -v trivy >/dev/null 2>&1; then
+        local tgz_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.tar.gz"
+        local tmp_tgz="" tmp_dir=""
+        tmp_tgz="$(mktemp /tmp/trivy.XXXXXX.tar.gz)"
+        tmp_dir="$(mktemp -d /tmp/trivy-extract.XXXXXX)"
+        if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$tgz_url" -o "$tmp_tgz"; then
+            if printf '%s  %s\n' "$expected_tgz_sha" "$tmp_tgz" | sha256sum -c - >/dev/null 2>&1; then
+                tar -xzf "$tmp_tgz" -C "$tmp_dir" trivy >/dev/null 2>&1 && \
+                    install -m 0755 "$tmp_dir/trivy" /usr/local/bin/trivy >/dev/null 2>&1 || true
+            else
+                _harden_log warn "Trivy tarball checksum mismatch — rejecting unverified artifact"
+            fi
+        fi
+        rm -rf "$tmp_tgz" "$tmp_dir"
+    fi
+
+    # Attempt 3: Official GPG-signed APT Repository fallback
+    if ! command -v trivy ; then
+        apt-get update -qq  || true
+        if ! apt-get install -y trivy ; then
+            if command -v gpg ; then
+                curl --retry 2 --connect-timeout 10 -fsSL https://aquasecurity.github.io/trivy-repo/deb/public.key  | gpg --dearmor -o /usr/share/keyrings/trivy.gpg  || true
+                echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc  || echo stable) main" > /etc/apt/sources.list.d/trivy.list  || true
+                apt-get update -qq  || true
+                apt-get install -y trivy  || true
+            fi
+        fi
+    fi
+
+    if command -v trivy ; then
+        _harden_log ok "Trivy installed successfully"
+        return 0
+    fi
+    _harden_log warn "Trivy — download and installation fallbacks failed"
+    return 1
+}
+
+_harden_trivy_verify() {
+    if command -v trivy ; then
+        local ver
+        ver="$(trivy --version  | head -1 || true)"
+        _harden_log ok "Trivy available: ${ver}"
+        return 0
+    fi
+    _harden_log warn "Trivy — not installed (image vulnerability scanning unavailable)"
+    return 1
+}
+# --- end lib/harden_trivy.sh ---
+        fi
+    fi
+    if declare -F _harden_trivy_bootstrap >/dev/null 2>&1; then
+        _harden_trivy_bootstrap || true
+    fi
+    if ! declare -F _cosign_ensure_binary >/dev/null 2>&1; then
+        local _cosign_script="${INSTALL_DIR:-/opt/smsly-hosting}/scripts/cosign-verify.sh"
+        [ -f "$_cosign_script" ] || _cosign_script="${_SCRIPT_DIR:-.}/../scripts/cosign-verify.sh"
+        if [ -f "$_cosign_script" ]; then
+            source "$_cosign_script" || true
+        fi
+    fi
+    if declare -F _cosign_ensure_binary >/dev/null 2>&1; then
+        _cosign_ensure_binary || true
     fi
     return 0
 }
@@ -2537,7 +2957,13 @@ configure_docker_mirror() {
         local new
         new="$(cat /etc/docker/daemon.json  || echo '')"
         if [ "$prev" != "$new" ]; then
-            systemctl restart docker || true
+            local _smsly_ctrs=0
+            _smsly_ctrs="$(docker ps -q --filter "name=smsly-" 2>/dev/null | wc -l || echo 0)"
+            if [ "${_smsly_ctrs:-0}" -eq 0 ]; then
+                timeout 120 systemctl restart docker || true
+            else
+                echo -e "${YELLOW}  ⚠ Docker daemon config changed but $_smsly_ctrs SMSLY containers are running — deferring restart${NC}"
+            fi
         fi
     fi
 
@@ -2838,13 +3264,29 @@ ensure_infrastructure_permissions() {
     [ -f "$coredns_config_dir/mesh.hosts" ] && chmod 664 "$coredns_config_dir/mesh.hosts" || true
 
     if command -v docker ; then
-        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data|caddy_logs)$')"
+        local _vol_pattern='(^|_)(backups_data|caddy_data|caddy_logs)$'
+        if is_node_mode; then
+            _vol_pattern='(^|_)(backups_data|caddy_data|caddy_logs|caddy_config)$'
+        fi
+        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E "$_vol_pattern" || true)"
         for vol in ${_vol_names:-backups_data}; do
             if docker volume inspect "$vol" >/dev/null 2>&1; then
                 echo -e "${BLUE}     ↳ Setting permissions for volume: $vol...${NC}"
                 timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             else
                 echo -e "${YELLOW}     ⚠ $vol volume not found — skipping chown${NC}"
+            fi
+        done
+        for vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)postgres-archive$' || true); do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
+                echo -e "${BLUE}     ↳ Setting permissions for volume: $vol (70:70)...${NC}"
+                timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 70:70 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
+            fi
+        done
+        for vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)verdaccio_data$' || true); do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
+                echo -e "${BLUE}     ↳ Setting permissions for volume: $vol (10001:65533)...${NC}"
+                timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 10001:65533 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             fi
         done
     fi
@@ -3300,11 +3742,18 @@ refresh_runtime_services() {
         reload_container_caddy  || true
     fi
 
-    if [ "$MODE_AGENT_LITE" != "true" ]; then
+    local _refresh_tier="${STACK_TIER:-}"
+    if [ -z "$_refresh_tier" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        _refresh_tier="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "STACK_TIER" || true)"
+    fi
+    [ -n "$_refresh_tier" ] || _refresh_tier="full"
+    if [ "$MODE_AGENT_LITE" != "true" ] && [ "$_refresh_tier" != "lite" ]; then
         echo -e "${BLUE}  → Refreshing Observability Stack...${NC}"
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
-            docker compose -f infrastructure/docker/docker-compose.observability.yml pull || echo -e "${YELLOW}    ⚠ Observability pull failed${NC}"
-            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d || echo -e "${YELLOW}    ⚠ Observability up failed${NC}"
+            local _obs_env_args=()
+            [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && _obs_env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
+            timeout 300 docker compose "${_obs_env_args[@]}" -f infrastructure/docker/docker-compose.observability.yml pull || echo -e "${YELLOW}    ⚠ Observability pull failed${NC}"
+            timeout 300 docker compose "${_obs_env_args[@]}" -f infrastructure/docker/docker-compose.observability.yml up -d || echo -e "${YELLOW}    ⚠ Observability up failed${NC}"
             for obs_ctr in smsly-loki smsly-promtail smsly-prometheus smsly-cadvisor smsly-node-exporter smsly-grafana; do
                 i=0
                 while [ $i -lt 30 ]; do
@@ -3431,6 +3880,33 @@ gen_hex_secret() {
     python3 -c "import secrets; print(secrets.token_hex(${bytes}))"  || openssl rand -hex "$bytes"
 }
 
+env_load_file_safe() {
+    local env_file="${1:-}"
+    [ -f "$env_file" ] || return 0
+    local _line="" _key="" _val=""
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        _line="${_line%$'\r'}"
+        [[ -z "$_line" || "$_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$_line" == export[[:space:]]* ]] && _line="${_line#export }"
+        [[ "$_line" == *=* ]] || continue
+        _key="${_line%%=*}"
+        _key="${_key#"${_key%%[![:space:]]*}"}"
+        _key="${_key%"${_key##*[![:space:]]}"}"
+        [[ "$_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        _val="${_line#*=}"
+        if [[ "$_val" == \"*\" && "$_val" == *\" && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+            _val="${_val//\\\"/\"}"
+            _val="${_val//\\\$/\$}"
+            _val="${_val//\\\`/\`}"
+            _val="${_val//\\\\/\\}"
+        elif [[ "$_val" == \'*\' && "$_val" == *\' && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+        fi
+        export "$_key=$_val"
+    done < "$env_file"
+}
+
 env_get_value() {
     local env_file="$1"
     local var_name="$2"
@@ -3450,8 +3926,18 @@ key = sys.argv[2]
 value = sys.argv[3]
 prefix = f"{key}="
 
+def _format_val(val: str) -> str:
+    if val == "":
+        return ""
+    if any(c.isspace() or c in '#$`\\"\'&;|<>()*?[]~!' for c in val):
+        escaped = val.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
+        return f'"{escaped}"'
+    return val
+
+formatted = _format_val(value)
+
 if not env_path.exists():
-    env_path.write_text(f"{key}={value}\n")
+    env_path.write_text(f"{key}={formatted}\n")
     sys.exit(0)
 
 lines = env_path.read_text().splitlines()
@@ -3461,14 +3947,14 @@ found = False
 for line in lines:
     if line.startswith(prefix):
         if not found:
-            updated.append(f"{key}={value}")
+            updated.append(f"{key}={formatted}")
             found = True
         # Skip any subsequent duplicates
         continue
     updated.append(line)
 
 if not found:
-    updated.append(f"{key}={value}")
+    updated.append(f"{key}={formatted}")
 
 env_path.write_text("\n".join(updated) + "\n")
 PY
@@ -3600,7 +4086,6 @@ env_ensure_var() {
 
 # --- lib/harden.sh ---
 #!/bin/bash
-set +e
 
 _harden_log() {
     local level="$1"; shift
@@ -3610,6 +4095,39 @@ _harden_log() {
         err)  echo -e "${RED}  ✗ [harden] $*${NC}" ;;
         info) echo -e "${BLUE}  → [harden] $*${NC}" ;;
     esac
+}
+
+# Resolve effective STACK_TIER (lite|medium|full) without requiring env.sh.
+_harden_stack_tier() {
+    local _tier="${STACK_TIER:-}"
+    local _env_file="${INSTALL_DIR:-/opt/smsly-hosting}/.env"
+    if [ -z "$_tier" ] && [ -f "$_env_file" ]; then
+        _tier="$(grep -E '^STACK_TIER=' "$_env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]\r"'\''' || true)"
+    fi
+    if [ -z "$_tier" ] && [ -f "$_env_file" ]; then
+        local _profs=""
+        _profs="$(grep -E '^COMPOSE_PROFILES=' "$_env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]\r"'\''' || true)"
+        if [ -n "$_profs" ]; then
+            case ",${_profs}," in
+                *,full,*) _tier="full" ;;
+                *,medium,*) _tier="medium" ;;
+                *) _tier="lite" ;;
+            esac
+        fi
+    fi
+    if [ -z "$_tier" ]; then
+        local _ram_mb=""
+        _ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+        [ -n "$_ram_mb" ] || _ram_mb=8192
+        if [ "$_ram_mb" -lt 6144 ]; then
+            _tier="lite"
+        elif [ "$_ram_mb" -lt 12288 ]; then
+            _tier="medium"
+        else
+            _tier="full"
+        fi
+    fi
+    printf '%s' "$_tier"
 }
 
 # --- lib/harden_fail2ban.sh ---
@@ -3779,7 +4297,7 @@ _harden_ufw_wg0_rules() {
     if ip link show wg0 >/dev/null 2>&1; then
         local _ufw_v=""
         _ufw_v="$(ufw status verbose 2>/dev/null || true)"
-        echo "$_ufw_v" | grep -q "5000/tcp.*ALLOW" \
+        echo "$_ufw_v" | grep -qE "(^|[[:space:]])5000(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])5000(/tcp)?([[:space:]]|$)" \
             || ufw allow in on wg0 to any port 5000 proto tcp \
             || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
         echo "$_ufw_v" | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
@@ -3788,9 +4306,21 @@ _harden_ufw_wg0_rules() {
         echo "$_ufw_v" | grep -qE "(^|[[:space:]])8000(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])8000(/tcp)?([[:space:]]|$)" \
             || ufw allow in on wg0 to any port 8000 proto tcp \
             || echo -e "${YELLOW}    ⚠ ufw allow node api on wg0 failed${NC}"
+        local _cryptd_gate="${CRYPTD_DB_GATE_ENABLED:-}"
+        if [ -z "$_cryptd_gate" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+            _cryptd_gate="$(grep -E '^CRYPTD_DB_GATE_ENABLED=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '\r"' | tr '[:upper:]' '[:lower:]' || true)"
+        fi
+        if [ "$_cryptd_gate" = "true" ]; then
+            echo "$_ufw_v" | grep -qE "(^|[[:space:]])15432(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])15432(/tcp)?([[:space:]]|$)" \
+                || ufw allow in on wg0 to any port 15432 proto tcp \
+                || echo -e "${YELLOW}    ⚠ ufw allow cryptd pg gate (15432) on wg0 failed${NC}"
+            echo "$_ufw_v" | grep -qE "(^|[[:space:]])16379(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])16379(/tcp)?([[:space:]]|$)" \
+                || ufw allow in on wg0 to any port 16379 proto tcp \
+                || echo -e "${YELLOW}    ⚠ ufw allow cryptd redis gate (16379) on wg0 failed${NC}"
+        fi
     fi
     if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
-        local _nip
+        local _nip=""
         for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
             [ -n "$_nip" ] || continue
             ufw allow from "$_nip" to any port 5000 proto tcp \
@@ -3799,20 +4329,66 @@ _harden_ufw_wg0_rules() {
     fi
 }
 
+_harden_ufw_media_rules() {
+    if [ "${SMSLY_NODE_ROLE:-}" = "media" ] || [ "${MODE_MEDIA_NODE:-false}" = "true" ]; then
+        local _mport=""
+        for _mport in 5060/tcp 5060/udp 3478/tcp 3478/udp 7880/tcp 7881/tcp 30000:31000/udp; do
+            ufw allow "$_mport" || echo -e "${YELLOW}    ⚠ ufw allow $_mport failed${NC}"
+        done
+    fi
+}
+
+_harden_ufw_master_ip_valid() {
+    local _ip="${1:-}"
+    [ -n "$_ip" ] && [ "$_ip" != "127.0.0.1" ] && ! echo "$_ip" | grep -qE '^(0\.0\.0\.0|localhost)$'
+}
+
 _harden_ufw_bootstrap() {
     command -v ufw  || apt_run apt-get install -y ufw  || true
     command -v ufw  || return 1
 
+    local _is_agent_lite=false
+    if [ "${MODE_AGENT_LITE:-false}" = "true" ] || [ "${INSTALL_MODE:-}" = "agent-lite" ]; then
+        _is_agent_lite=true
+    fi
+    local _master_ip="${MASTER_IP:-}"
+    if [ -z "$_master_ip" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        _master_ip="$(grep -E '^MASTER_IP=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '\r"' || true)"
+    fi
+    local _lockdown_master=false
+    if _harden_ufw_master_ip_valid "$_master_ip"; then
+        _lockdown_master=true
+    fi
+
     # Already active — just verify ports are open, then bail
     if ufw status  | grep -qi "active"; then
-        for port in 22 80 443 51820 33500; do
-            ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
-        done
+        local _ufw_cur=""
+        _ufw_cur="$(ufw status verbose 2>/dev/null || true)"
+        if [ "$_is_agent_lite" = "true" ] && [ "$_lockdown_master" = "true" ]; then
+            echo "$_ufw_cur" | grep -qE "22(/tcp)?[[:space:]]+ALLOW.*${_master_ip}" \
+                || ufw allow from "$_master_ip" to any port 22 || echo -e "${YELLOW}    ⚠ ufw allow 22 from $_master_ip failed${NC}"
+            echo "$_ufw_cur" | grep -qE "80(/tcp)?[[:space:]]+ALLOW.*${_master_ip}" \
+                || ufw allow from "$_master_ip" to any port 80 || echo -e "${YELLOW}    ⚠ ufw allow 80 from $_master_ip failed${NC}"
+            for port in 51820/udp 33500/udp; do
+                echo "$_ufw_cur" | grep -qE "${port}.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
+            done
+        elif [ "$_lockdown_master" = "true" ]; then
+            echo "$_ufw_cur" | grep -qE "22(/tcp)?[[:space:]]+ALLOW.*${_master_ip}" \
+                || ufw allow from "$_master_ip" to any port 22 || echo -e "${YELLOW}    ⚠ ufw allow 22 from $_master_ip failed${NC}"
+            for port in 80/tcp 443/tcp 51820/udp 33500/udp; do
+                echo "$_ufw_cur" | grep -qE "${port}.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
+            done
+        else
+            for port in 22 80 443 51820 33500; do
+                echo "$_ufw_cur" | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
+            done
+        fi
         _harden_ufw_wg0_rules
-        # Whitelist Docker bridges
+        _harden_ufw_media_rules
+        # Allow only DNS (:53) on Docker bridges (never blanket-allow tenant bridges to host ports)
         for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
             ip link show "$iface" >/dev/null 2>&1 || continue
-            ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
+            ufw allow in on "$iface" to any port 53 || echo -e "${YELLOW}    ⚠ ufw allow DNS on $iface failed${NC}"
         done
         return 0
     fi
@@ -3821,22 +4397,34 @@ _harden_ufw_bootstrap() {
     ufw --force default deny incoming || echo -e "${YELLOW}    s ufw default deny incoming failed${NC}"
     ufw --force default allow outgoing || echo -e "${YELLOW}    s ufw default allow outgoing failed${NC}"
 
-    local ssh_port=$(ss -tlnp 2>/dev/null | grep sshd | awk '{print $4}' | awk -F: '{print $NF}' | head -1)
-    if [ -n "$ssh_port" ]; then
+    local ssh_port=""
+    ssh_port=$(ss -tlnp 2>/dev/null | grep sshd | awk '{print $4}' | awk -F: '{print $NF}' | head -1)
+    if [ "$_lockdown_master" = "true" ]; then
+        ufw allow from "$_master_ip" to any port "${ssh_port:-22}" proto tcp || echo -e "${YELLOW}    ⚠ ufw allow ssh from $_master_ip failed${NC}"
+    elif [ -n "$ssh_port" ]; then
         ufw allow "$ssh_port/tcp" || echo -e "${YELLOW}    s ufw allow ssh port $ssh_port failed${NC}"
     else
         ufw allow ssh || echo -e "${YELLOW}    s ufw allow ssh failed${NC}"
     fi
-    ufw allow 80/tcp || echo -e "${YELLOW}    ⚠ ufw allow 80/tcp failed${NC}"
-    ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
+    if [ "$_is_agent_lite" = "true" ]; then
+        if [ "$_lockdown_master" = "true" ]; then
+            ufw allow from "$_master_ip" to any port 80 proto tcp || echo -e "${YELLOW}    ⚠ ufw allow 80 from $_master_ip failed${NC}"
+        else
+            echo -e "${YELLOW}    ⚠ Agent-Lite missing MASTER_IP — skipping blanket port 80/443${NC}"
+        fi
+    else
+        ufw allow 80/tcp || echo -e "${YELLOW}    ⚠ ufw allow 80/tcp failed${NC}"
+        ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
+    fi
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
     ufw allow 33500/udp || echo -e "${YELLOW}    ⚠ ufw allow 33500/udp failed${NC}"
 
     _harden_ufw_wg0_rules
+    _harden_ufw_media_rules
 
     for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
         ip link show "$iface" >/dev/null 2>&1 || continue
-        ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
+        ufw allow in on "$iface" to any port 53 || echo -e "${YELLOW}    ⚠ ufw allow DNS on $iface failed${NC}"
     done
     ufw --force enable || echo -e "${YELLOW}    ⚠ ufw enable failed${NC}"
     # Verify it actually came up
@@ -3886,8 +4474,8 @@ _harden_apparmor_verify() {
 _harden_auditd_bootstrap() {
     command -v auditd  || apt_run apt-get install -y auditd audispd-plugins  || true
 
-    if [ ! -f /etc/audit/rules.d/smsly.rules ]; then
-        mkdir -p /etc/audit/rules.d
+    mkdir -p /etc/audit/rules.d
+    if [ ! -f /etc/audit/rules.d/smsly.rules ] || grep -qE '^-a always,exit -F arch=b64 -S mount -k filesystem-mounts$' /etc/audit/rules.d/smsly.rules 2>/dev/null; then
         cat > /etc/audit/rules.d/smsly.rules <<'AUDIT_EOF'
 -w /etc/shadow -p wa -k identity
 -w /etc/passwd -p wa -k identity
@@ -3896,9 +4484,26 @@ _harden_auditd_bootstrap() {
 -w /opt/smsly-hosting/.env -p wa -k smsly-config
 -w /opt/smsly-hosting/secrets/ -p wa -k smsly-secrets
 -a always,exit -F arch=b64 -S execve -F path=/usr/bin/docker -k docker-exec
--a always,exit -F arch=b64 -S mount -k filesystem-mounts
--a exit,always -F arch=b64 -S execve -F euid=0 -F auid>=1000 -k priv-esc
+-a always,exit -F arch=b64 -S mount -F auid>=1000 -F auid!=4294967295 -k filesystem-mounts
+-a exit,always -F arch=b64 -S execve -F euid=0 -F auid>=1000 -F auid!=4294967295 -k priv-esc
 AUDIT_EOF
+    fi
+    if [ -f /etc/audit/auditd.conf ]; then
+        if grep -qE '^[[:space:]]*max_log_file[[:space:]]*=' /etc/audit/auditd.conf; then
+            sed -i 's/^[[:space:]]*max_log_file[[:space:]]*=.*/max_log_file = 50/' /etc/audit/auditd.conf || true
+        else
+            echo 'max_log_file = 50' >> /etc/audit/auditd.conf || true
+        fi
+        if grep -qE '^[[:space:]]*num_logs[[:space:]]*=' /etc/audit/auditd.conf; then
+            sed -i 's/^[[:space:]]*num_logs[[:space:]]*=.*/num_logs = 5/' /etc/audit/auditd.conf || true
+        else
+            echo 'num_logs = 5' >> /etc/audit/auditd.conf || true
+        fi
+        if grep -qE '^[[:space:]]*max_log_file_action[[:space:]]*=' /etc/audit/auditd.conf; then
+            sed -i 's/^[[:space:]]*max_log_file_action[[:space:]]*=.*/max_log_file_action = rotate/' /etc/audit/auditd.conf || true
+        else
+            echo 'max_log_file_action = rotate' >> /etc/audit/auditd.conf || true
+        fi
     fi
     systemctl enable auditd || echo -e "${YELLOW}    ⚠ auditd enable failed${NC}"
     systemctl restart auditd || echo -e "${YELLOW}    ⚠ auditd restart failed${NC}"
@@ -4018,7 +4623,7 @@ with open('$daemon_cfg','w') as f: json.dump(cfg, f, indent=2)
         _smsly_ctrs="$(docker ps --format '{{.Names}}'  | grep -c smsly || true)"
         if [ "$_smsly_ctrs" -eq 0 ]; then
             _harden_log info "Docker daemon config changed — restarting Docker..."
-            systemctl restart docker || { _harden_log error "Docker restart failed"; }
+            systemctl restart docker || { _harden_log err "Docker restart failed"; }
             for _i in $(seq 1 30); do
                 docker info  && break
                 sleep 2
@@ -4064,6 +4669,14 @@ _harden_crowdsec_bootstrap() {
     # attaches the middleware to user routers.
     _harden_crowdsec_traefik_plugin_gate
     [ "${NODE_CROWDSEC:-1}" = "1" ] || { _harden_log info "crowdsec skipped (NODE_CROWDSEC=0)"; return 0; }
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _cs_tier=""
+        _cs_tier="$(_harden_stack_tier)"
+        if [ "$_cs_tier" = "lite" ]; then
+            _harden_log info "crowdsec skipped (STACK_TIER=lite)"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
@@ -4084,9 +4697,10 @@ _harden_crowdsec_bootstrap() {
         # starts crowdsec right after .env is ready, and verify converges it.
         return 0
     fi
-    docker compose \
+    timeout 120 docker compose \
         "${env_args[@]}" \
         -f "$_cf" \
+        --profile medium \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
         docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' && break
@@ -4339,9 +4953,9 @@ _harden_crowdsec_cloudflare_bouncer() {
     _cf="$(_harden_crowdsec_compose_file)"
     local _up_rc=1
     if [ "$_prev_hash" != "$_new_hash" ]; then
-        docker compose "${env_args[@]}" -f "$_cf" up -d --force-recreate --no-deps crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
+        timeout 120 docker compose "${env_args[@]}" -f "$_cf" --profile medium up -d --force-recreate --no-deps crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
     else
-        docker compose "${env_args[@]}" -f "$_cf" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
+        timeout 120 docker compose "${env_args[@]}" -f "$_cf" --profile medium up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
     fi
     if [ "$_up_rc" = "0" ]; then
         _harden_log ok "cloudflare bouncer running (edge enforcement)"
@@ -4352,6 +4966,14 @@ _harden_crowdsec_cloudflare_bouncer() {
 
 _harden_crowdsec_verify() {
     [ "${NODE_CROWDSEC:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _cs_tier=""
+        _cs_tier="$(_harden_stack_tier)"
+        if [ "$_cs_tier" = "lite" ]; then
+            _harden_log info "crowdsec skipped (STACK_TIER=lite)"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
@@ -4495,7 +5117,7 @@ _harden_openappsec_bootstrap() {
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
     # Explicit service list — never --remove-orphans on this stack (AGENTS.md #16).
-    if ! timeout 570 docker compose "${env_args[@]}" -f "$COMPOSE_FILE" \
+    if ! timeout 570 docker compose "${env_args[@]}" -f "$COMPOSE_FILE" --profile appsec \
             up -d appsec-agent appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db appsec-envoy 2>&1 | tail -5; then
         echo -e "${YELLOW}  ⚠ open-appsec docker compose up failed${NC}"
         return 1
@@ -4537,9 +5159,9 @@ _harden_openappsec_reconcile() {
     local env_args=()
     [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
     local compose_file="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" stop --timeout 15 \
+    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" --profile appsec stop --timeout 15 \
         appsec-agent appsec-envoy appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db >/dev/null 2>&1 || true
-    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" rm -f \
+    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" --profile appsec rm -f \
         appsec-agent appsec-envoy appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db >/dev/null 2>&1 || true
     return 0
 }
@@ -4581,6 +5203,14 @@ _harden_openappsec_verify() {
 
 _harden_falco_bootstrap() {
     [ "${NODE_FALCO:-1}" = "1" ] || { _harden_log info "falco skipped (NODE_FALCO=0)"; return 0; }
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _falco_tier=""
+        _falco_tier="$(_harden_stack_tier)"
+        if [ "$_falco_tier" != "full" ]; then
+            _harden_log info "falco skipped (STACK_TIER=${_falco_tier})"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     local compose_file="$INSTALL_DIR/infrastructure/docker/docker-compose.falco.yml"
     [ -f "$compose_file" ] || return 1
@@ -4600,7 +5230,7 @@ _harden_falco_bootstrap() {
     # class). smsly-hosting matches docker-compose.prod.yml `name:` and
     # the full-profile falco service (same container_name, no named
     # volumes, so the two definitions converge on one container).
-    docker compose \
+    timeout 180 docker compose \
         -p smsly-hosting \
         "${env_args[@]}" \
         -f "$compose_file" \
@@ -4615,7 +5245,19 @@ _harden_falco_bootstrap() {
 
 _harden_falco_verify() {
     [ "${NODE_FALCO:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _falco_tier=""
+        _falco_tier="$(_harden_stack_tier)"
+        if [ "$_falco_tier" != "full" ]; then
+            _harden_log info "falco skipped (STACK_TIER=${_falco_tier})"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
+    if [ -e "${SMSLY_TIER_STATE_DIR:-/var/lib/smsly/tiers}/runtime-security.asleep" ]; then
+        _harden_log info "falco asleep (runtime-security tier sleeping) — skipping"
+        return 0
+    fi
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         # One self-heal attempt: resume runs can skip the bootstrap step
         # (checkpointed), and first-boot probe load can outlast the
@@ -4767,32 +5409,61 @@ _harden_trivy_bootstrap() {
     fi
 
     _harden_log info "Installing Trivy vulnerability scanner..."
-    local trivy_version="v0.54.1"
-    local arch
+    local trivy_version="v0.76.2"
+    local arch="" expected_deb_sha="" expected_tgz_sha=""
     arch="$(uname -m)"
     case "$arch" in
-        x86_64)  arch="64bit" ;;
-        aarch64) arch="ARM64" ;;
+        x86_64)
+            arch="64bit"
+            expected_deb_sha="7edaf64c8a2a0ae02137f776c6e56adf285fc36ec76b045274afdc462f20f092"
+            expected_tgz_sha="bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+            ;;
+        aarch64)
+            arch="ARM64"
+            expected_deb_sha="0c576cd78352a2084435d393ea31565a3637cc129dd052c422f1e72fd678ee76"
+            expected_tgz_sha="ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3"
+            ;;
         *)       _harden_log warn "Trivy — unsupported architecture: $arch"; return 1 ;;
     esac
 
     local deb_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.deb"
-    local tmp_deb
+    local tmp_deb=""
     tmp_deb="$(mktemp /tmp/trivy.XXXXXX.deb)"
 
-    # Attempt 1: Direct DEB download with retries and timeouts
+    # Attempt 1: Direct DEB download with pinned SHA256 verification
     if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$deb_url" -o "$tmp_deb" ; then
-        if ! dpkg -i "$tmp_deb" ; then
-            apt-get install -f -y  || true
-            dpkg -i "$tmp_deb"  || true
+        if printf '%s  %s\n' "$expected_deb_sha" "$tmp_deb" | sha256sum -c - >/dev/null 2>&1; then
+            if ! dpkg -i "$tmp_deb" ; then
+                apt-get install -f -y  || true
+                dpkg -i "$tmp_deb"  || true
+            fi
+        else
+            _harden_log warn "Trivy DEB checksum mismatch — rejecting unverified artifact"
         fi
         rm -f "$tmp_deb"
     else
         rm -f "$tmp_deb"
-        _harden_log info "Direct DEB download failed — trying official APT repo and install script..."
+        _harden_log info "Direct DEB download failed — trying official verified tarball and APT repo..."
     fi
 
-    # Attempt 2: Official APT Repository fallback
+    # Attempt 2: Direct tar.gz release download with pinned SHA256 verification
+    if ! command -v trivy >/dev/null 2>&1; then
+        local tgz_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.tar.gz"
+        local tmp_tgz="" tmp_dir=""
+        tmp_tgz="$(mktemp /tmp/trivy.XXXXXX.tar.gz)"
+        tmp_dir="$(mktemp -d /tmp/trivy-extract.XXXXXX)"
+        if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$tgz_url" -o "$tmp_tgz"; then
+            if printf '%s  %s\n' "$expected_tgz_sha" "$tmp_tgz" | sha256sum -c - >/dev/null 2>&1; then
+                tar -xzf "$tmp_tgz" -C "$tmp_dir" trivy >/dev/null 2>&1 && \
+                    install -m 0755 "$tmp_dir/trivy" /usr/local/bin/trivy >/dev/null 2>&1 || true
+            else
+                _harden_log warn "Trivy tarball checksum mismatch — rejecting unverified artifact"
+            fi
+        fi
+        rm -rf "$tmp_tgz" "$tmp_dir"
+    fi
+
+    # Attempt 3: Official GPG-signed APT Repository fallback
     if ! command -v trivy ; then
         apt-get update -qq  || true
         if ! apt-get install -y trivy ; then
@@ -4803,11 +5474,6 @@ _harden_trivy_bootstrap() {
                 apt-get install -y trivy  || true
             fi
         fi
-    fi
-
-    # Attempt 3: Official Contrib script fallback
-    if ! command -v trivy ; then
-        curl --retry 2 --connect-timeout 10 -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin  || true
     fi
 
     if command -v trivy ; then
@@ -4889,11 +5555,11 @@ _harden_envoy_registry_login() {
         [ -n "$user" ] || user="smsly-registry"
     fi
     [ -n "$user" ] && [ -n "$pass" ] || return 1
-    printf '%s\n' "$pass" | docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
+    printf '%s\n' "$pass" | timeout 30 docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
     # The sidecar flow pulls via registry:5000 but pushes via 127.0.0.1:5000
     # (see _harden_envoy_image_bootstrap) — the daemon keys credentials per
     # hostname, so both need a login or the push 401s (fresh-install gap).
-    printf '%s\n' "$pass" | docker login --username "$user" --password-stdin 127.0.0.1:5000 >/dev/null 2>&1 || true
+    printf '%s\n' "$pass" | timeout 30 docker login --username "$user" --password-stdin 127.0.0.1:5000 >/dev/null 2>&1 || true
 }
 
 _harden_envoy_image_bootstrap() {
@@ -4914,19 +5580,19 @@ _harden_envoy_image_bootstrap() {
     # must stay visible instead of dying silently (2026-09-12).
     _harden_envoy_registry_login || _harden_log warn "no registry login available — pull/push may 401"
     local envoy_tag="registry:5000/smsly/envoy-spire-sidecar:latest"
-    if docker image inspect "$envoy_tag" >/dev/null 2>&1; then
+    if timeout 10 docker image inspect "$envoy_tag" >/dev/null 2>&1; then
         return 0
     fi
-    if docker pull "$envoy_tag" >/dev/null 2>&1; then
+    if timeout 120 docker pull "$envoy_tag" >/dev/null 2>&1; then
         _harden_log ok "envoy sidecar image present"
         return 0
     fi
     local loop_tag="127.0.0.1:5000/smsly/envoy-spire-sidecar:latest"
-    if ! docker build -t "$envoy_tag" -t "$loop_tag" "$envoy_dir" >/dev/null 2>&1; then
+    if ! timeout 300 docker build -t "$envoy_tag" -t "$loop_tag" "$envoy_dir" >/dev/null 2>&1; then
         _harden_log err "envoy sidecar image build failed in $envoy_dir"
         return 1
     fi
-    if ! docker push "$loop_tag" >/dev/null 2>&1; then
+    if ! timeout 120 docker push "$loop_tag" >/dev/null 2>&1; then
         _harden_log err "envoy sidecar image push failed — check registry auth (docker login) and that the registry is up"
         return 1
     fi
@@ -4938,26 +5604,47 @@ _harden_spire_start_agent() {
     # Start one SPIRE agent with a freshly minted single-use join token
     # (mirrors apps/mtls/views.py::_start_agent_with_token).
     # $1 agent container, $2 server container, $3 agent.conf host path,
-    # $4 data volume, $5 socket volume, $6 svids volume.
+    # $4 data volume, $5 socket volume, $6 svids volume, $7 optional trust domain.
     local agent="$1" server="$2" conf="$3" data_vol="$4" sock_vol="$5" svids_vol="$6"
+    local trust_domain="${7:-}"
+    if [ -z "$trust_domain" ]; then
+        if [[ "$agent" == *ecosystem* ]]; then
+            trust_domain="${ECOSYSTEM_TRUST_DOMAIN:-ecosystem.local}"
+        else
+            trust_domain="${SPIFFE_TRUST_DOMAIN:-platform.local}"
+        fi
+    fi
     # A crash-looping agent reports Running=true while Restarting — only a
     # truly stable container may keep its (single-use, now consumed) token.
     if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ] && \
        [ "$(docker inspect -f '{{.State.Restarting}}' "$agent" 2>/dev/null)" != "true" ]; then
         return 0
     fi
-    local token
-    token="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
+    # Export the server trust bundle into the agent data volume so
+    # insecure_bootstrap = false has a valid trust_bundle_path on boot.
+    local _bundle_pem=""
+    _bundle_pem="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server bundle show -socketPath /tmp/spire-server/private/api.sock -format pem 2>/dev/null || true)"
+    if [ -z "$_bundle_pem" ]; then
+        _harden_log warn "$agent — could not export trust bundle from $server"
+        return 1
+    fi
+    if ! printf '%s\n' "$_bundle_pem" | timeout -k 5 30 docker run --rm -i -v "$data_vol:/opt/spire/data" alpine:3.19 sh -c 'mkdir -p /opt/spire/data && chmod 0700 /opt/spire/data && cat > /opt/spire/data/bundle.crt && chmod 0644 /opt/spire/data/bundle.crt' >/dev/null 2>&1; then
+        _harden_log warn "$agent — failed writing trust bundle to $data_vol"
+        return 1
+    fi
+    local token=""
+    token="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1 || true)"
     if [ -z "$token" ]; then
         _harden_log warn "$agent — could not mint join token"
         return 1
     fi
     docker rm -f "$agent" >/dev/null 2>&1 || true
-    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
+    timeout 60 docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --cgroupns host --restart unless-stopped \
         -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
         -v /var/run/docker.sock:/var/run/docker.sock:ro \
         -v "$conf:/etc/spire/agent.conf:ro,z" \
         -e DOCKER_HOST=unix:///var/run/docker.sock \
+        -e "SPIFFE_TRUST_DOMAIN=${trust_domain}" \
         ghcr.io/spiffe/spire-agent:1.9.6 -config /etc/spire/agent.conf -joinToken "$token" >/dev/null 2>&1 || {
         _harden_log warn "$agent — docker run failed"
         return 1
@@ -4971,6 +5658,12 @@ _harden_spire_bootstrap() {
     # their own trust roots.
     if command -v is_master_mode >/dev/null 2>&1 && ! is_master_mode; then
         _harden_log info "spire skipped (not master mode)"
+        return 0
+    fi
+    local _spire_tier=""
+    _spire_tier="$(_harden_stack_tier)"
+    if [ "$_spire_tier" != "full" ]; then
+        _harden_log info "spire skipped (STACK_TIER=${_spire_tier})"
         return 0
     fi
     command -v docker >/dev/null 2>&1 || return 0
@@ -5002,7 +5695,7 @@ _harden_spire_bootstrap() {
         fi
     done
     # Servers are idempotent under compose (running services are kept).
-    docker compose -p smsly-hosting -f "$spire_file" up -d spire-server spire-server-ecosystem >/dev/null 2>&1 || {
+    timeout 120 docker compose -p smsly-hosting -f "$spire_file" up -d spire-server spire-server-ecosystem >/dev/null 2>&1 || {
         _harden_log warn "spire servers failed to start"
         return 1
     }
@@ -5031,6 +5724,14 @@ _harden_spire_bootstrap() {
 
 _harden_spire_verify() {
     [ "${NODE_SPIRE:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode); then
+        local _spire_tier=""
+        _spire_tier="$(_harden_stack_tier)"
+        if [ "$_spire_tier" != "full" ]; then
+            _harden_log info "spire skipped (STACK_TIER=${_spire_tier})"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     if [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent 2>/dev/null)" != "true" ] || \
        [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent-ecosystem 2>/dev/null)" != "true" ]; then
@@ -5307,6 +6008,37 @@ _MEDIA_NODE_LOADED=true
 MEDIA_NODE_INSTALL_DIR="/opt/smsly-hosting-media"
 MEDIA_NODE_ENV="$MEDIA_NODE_INSTALL_DIR/.env"
 MEDIA_NODE_LOG="/var/log/smsly-media-install.log"
+
+_media_load_env_safe() {
+    local env_file="${1:-}"
+    if declare -F env_load_file_safe >/dev/null 2>&1; then
+        env_load_file_safe "$env_file"
+        return $?
+    fi
+    [ -f "$env_file" ] || return 0
+    local _line="" _key="" _val=""
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        _line="${_line%$'\r'}"
+        [[ -z "$_line" || "$_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$_line" == export[[:space:]]* ]] && _line="${_line#export }"
+        [[ "$_line" == *=* ]] || continue
+        _key="${_line%%=*}"
+        _key="${_key#"${_key%%[![:space:]]*}"}"
+        _key="${_key%"${_key##*[![:space:]]}"}"
+        [[ "$_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        _val="${_line#*=}"
+        if [[ "$_val" == \"*\" && "$_val" == *\" && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+            _val="${_val//\\\"/\"}"
+            _val="${_val//\\\$/\$}"
+            _val="${_val//\\\`/\`}"
+            _val="${_val//\\\\/\\}"
+        elif [[ "$_val" == \'*\' && "$_val" == *\' && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+        fi
+        export "$_key=$_val"
+    done < "$env_file"
+}
 
 # ─── Detect media hardware ───────────────────────────────────────────────────
 detect_media_hardware() {
@@ -5656,10 +6388,8 @@ template_media_configs() {
     local env_file="$1"
     echo -e "${BLUE}  → Templating env vars into media configs...${NC}"
 
-    # Source env for values
-    set -a
-    source "$env_file"
-    set +a
+    # Load env safely without shell execution
+    _media_load_env_safe "$env_file"
 
     # Kamailio
     if [ -f /etc/kamailio/kamailio.cfg ]; then
@@ -5878,12 +6608,7 @@ prepare_media_voice_database() {
     # Phase 2) — they are NOT in this shell's environment otherwise, and
     # referencing them unset under `set -u` kills the installer silently.
     local env_file="${MEDIA_NODE_ENV:-/opt/smsly-hosting-media/.env}"
-    if [ -f "$env_file" ]; then
-        set -a
-        # shellcheck disable=SC1090
-        source "$env_file"
-        set +a
-    fi
+    _media_load_env_safe "$env_file"
     local db_user="${MEDIA_DB_USER:-smsly_voice}"
     local db_password="${MEDIA_DB_PASSWORD:-}"
     local db_name="smsly_voice"
@@ -6019,7 +6744,7 @@ install_livekit() {
     fi
 
     # Render config (idempotent — re-run picks up rotated keys).
-    [ -f "$env_file" ] && { set -a; source "$env_file"; set +a; }
+    _media_load_env_safe "$env_file"
     mkdir -p /etc/livekit /var/lib/livekit
     cat > /etc/livekit/livekit.yaml <<EOF
 port: 7880
@@ -6145,75 +6870,6 @@ install_agent_stack() {
             echo -e "${YELLOW}  ⚠ Orchestrator build failed — agent calls unavailable until rebuilt (non-fatal)${NC}"
         fi
     fi
-}
-
-# ─── Install LiveKit SFU server ────────────────────────────────────────────
-# LiveKit ships no apt package: pin a GitHub release tarball, verify its
-# sha256, and render /etc/livekit/livekit.yaml from the node .env (API
-# keys are generated in Phase 2). TURN stays on standalone coturn, so the
-# built-in TURN relay is disabled; RTC media uses UDP 30000-31000 to match
-# the pre-flight port check.
-LIVEKIT_VERSION="${LIVEKIT_VERSION:-v1.13.6}"
-LIVEKIT_SHA256_AMD64="2b61abef2b9ba14b4b8ca38b37de9a37ffc682b9931d5fc03ceca2f0b77d3e33"
-LIVEKIT_SHA256_ARM64="5c75f09173199f3f8fe0c3c0d5a41171f9b306ffce6843d752c276d11e77d19b"
-
-install_livekit() {
-    local env_file="${1:-/opt/smsly-hosting-media/.env}"
-    echo -e "${BLUE}  → Installing LiveKit server ${LIVEKIT_VERSION}...${NC}"
-
-    local arch
-    case "$(dpkg --print-architecture 2>/dev/null || uname -m)" in
-        amd64|x86_64) arch="amd64"; local want_sha="$LIVEKIT_SHA256_AMD64" ;;
-        arm64|aarch64) arch="arm64"; local want_sha="$LIVEKIT_SHA256_ARM64" ;;
-        *) echo -e "${YELLOW}  ⚠ Unsupported architecture for LiveKit binaries (non-fatal)${NC}"; return 0 ;;
-    esac
-
-    if command -v livekit-server >/dev/null 2>&1 && livekit-server --version 2>/dev/null | grep -q "$LIVEKIT_VERSION"; then
-        echo -e "${GREEN}  ✓ LiveKit ${LIVEKIT_VERSION} already installed${NC}"
-    else
-        local url="https://github.com/livekit/livekit/releases/download/${LIVEKIT_VERSION}/livekit_${LIVEKIT_VERSION#v}_linux_${arch}.tar.gz"
-        rm -f /tmp/livekit.tgz
-        if ! curl -fsSL --max-time 300 "$url" -o /tmp/livekit.tgz; then
-            echo -e "${YELLOW}  ⚠ LiveKit download failed — WebRTC SFU unavailable (non-fatal)${NC}"
-            return 0
-        fi
-        local got_sha
-        got_sha="$(sha256sum /tmp/livekit.tgz | awk '{print $1}')"
-        if [ "$got_sha" != "$want_sha" ]; then
-            echo -e "${YELLOW}  ⚠ LiveKit checksum mismatch (got ${got_sha:0:12}…) — refusing to install (non-fatal)${NC}"
-            rm -f /tmp/livekit.tgz
-            return 0
-        fi
-        tar -xzf /tmp/livekit.tgz -C /tmp livekit-server
-        install -o root -g root -m 0755 /tmp/livekit-server /usr/local/bin/livekit-server
-        rm -f /tmp/livekit.tgz /tmp/livekit-server
-        echo -e "${GREEN}  ✓ LiveKit ${LIVEKIT_VERSION} installed${NC}"
-    fi
-
-    # Render config (idempotent — re-run picks up rotated keys).
-    [ -f "$env_file" ] && { set -a; source "$env_file"; set +a; }
-    mkdir -p /etc/livekit /var/lib/livekit
-    cat > /etc/livekit/livekit.yaml <<EOF
-port: 7880
-bind_addresses:
-  - "0.0.0.0"
-rtc:
-  tcp_port: 7881
-  port_range_start: 30000
-  port_range_end: 31000
-  use_external_ip: true
-  node_ip: "${PUBLIC_IP:-127.0.0.1}"
-keys:
-  "${LIVEKIT_API_KEY:-devkey}": "${LIVEKIT_API_SECRET:-secret}"
-room:
-  empty_timeout: 300
-  max_participants: 200
-turn:
-  enabled: false
-EOF
-    chmod 640 /etc/livekit/livekit.yaml
-    chown root:smsly /etc/livekit/livekit.yaml
-    echo -e "${GREEN}  ✓ LiveKit config rendered${NC}"
 }
 
 install_media_node() {
@@ -6368,19 +7024,19 @@ wipe_existing_install() {
         docker compose -f "$COMPOSE_FILE" down -v --remove-orphans || echo -e "${YELLOW}    ⚠ docker compose down failed${NC}"
     fi
 
-    SMSLY_CONTAINERS=$(docker ps -a --filter "name=smsly-hosting" -q  || true)
+    SMSLY_CONTAINERS=$( { docker ps -a --filter "name=smsly-hosting" -q; docker ps -a --filter "name=smsly-" -q; } 2>/dev/null | sort -u || true )
     if [ -n "$SMSLY_CONTAINERS" ]; then
         docker rm -f $SMSLY_CONTAINERS || echo -e "${YELLOW}    ⚠ docker rm containers failed${NC}"
     fi
 
-    SMSLY_VOLUMES=$(docker volume ls --filter "name=smsly-hosting" -q  || true)
+    SMSLY_VOLUMES=$( { docker volume ls --filter "name=smsly-hosting" -q; docker volume ls --filter "name=smsly-" -q; } 2>/dev/null | sort -u || true )
     if [ -n "$SMSLY_VOLUMES" ]; then
         for vol in $SMSLY_VOLUMES; do
             docker volume rm "$vol"  || true
         done
     fi
 
-    SMSLY_NETWORKS=$(docker network ls --filter "name=smsly-hosting" -q  || true)
+    SMSLY_NETWORKS=$( { docker network ls --filter "name=smsly-hosting" -q; docker network ls --filter "name=smsly-" -q; } 2>/dev/null | sort -u || true )
     if [ -n "$SMSLY_NETWORKS" ]; then
         for net in $SMSLY_NETWORKS; do
             docker network rm "$net"  || true
@@ -6422,10 +7078,9 @@ fix_env_permissions() {
     fi
 
     # The backend container runs as UID 1000 (smsly user).
-    # .env must be group-writable by GID 1000 so the domain-config
-    # signal can persist DOMAIN/USE_SSL changes back to .env.
+    # .env must be readable by GID 1000 without world-read or group-write.
     chown root:1000 "$env_file"  || true
-    chmod 664 "$env_file"  || true
+    chmod 640 "$env_file"  || true
 
     local owner="" mode=""
     owner="$(stat -c '%u:%g' "$env_file"  || echo "?")"
@@ -6453,12 +7108,28 @@ fix_env_permissions() {
     # every config reload fails validation with "permission denied" and
     # Caddy keeps serving a STALE config — new domains get no cert and
     # Cloudflare reports SSL handshake failure (2026-09-10 incident).
-    local caddy_log_dir
+    local caddy_log_dir=""
     caddy_log_dir="$(docker volume inspect smsly-hosting_caddy_logs --format '{{.Mountpoint}}' 2>/dev/null || true)"
     if [ -n "$caddy_log_dir" ] && [ -d "$caddy_log_dir" ]; then
-        chown 1000:1000 "$caddy_log_dir"  || true
+        chown -R 1000:1000 "$caddy_log_dir"  || true
         chmod u+rwx "$caddy_log_dir"  || true
         echo -e "${GREEN}  ✓ caddy_logs permissions fixed${NC}"
+    fi
+    if command -v docker >/dev/null 2>&1; then
+        local _vol=""
+        local _caddy_pat='(^|_)(caddy_data|caddy_logs)$'
+        if command -v is_node_mode >/dev/null 2>&1 && is_node_mode; then
+            _caddy_pat='(^|_)(caddy_data|caddy_logs|caddy_config)$'
+        fi
+        for _vol in $(docker volume ls -q 2>/dev/null | grep -E "$_caddy_pat" || true); do
+            timeout 90 docker run --rm -v "${_vol}:/data" alpine chown -R 1000:1000 /data >/dev/null 2>&1 || true
+        done
+        for _vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)postgres-archive$' || true); do
+            timeout 90 docker run --rm -v "${_vol}:/data" alpine chown -R 70:70 /data >/dev/null 2>&1 || true
+        done
+        for _vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)verdaccio_data$' || true); do
+            timeout 90 docker run --rm -v "${_vol}:/data" alpine chown -R 10001:65533 /data >/dev/null 2>&1 || true
+        done
     fi
 
     # Fix builds and prometheus-targets directories
@@ -6475,29 +7146,26 @@ fix_domain_sync() {
     local target_domain="${1:-}"
     local env_file="$INSTALL_DIR/.env"
 
+    if [ -z "$target_domain" ] && [ -f "$env_file" ]; then
+        target_domain="$(env_get_value "$env_file" "DOMAIN" || true)"
+    fi
+    if [ -z "$target_domain" ]; then
+        echo -e "${RED}  ✗ ERROR: No target domain provided and DOMAIN is empty in $env_file.${NC}" >&2
+        return 1
+    fi
+    # Strict RFC-1123 hostname validation (prevents sed/python/Caddy injection)
+    if ! printf '%s' "$target_domain" | grep -qE '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$' || [ "${#target_domain}" -gt 253 ]; then
+        echo -e "${RED}  ✗ ERROR: Invalid target domain '$target_domain' (must be RFC-1123 hostname).${NC}" >&2
+        return 1
+    fi
+
     echo -e "${BLUE}  → Fixing domain sync for: $target_domain${NC}"
 
-    # 1. Fix .env
-    if grep -q '^DOMAIN=' "$env_file" ; then
-        sed -i "s|^DOMAIN=.*|DOMAIN=$target_domain|" "$env_file"
-    else
-        echo "DOMAIN=$target_domain" >> "$env_file"
-    fi
-    if grep -q '^USE_SSL=' "$env_file" ; then
-        sed -i 's/^USE_SSL=.*/USE_SSL=true/' "$env_file"
-    else
-        echo "USE_SSL=true" >> "$env_file"
-    fi
-    # Keep the frontend's baked canonical origin in sync: the middleware
-    # hostname check reads NEXT_PUBLIC_APP_URL from the image build, so a
-    # domain change without a rebuild would 404 the real dashboard.
-    # fix-domain forces USE_SSL=true above, hence https here.
+    # 1. Fix .env (use safe env_set_value / env-var passing; never interpolate into sed/python)
     _prev_frontend_url="$(grep -m1 '^FRONTEND_APP_URL=' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
-    if grep -q '^FRONTEND_APP_URL=' "$env_file" ; then
-        sed -i "s|^FRONTEND_APP_URL=.*|FRONTEND_APP_URL=https://$target_domain|" "$env_file"
-    else
-        echo "FRONTEND_APP_URL=https://$target_domain" >> "$env_file"
-    fi
+    env_set_value "$env_file" "DOMAIN" "$target_domain"
+    env_set_value "$env_file" "USE_SSL" "true"
+    env_set_value "$env_file" "FRONTEND_APP_URL" "https://$target_domain"
     if [ "${_prev_frontend_url:-}" != "https://$target_domain" ]; then
         _FRONTEND_URL_CHANGED="true"
     else
@@ -6523,10 +7191,11 @@ fix_domain_sync() {
 
     # 2. Sync DB PlatformConfig
     if docker compose -f "$COMPOSE_FILE" ps -q backend  | grep -q .; then
-        timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+        timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T -e TARGET_DOMAIN="$target_domain" backend python manage.py shell -c "
+import os
 from apps.deployments.models import PlatformConfig
 cfg = PlatformConfig.load()
-cfg.domain = '$target_domain'
+cfg.domain = os.environ['TARGET_DOMAIN']
 cfg.use_ssl = True
 cfg.save()
 print(f'PlatformConfig domain set to: {cfg.domain}')
@@ -6617,8 +7286,7 @@ CADDYFIX
 
     # 4. Reload Caddy
     if docker compose -f "$COMPOSE_FILE" ps -q caddy  | grep -q .; then
-        timeout -k 5 20 docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile || \
-            timeout -k 5 20 docker compose -f "$COMPOSE_FILE" restart caddy || \
+        timeout -k 5 20 docker compose -f "$COMPOSE_FILE" exec -T caddy caddy reload --config /etc/caddy/Caddyfile || \
             echo -e "${YELLOW}    ⚠ Caddy reload failed${NC}"
     fi
 
@@ -6673,7 +7341,8 @@ recover_runtime_stack() {
         mv "${_tmp_dir}/registry.key" "$INSTALL_DIR/certs/registry.key"
         mv "${_tmp_dir}/registry.crt" "$INSTALL_DIR/certs/registry.crt"
         rm -rf "$_tmp_dir"
-        chmod 644 "$INSTALL_DIR/certs/registry.crt" "$INSTALL_DIR/certs/registry.key"
+        chmod 644 "$INSTALL_DIR/certs/registry.crt"
+        chmod 600 "$INSTALL_DIR/certs/registry.key"
     }
     _registry_tls_ok() {
         [ -f "$INSTALL_DIR/certs/registry.key" ] || return 1
@@ -6759,14 +7428,14 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
     fi
 
     if [ "$MODE_AGENT_LITE" = "true" ]; then
-        docker compose -f "$COMPOSE_FILE" up -d redis rabbitmq socket-proxy || true
-        wait_for_container_ready "smsly-redis-primary" 120 || true
+        docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy || true
+        wait_for_container_ready "smsly-hosting-redis-1" 120 || true
         sync_agent_lite_rabbitmq_password
     else
-        docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) redis rabbitmq socket-proxy registry || true
+        docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry || true
         wait_for_container_ready "smsly-postgres-primary" 120 || true
         if [ -n "$(get_pgcat_if_exists)" ]; then wait_for_container_ready "smsly-hosting-pgcat-1" 120 || true; fi
-        wait_for_container_ready "smsly-hosting-redis-1" 120 || true
+        wait_for_container_ready "smsly-redis-primary" 120 || true
     fi
 
     if should_manage_caddy && docker compose -f "$COMPOSE_FILE" ps caddy  | grep -q "Up"; then
@@ -7023,29 +7692,26 @@ fix_domain_sync() {
     local target_domain="${1:-}"
     local env_file="$INSTALL_DIR/.env"
 
+    if [ -z "$target_domain" ] && [ -f "$env_file" ]; then
+        target_domain="$(env_get_value "$env_file" "DOMAIN" || true)"
+    fi
+    if [ -z "$target_domain" ]; then
+        echo -e "${RED}  ✗ ERROR: No target domain provided and DOMAIN is empty in $env_file.${NC}" >&2
+        return 1
+    fi
+    # Strict RFC-1123 hostname validation (prevents sed/python/Caddy injection)
+    if ! printf '%s' "$target_domain" | grep -qE '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$' || [ "${#target_domain}" -gt 253 ]; then
+        echo -e "${RED}  ✗ ERROR: Invalid target domain '$target_domain' (must be RFC-1123 hostname).${NC}" >&2
+        return 1
+    fi
+
     echo -e "${BLUE}  → Fixing domain sync for: $target_domain${NC}"
 
-    # 1. Fix .env
-    if grep -q '^DOMAIN=' "$env_file" ; then
-        sed -i "s|^DOMAIN=.*|DOMAIN=$target_domain|" "$env_file"
-    else
-        echo "DOMAIN=$target_domain" >> "$env_file"
-    fi
-    if grep -q '^USE_SSL=' "$env_file" ; then
-        sed -i 's/^USE_SSL=.*/USE_SSL=true/' "$env_file"
-    else
-        echo "USE_SSL=true" >> "$env_file"
-    fi
-    # Keep the frontend's baked canonical origin in sync: the middleware
-    # hostname check reads NEXT_PUBLIC_APP_URL from the image build, so a
-    # domain change without a rebuild would 404 the real dashboard.
-    # fix-domain forces USE_SSL=true above, hence https here.
+    # 1. Fix .env (use safe env_set_value / env-var passing; never interpolate into sed/python)
     _prev_frontend_url="$(grep -m1 '^FRONTEND_APP_URL=' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
-    if grep -q '^FRONTEND_APP_URL=' "$env_file" ; then
-        sed -i "s|^FRONTEND_APP_URL=.*|FRONTEND_APP_URL=https://$target_domain|" "$env_file"
-    else
-        echo "FRONTEND_APP_URL=https://$target_domain" >> "$env_file"
-    fi
+    env_set_value "$env_file" "DOMAIN" "$target_domain"
+    env_set_value "$env_file" "USE_SSL" "true"
+    env_set_value "$env_file" "FRONTEND_APP_URL" "https://$target_domain"
     if [ "${_prev_frontend_url:-}" != "https://$target_domain" ]; then
         _FRONTEND_URL_CHANGED="true"
     else
@@ -7071,10 +7737,11 @@ fix_domain_sync() {
 
     # 2. Sync DB PlatformConfig
     if docker compose -f "$COMPOSE_FILE" ps -q backend  | grep -q .; then
-        timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+        timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T -e TARGET_DOMAIN="$target_domain" backend python manage.py shell -c "
+import os
 from apps.deployments.models import PlatformConfig
 cfg = PlatformConfig.load()
-cfg.domain = '$target_domain'
+cfg.domain = os.environ['TARGET_DOMAIN']
 cfg.use_ssl = True
 cfg.save()
 print(f'PlatformConfig domain set to: {cfg.domain}')
@@ -7165,8 +7832,7 @@ CADDYFIX
 
     # 4. Reload Caddy
     if docker compose -f "$COMPOSE_FILE" ps -q caddy  | grep -q .; then
-        timeout -k 5 20 docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile || \
-            timeout -k 5 20 docker compose -f "$COMPOSE_FILE" restart caddy || \
+        timeout -k 5 20 docker compose -f "$COMPOSE_FILE" exec -T caddy caddy reload --config /etc/caddy/Caddyfile || \
             echo -e "${YELLOW}    ⚠ Caddy reload failed${NC}"
     fi
 
@@ -7222,7 +7888,8 @@ recover_runtime_stack() {
         mv "${_tmp_dir}/registry.key" "$INSTALL_DIR/certs/registry.key"
         mv "${_tmp_dir}/registry.crt" "$INSTALL_DIR/certs/registry.crt"
         rm -rf "$_tmp_dir"
-        chmod 644 "$INSTALL_DIR/certs/registry.crt" "$INSTALL_DIR/certs/registry.key"
+        chmod 644 "$INSTALL_DIR/certs/registry.crt"
+        chmod 600 "$INSTALL_DIR/certs/registry.key"
     }
     _registry_tls_ok() {
         [ -f "$INSTALL_DIR/certs/registry.key" ] || return 1
@@ -7308,14 +7975,14 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
     fi
 
     if [ "$MODE_AGENT_LITE" = "true" ]; then
-        docker compose -f "$COMPOSE_FILE" up -d redis rabbitmq socket-proxy || true
-        wait_for_container_ready "smsly-redis-primary" 120 || true
+        docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy || true
+        wait_for_container_ready "smsly-hosting-redis-1" 120 || true
         sync_agent_lite_rabbitmq_password
     else
-        docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) redis rabbitmq socket-proxy registry || true
+        docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry || true
         wait_for_container_ready "smsly-postgres-primary" 120 || true
         if [ -n "$(get_pgcat_if_exists)" ]; then wait_for_container_ready "smsly-hosting-pgcat-1" 120 || true; fi
-        wait_for_container_ready "smsly-hosting-redis-1" 120 || true
+        wait_for_container_ready "smsly-redis-primary" 120 || true
     fi
 
     if should_manage_caddy && docker compose -f "$COMPOSE_FILE" ps caddy  | grep -q "Up"; then
@@ -7362,19 +8029,19 @@ wipe_existing_install() {
         docker compose -f "$COMPOSE_FILE" down -v --remove-orphans || echo -e "${YELLOW}    ⚠ docker compose down failed${NC}"
     fi
 
-    SMSLY_CONTAINERS=$(docker ps -a --filter "name=smsly-hosting" -q  || true)
+    SMSLY_CONTAINERS=$( { docker ps -a --filter "name=smsly-hosting" -q; docker ps -a --filter "name=smsly-" -q; } 2>/dev/null | sort -u || true )
     if [ -n "$SMSLY_CONTAINERS" ]; then
         docker rm -f $SMSLY_CONTAINERS || echo -e "${YELLOW}    ⚠ docker rm containers failed${NC}"
     fi
 
-    SMSLY_VOLUMES=$(docker volume ls --filter "name=smsly-hosting" -q  || true)
+    SMSLY_VOLUMES=$( { docker volume ls --filter "name=smsly-hosting" -q; docker volume ls --filter "name=smsly-" -q; } 2>/dev/null | sort -u || true )
     if [ -n "$SMSLY_VOLUMES" ]; then
         for vol in $SMSLY_VOLUMES; do
             docker volume rm "$vol"  || true
         done
     fi
 
-    SMSLY_NETWORKS=$(docker network ls --filter "name=smsly-hosting" -q  || true)
+    SMSLY_NETWORKS=$( { docker network ls --filter "name=smsly-hosting" -q; docker network ls --filter "name=smsly-" -q; } 2>/dev/null | sort -u || true )
     if [ -n "$SMSLY_NETWORKS" ]; then
         for net in $SMSLY_NETWORKS; do
             docker network rm "$net"  || true
@@ -7416,10 +8083,9 @@ fix_env_permissions() {
     fi
 
     # The backend container runs as UID 1000 (smsly user).
-    # .env must be group-writable by GID 1000 so the domain-config
-    # signal can persist DOMAIN/USE_SSL changes back to .env.
+    # .env must be readable by GID 1000 without world-read or group-write.
     chown root:1000 "$env_file"  || true
-    chmod 664 "$env_file"  || true
+    chmod 640 "$env_file"  || true
 
     local owner="" mode=""
     owner="$(stat -c '%u:%g' "$env_file"  || echo "?")"
@@ -7447,12 +8113,28 @@ fix_env_permissions() {
     # every config reload fails validation with "permission denied" and
     # Caddy keeps serving a STALE config — new domains get no cert and
     # Cloudflare reports SSL handshake failure (2026-09-10 incident).
-    local caddy_log_dir
+    local caddy_log_dir=""
     caddy_log_dir="$(docker volume inspect smsly-hosting_caddy_logs --format '{{.Mountpoint}}' 2>/dev/null || true)"
     if [ -n "$caddy_log_dir" ] && [ -d "$caddy_log_dir" ]; then
-        chown 1000:1000 "$caddy_log_dir"  || true
+        chown -R 1000:1000 "$caddy_log_dir"  || true
         chmod u+rwx "$caddy_log_dir"  || true
         echo -e "${GREEN}  ✓ caddy_logs permissions fixed${NC}"
+    fi
+    if command -v docker >/dev/null 2>&1; then
+        local _vol=""
+        local _caddy_pat='(^|_)(caddy_data|caddy_logs)$'
+        if command -v is_node_mode >/dev/null 2>&1 && is_node_mode; then
+            _caddy_pat='(^|_)(caddy_data|caddy_logs|caddy_config)$'
+        fi
+        for _vol in $(docker volume ls -q 2>/dev/null | grep -E "$_caddy_pat" || true); do
+            timeout 90 docker run --rm -v "${_vol}:/data" alpine chown -R 1000:1000 /data >/dev/null 2>&1 || true
+        done
+        for _vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)postgres-archive$' || true); do
+            timeout 90 docker run --rm -v "${_vol}:/data" alpine chown -R 70:70 /data >/dev/null 2>&1 || true
+        done
+        for _vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)verdaccio_data$' || true); do
+            timeout 90 docker run --rm -v "${_vol}:/data" alpine chown -R 10001:65533 /data >/dev/null 2>&1 || true
+        done
     fi
 
     # Fix builds and prometheus-targets directories
@@ -7983,6 +8665,7 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 64)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
     env_ensure_var "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 64)" "FRP tunnel relay authentication token"
     env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
+    env_ensure_var "$env_file" "EDGE_JWT_SECRET" "$(gen_hex_secret 64)" "Edge JWT signing secret for Traefik forward-auth and Caddy authorize"
     env_ensure_var "$env_file" "PATRONI_SUPERUSER_PASSWORD" "$(gen_hex_secret 32)" "Patroni superuser password for HA cluster"
     env_ensure_var "$env_file" "NODE_SECURITY" "1" "Enable full hardening stack (auditd, kernel, docker, gVisor/Kata)"
     env_ensure_var "$env_file" "NODE_OBSERVABILITY" "1" "Enable node metrics stack (cadvisor, node-exporter, docker-labels)"
@@ -7990,19 +8673,57 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "NODE_FALCO" "1" "Enable Falco runtime security"
     env_ensure_var "$env_file" "NODE_SPIRE" "1" "Enable SPIRE mTLS"
     env_ensure_var "$env_file" "NODE_LOG_SHIPPING" "1" "Ship node access logs to master CrowdSec (security path, independent of observability metrics)"
-    # WAF shadow is default-on at >=8GB RAM, off below (the shadow costs
-    # ~1-2GB real). Fill-if-absent so an explicit operator value survives
-    # updates; mirrors the fresh_config sizing ladder.
+    # Resolve stack tier first (<6GB=lite, 6-12GB=medium, >=12GB=full) so
+    # existing lite/medium installs preserve their tier across --update.
+    local _db_ha_mode="" _prof_cur="" _prof_new="" _stack_tier="" _tier_ram_mb=""
+    _db_ha_mode="$(env_get_value "$env_file" "DB_HA_ENABLED")"
+    [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
+    env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
+
+    _prof_cur="$(env_get_value "$env_file" "COMPOSE_PROFILES")"
+    _stack_tier="$(env_get_value "$env_file" "STACK_TIER")"
+    case "$_stack_tier" in
+        lite|medium|full) ;;
+        *)
+            if [ -n "$_prof_cur" ]; then
+                case ",${_prof_cur}," in
+                    *,full,*) _stack_tier="full" ;;
+                    *,medium,*) _stack_tier="medium" ;;
+                    *) _stack_tier="lite" ;;
+                esac
+            else
+                _tier_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+                [ -n "$_tier_ram_mb" ] || _tier_ram_mb=8192
+                if [ "$_tier_ram_mb" -lt 6144 ]; then
+                    _stack_tier="lite"
+                elif [ "$_tier_ram_mb" -lt 12288 ]; then
+                    _stack_tier="medium"
+                else
+                    _stack_tier="full"
+                fi
+            fi
+            env_set_value "$env_file" "STACK_TIER" "$_stack_tier"
+            ;;
+    esac
+
+    # WAF shadow is default-on at >=12GB RAM (full tier), off below (costs
+    # ~1.5-2.2GB real). Fill-if-absent so an explicit operator value
+    # survives updates; mirrors the fresh_config sizing ladder.
     if [ -z "$(env_get_value "$env_file" "OPENAPPSEC_ENABLED")" ]; then
         local _waf_ram_mb=""
         _waf_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
         [ -n "$_waf_ram_mb" ] || _waf_ram_mb=8192
-        if [ "$_waf_ram_mb" -ge 8192 ]; then
+        if [ "$_waf_ram_mb" -ge 12288 ]; then
             env_set_value "$env_file" "OPENAPPSEC_ENABLED" "1"
         else
             env_set_value "$env_file" "OPENAPPSEC_ENABLED" "0"
         fi
+        if [ "$_stack_tier" != "full" ]; then
+            env_set_value "$env_file" "OPENAPPSEC_ENABLED" "0"
+        fi
     fi
+    local _waf_enabled=""
+    _waf_enabled="$(env_get_value "$env_file" "OPENAPPSEC_ENABLED")"
     env_ensure_var "$env_file" "OPENAPPSEC_MODE" "prevent" "WAF enforcement mode (prevent enforce vs detect-learn shadow); set from Settings → Security Scanning"
     env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'  || python3 -c 'import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
@@ -8013,84 +8734,94 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "REPLICATION_PASSWORD" "$(gen_hex_secret 32)" "PostgreSQL streaming replication password"
     env_ensure_var "$env_file" "SENTINEL_PASSWORD" "$(gen_hex_secret 32)" "Redis Sentinel authentication password"
     env_ensure_var "$env_file" "SENTINEL_SERVICE_NAME" "mymaster" "Redis Sentinel service name"
-    # Auto-detect sentinel containers and populate SENTINEL_HOSTS if empty.
-    # Sentinel containers are named smsly-redis-sentinel-{1,2,3} and listen
-    # on port 26379.  Without this, the backend falls back to direct
-    # redis-primary connection which breaks after sentinel failover.
-    local current_sentinel_hosts
+    # Populate SENTINEL_HOSTS only when Redis HA is active (medium/full);
+    # lite runs single-node Redis so SENTINEL_HOSTS stays empty.
+    local current_sentinel_hosts=""
     current_sentinel_hosts="$(env_get_value "$env_file" "SENTINEL_HOSTS")"
-    if [ -z "$current_sentinel_hosts" ]; then
-        local detected_sentinels=""
-        local _si
-        for _si in 1 2 3; do
-            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-redis-sentinel-${_si}$"; then
-                if [ -n "$detected_sentinels" ]; then
-                    detected_sentinels="${detected_sentinels},"
-                fi
-                detected_sentinels="${detected_sentinels}smsly-redis-sentinel-${_si}:26379"
-            fi
-        done
-        if [ -n "$detected_sentinels" ]; then
-            echo -e "${BLUE}  -> Auto-detected Redis Sentinels: ${detected_sentinels}${NC}"
-            env_set_value "$env_file" "SENTINEL_HOSTS" "$detected_sentinels"
-            echo -e "${GREEN}  OK SENTINEL_HOSTS set${NC}"
+    if [ "$_stack_tier" = "lite" ]; then
+        if [ "$current_sentinel_hosts" = "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379" ]; then
+            env_set_value "$env_file" "SENTINEL_HOSTS" ""
         fi
+    elif [ -z "$current_sentinel_hosts" ] && [ "$_db_ha_mode" = "local-ha" ] && [ "${MODE_AGENT_LITE:-false}" != "true" ] && [ "${MODE_NODE:-false}" != "true" ]; then
+        env_set_value "$env_file" "SENTINEL_HOSTS" "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379"
+        echo -e "${GREEN}  OK SENTINEL_HOSTS set for local-ha${NC}"
     fi
     env_ensure_var "$env_file" "REGISTRY_HTTP_SECRET" "$(gen_hex_secret 32)" "Docker registry HTTP secret"
-    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false" "SSH host key verification (True=strict, False=accept-first)"
-    # DB HA mode + compose profiles: without COMPOSE_PROFILES the profiled
-    # db/postgres services are never created and every backend crashes with
-    # "could not translate host name db" (2026-09-10 fresh-install incident).
-    # Default is full (run everything): local-ha|patroni|external + medium
-    # (observability) + full (Falco, SPIRE servers, apt-cacher, verdaccio).
-    local _db_ha_mode=""
-    _db_ha_mode="$(env_get_value "$env_file" "DB_HA_ENABLED")"
-    [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
-    env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
-    env_ensure_var "$env_file" "COMPOSE_PROFILES" "${_db_ha_mode},medium,full" "Compose profiles to activate (DB mode + observability + full stack)"
-    # Backfill older installs that predate the full default (local-ha or
-    # local-ha,medium): ensure the current DB mode + medium + full are
-    # present, and drop any STALE db-mode token (local-ha|patroni|external)
-    # so two postgres stacks never start side by side (haproxy :7000
-    # would clash with frps :7000). Idempotent, case-insensitive.
-    local _prof_cur="" _prof_new=""
+    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "true" "SSH host key verification (True=strict, False=accept-first)"
+    # Reconcile COMPOSE_PROFILES for (_db_ha_mode, _stack_tier, _waf_enabled):
+    # preserves STACK_TIER across --update and gates appsec strictly on
+    # OPENAPPSEC_ENABLED=1 while stripping stale DB-mode tokens.
+    local _default_profiles="$_db_ha_mode"
+    case "$_stack_tier" in
+        medium)
+            [ "$_db_ha_mode" = "local-ha" ] && _default_profiles="${_default_profiles},local-ha-replica"
+            _default_profiles="${_default_profiles},redis-ha,medium"
+            ;;
+        full)
+            [ "$_db_ha_mode" = "local-ha" ] && _default_profiles="${_default_profiles},local-ha-replica"
+            _default_profiles="${_default_profiles},redis-ha,medium,full"
+            ;;
+    esac
+    [ "$_waf_enabled" = "1" ] && _default_profiles="${_default_profiles},appsec"
+    env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_default_profiles" "Compose profiles to activate (DB mode + tier + optional appsec)"
     _prof_cur="$(env_get_value "$env_file" "COMPOSE_PROFILES")"
     if command -v python3 >/dev/null 2>&1; then
-        _prof_new="$(DB_MODE="$_db_ha_mode" CUR_PROF="$_prof_cur" python3 -c '
+        _prof_new="$(DB_MODE="$_db_ha_mode" STACK_TIER_VAL="$_stack_tier" WAF_VAL="$_waf_enabled" CUR_PROF="$_prof_cur" python3 -c '
 import os
-mode = os.environ.get("DB_MODE", "local-ha").strip() or "local-ha"
+mode = (os.environ.get("DB_MODE") or "local-ha").strip() or "local-ha"
+tier = (os.environ.get("STACK_TIER_VAL") or "full").strip().lower()
+waf = (os.environ.get("WAF_VAL") or "0").strip()
 cur = os.environ.get("CUR_PROF", "")
 db_modes = {"local-ha", "patroni", "external"}
+managed = {"local-ha-replica", "redis-ha", "medium", "full", "appsec"}
 seen = set()
 out = []
 for tok in [t.strip() for t in cur.split(",")]:
     if not tok:
         continue
     low = tok.lower()
-    if low in db_modes and low != mode.lower():
+    if low in db_modes or low in managed:
         continue
     if low not in seen:
         seen.add(low)
         out.append(tok)
-for want in [mode, "medium", "full"]:
-    if want.lower() not in seen:
-        seen.add(want.lower())
-        out.append(want)
-print(",".join(out))
+desired = [mode]
+if tier in ("medium", "full"):
+    if mode.lower() == "local-ha":
+        desired.append("local-ha-replica")
+    desired.extend(["redis-ha", "medium"])
+if tier == "full":
+    desired.append("full")
+if waf == "1":
+    desired.append("appsec")
+# Keep DB mode + tier profiles ordered deterministically, followed by custom tokens.
+final = []
+final_seen = set()
+for tok in desired + out:
+    low = tok.lower()
+    if low not in final_seen:
+        final_seen.add(low)
+        final.append(tok)
+print(",".join(final))
 ' || true)"
         if [ -n "$_prof_new" ] && [ "$_prof_new" != "$_prof_cur" ]; then
             env_set_value "$env_file" "COMPOSE_PROFILES" "$_prof_new"
         fi
     else
-        env_append_csv_values "$env_file" "COMPOSE_PROFILES" "$_db_ha_mode" "medium" "full" > /dev/null
+        env_set_value "$env_file" "COMPOSE_PROFILES" "$_default_profiles"
     fi
     # Read-replica routing must name the replica the compose stack actually
-    # starts. Empty here + compose-level default used to agree by accident;
-    # make it explicit so .env, pgcat, and the dashboard disagree never.
-    # External mode keeps operator-managed values (never overwrite).
+    # starts. Lite skips same-host postgres-replica; medium/full start it
+    # in local-ha mode. External mode keeps operator-managed values.
     local _replica_hosts=""
     _replica_hosts="$(env_get_value "$env_file" "DB_REPLICA_HOSTS")"
-    if [ -z "$_replica_hosts" ]; then
+    if [ "$_stack_tier" = "lite" ]; then
+        if [ "$_db_ha_mode" = "local-ha" ] && [ "$_replica_hosts" = "postgres-replica:5432" ]; then
+            env_set_value "$env_file" "DB_REPLICA_HOSTS" ""
+        elif [ "$_db_ha_mode" = "patroni" ] && [ -z "$_replica_hosts" ]; then
+            env_set_value "$env_file" "DB_REPLICA_HOSTS" "haproxy:5001"
+        fi
+    elif [ -z "$_replica_hosts" ]; then
         case "$_db_ha_mode" in
             patroni) env_set_value "$env_file" "DB_REPLICA_HOSTS" "haproxy:5001" ;;
             local-ha) env_set_value "$env_file" "DB_REPLICA_HOSTS" "postgres-replica:5432" ;;
@@ -8104,18 +8835,26 @@ print(",".join(out))
     _size_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
     [ -n "$_size_ram_mb" ] || _size_ram_mb=8192
     _size_cpus="$(nproc 2>/dev/null || echo 4)"
-    local _want_workers="" _want_buffers="" _want_cache=""
+    local _want_workers="" _want_buffers="" _want_cache="" _want_celery_autoscale="" _want_wal_keep="" _want_obs_retention=""
     if [ "$_size_cpus" -le 2 ]; then _want_workers=2; else _want_workers=4; fi
-    if [ "$_size_ram_mb" -le 4096 ]; then _want_buffers=256MB; _want_cache=1GB
-    elif [ "$_size_ram_mb" -le 8192 ]; then _want_buffers=512MB; _want_cache=2GB
-    else _want_buffers=1GB; _want_cache=4GB; fi
+    if [ "$_size_ram_mb" -le 4096 ]; then
+        _want_buffers=256MB; _want_cache=1GB; _want_celery_autoscale="2,0"; _want_wal_keep="64MB"
+    elif [ "$_size_ram_mb" -le 8192 ]; then
+        _want_buffers=512MB; _want_cache=2GB; _want_celery_autoscale="4,0"; _want_wal_keep="512MB"
+    else
+        _want_buffers=1GB; _want_cache=4GB; _want_celery_autoscale="4,0"; _want_wal_keep="1GB"
+    fi
+    if [ "$_stack_tier" = "lite" ]; then _want_wal_keep="64MB"; fi
+    if [ "$_size_ram_mb" -lt 12288 ]; then _want_obs_retention="7d"; else _want_obs_retention="30d"; fi
     env_ensure_var "$env_file" "GUNICORN_WORKERS" "$_want_workers" "Gunicorn workers (host-sized; burst via autoscaler)"
     env_ensure_var "$env_file" "DB_SHARED_BUFFERS" "$_want_buffers" "Postgres shared buffers (host-sized; pinned shm)"
     env_ensure_var "$env_file" "DB_EFFECTIVE_CACHE_SIZE" "$_want_cache" "Postgres planner cache hint (no RAM cost)"
     env_ensure_var "$env_file" "CELERY_QUEUES" "celery,fast,deploy" "Main worker drains all queues (burst workers idle-stop safely)"
+    env_ensure_var "$env_file" "CELERY_AUTOSCALE" "$_want_celery_autoscale" "Main Celery worker autoscale max,min"
     env_ensure_var "$env_file" "CELERY_AUTOSCALE_ENABLED" "true" "Idle-stop burst workers on empty queues"
-    env_ensure_var "$env_file" "PROMETHEUS_RETENTION" "30d" "Prometheus TSDB retention (main driver of metrics disk+RAM growth; 7d on small hosts)"
-    env_ensure_var "$env_file" "LOKI_RETENTION" "30d" "Loki log retention (set together with PROMETHEUS_RETENTION)"
+    env_ensure_var "$env_file" "PG_WAL_KEEP_SIZE" "$_want_wal_keep" "Postgres retained WAL floor (64MB lite, 512MB medium, 1GB full)"
+    env_ensure_var "$env_file" "PROMETHEUS_RETENTION" "$_want_obs_retention" "Prometheus TSDB retention (7d <12GB, 30d >=12GB)"
+    env_ensure_var "$env_file" "LOKI_RETENTION" "$_want_obs_retention" "Loki log retention (set together with PROMETHEUS_RETENTION)"
     env_ensure_var "$env_file" "FALCO_MEMORY_LIMIT" "1024M" "Falco runtime-security memory cap (1024M prevents modern_ebpf OOM)"
     # Registry public bind: without an explicit override the compose
     # fallback is a hardcoded IP from another host and the registry port
@@ -9013,6 +9752,7 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 64)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
     env_ensure_var "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 64)" "FRP tunnel relay authentication token"
     env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
+    env_ensure_var "$env_file" "EDGE_JWT_SECRET" "$(gen_hex_secret 64)" "Edge JWT signing secret for Traefik forward-auth and Caddy authorize"
     env_ensure_var "$env_file" "PATRONI_SUPERUSER_PASSWORD" "$(gen_hex_secret 32)" "Patroni superuser password for HA cluster"
     env_ensure_var "$env_file" "NODE_SECURITY" "1" "Enable full hardening stack (auditd, kernel, docker, gVisor/Kata)"
     env_ensure_var "$env_file" "NODE_OBSERVABILITY" "1" "Enable node metrics stack (cadvisor, node-exporter, docker-labels)"
@@ -9020,19 +9760,57 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "NODE_FALCO" "1" "Enable Falco runtime security"
     env_ensure_var "$env_file" "NODE_SPIRE" "1" "Enable SPIRE mTLS"
     env_ensure_var "$env_file" "NODE_LOG_SHIPPING" "1" "Ship node access logs to master CrowdSec (security path, independent of observability metrics)"
-    # WAF shadow is default-on at >=8GB RAM, off below (the shadow costs
-    # ~1-2GB real). Fill-if-absent so an explicit operator value survives
-    # updates; mirrors the fresh_config sizing ladder.
+    # Resolve stack tier first (<6GB=lite, 6-12GB=medium, >=12GB=full) so
+    # existing lite/medium installs preserve their tier across --update.
+    local _db_ha_mode="" _prof_cur="" _prof_new="" _stack_tier="" _tier_ram_mb=""
+    _db_ha_mode="$(env_get_value "$env_file" "DB_HA_ENABLED")"
+    [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
+    env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
+
+    _prof_cur="$(env_get_value "$env_file" "COMPOSE_PROFILES")"
+    _stack_tier="$(env_get_value "$env_file" "STACK_TIER")"
+    case "$_stack_tier" in
+        lite|medium|full) ;;
+        *)
+            if [ -n "$_prof_cur" ]; then
+                case ",${_prof_cur}," in
+                    *,full,*) _stack_tier="full" ;;
+                    *,medium,*) _stack_tier="medium" ;;
+                    *) _stack_tier="lite" ;;
+                esac
+            else
+                _tier_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+                [ -n "$_tier_ram_mb" ] || _tier_ram_mb=8192
+                if [ "$_tier_ram_mb" -lt 6144 ]; then
+                    _stack_tier="lite"
+                elif [ "$_tier_ram_mb" -lt 12288 ]; then
+                    _stack_tier="medium"
+                else
+                    _stack_tier="full"
+                fi
+            fi
+            env_set_value "$env_file" "STACK_TIER" "$_stack_tier"
+            ;;
+    esac
+
+    # WAF shadow is default-on at >=12GB RAM (full tier), off below (costs
+    # ~1.5-2.2GB real). Fill-if-absent so an explicit operator value
+    # survives updates; mirrors the fresh_config sizing ladder.
     if [ -z "$(env_get_value "$env_file" "OPENAPPSEC_ENABLED")" ]; then
         local _waf_ram_mb=""
         _waf_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
         [ -n "$_waf_ram_mb" ] || _waf_ram_mb=8192
-        if [ "$_waf_ram_mb" -ge 8192 ]; then
+        if [ "$_waf_ram_mb" -ge 12288 ]; then
             env_set_value "$env_file" "OPENAPPSEC_ENABLED" "1"
         else
             env_set_value "$env_file" "OPENAPPSEC_ENABLED" "0"
         fi
+        if [ "$_stack_tier" != "full" ]; then
+            env_set_value "$env_file" "OPENAPPSEC_ENABLED" "0"
+        fi
     fi
+    local _waf_enabled=""
+    _waf_enabled="$(env_get_value "$env_file" "OPENAPPSEC_ENABLED")"
     env_ensure_var "$env_file" "OPENAPPSEC_MODE" "prevent" "WAF enforcement mode (prevent enforce vs detect-learn shadow); set from Settings → Security Scanning"
     env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'  || python3 -c 'import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
@@ -9043,84 +9821,94 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "REPLICATION_PASSWORD" "$(gen_hex_secret 32)" "PostgreSQL streaming replication password"
     env_ensure_var "$env_file" "SENTINEL_PASSWORD" "$(gen_hex_secret 32)" "Redis Sentinel authentication password"
     env_ensure_var "$env_file" "SENTINEL_SERVICE_NAME" "mymaster" "Redis Sentinel service name"
-    # Auto-detect sentinel containers and populate SENTINEL_HOSTS if empty.
-    # Sentinel containers are named smsly-redis-sentinel-{1,2,3} and listen
-    # on port 26379.  Without this, the backend falls back to direct
-    # redis-primary connection which breaks after sentinel failover.
-    local current_sentinel_hosts
+    # Populate SENTINEL_HOSTS only when Redis HA is active (medium/full);
+    # lite runs single-node Redis so SENTINEL_HOSTS stays empty.
+    local current_sentinel_hosts=""
     current_sentinel_hosts="$(env_get_value "$env_file" "SENTINEL_HOSTS")"
-    if [ -z "$current_sentinel_hosts" ]; then
-        local detected_sentinels=""
-        local _si
-        for _si in 1 2 3; do
-            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-redis-sentinel-${_si}$"; then
-                if [ -n "$detected_sentinels" ]; then
-                    detected_sentinels="${detected_sentinels},"
-                fi
-                detected_sentinels="${detected_sentinels}smsly-redis-sentinel-${_si}:26379"
-            fi
-        done
-        if [ -n "$detected_sentinels" ]; then
-            echo -e "${BLUE}  -> Auto-detected Redis Sentinels: ${detected_sentinels}${NC}"
-            env_set_value "$env_file" "SENTINEL_HOSTS" "$detected_sentinels"
-            echo -e "${GREEN}  OK SENTINEL_HOSTS set${NC}"
+    if [ "$_stack_tier" = "lite" ]; then
+        if [ "$current_sentinel_hosts" = "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379" ]; then
+            env_set_value "$env_file" "SENTINEL_HOSTS" ""
         fi
+    elif [ -z "$current_sentinel_hosts" ] && [ "$_db_ha_mode" = "local-ha" ] && [ "${MODE_AGENT_LITE:-false}" != "true" ] && [ "${MODE_NODE:-false}" != "true" ]; then
+        env_set_value "$env_file" "SENTINEL_HOSTS" "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379"
+        echo -e "${GREEN}  OK SENTINEL_HOSTS set for local-ha${NC}"
     fi
     env_ensure_var "$env_file" "REGISTRY_HTTP_SECRET" "$(gen_hex_secret 32)" "Docker registry HTTP secret"
-    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false" "SSH host key verification (True=strict, False=accept-first)"
-    # DB HA mode + compose profiles: without COMPOSE_PROFILES the profiled
-    # db/postgres services are never created and every backend crashes with
-    # "could not translate host name db" (2026-09-10 fresh-install incident).
-    # Default is full (run everything): local-ha|patroni|external + medium
-    # (observability) + full (Falco, SPIRE servers, apt-cacher, verdaccio).
-    local _db_ha_mode=""
-    _db_ha_mode="$(env_get_value "$env_file" "DB_HA_ENABLED")"
-    [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
-    env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
-    env_ensure_var "$env_file" "COMPOSE_PROFILES" "${_db_ha_mode},medium,full" "Compose profiles to activate (DB mode + observability + full stack)"
-    # Backfill older installs that predate the full default (local-ha or
-    # local-ha,medium): ensure the current DB mode + medium + full are
-    # present, and drop any STALE db-mode token (local-ha|patroni|external)
-    # so two postgres stacks never start side by side (haproxy :7000
-    # would clash with frps :7000). Idempotent, case-insensitive.
-    local _prof_cur="" _prof_new=""
+    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "true" "SSH host key verification (True=strict, False=accept-first)"
+    # Reconcile COMPOSE_PROFILES for (_db_ha_mode, _stack_tier, _waf_enabled):
+    # preserves STACK_TIER across --update and gates appsec strictly on
+    # OPENAPPSEC_ENABLED=1 while stripping stale DB-mode tokens.
+    local _default_profiles="$_db_ha_mode"
+    case "$_stack_tier" in
+        medium)
+            [ "$_db_ha_mode" = "local-ha" ] && _default_profiles="${_default_profiles},local-ha-replica"
+            _default_profiles="${_default_profiles},redis-ha,medium"
+            ;;
+        full)
+            [ "$_db_ha_mode" = "local-ha" ] && _default_profiles="${_default_profiles},local-ha-replica"
+            _default_profiles="${_default_profiles},redis-ha,medium,full"
+            ;;
+    esac
+    [ "$_waf_enabled" = "1" ] && _default_profiles="${_default_profiles},appsec"
+    env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_default_profiles" "Compose profiles to activate (DB mode + tier + optional appsec)"
     _prof_cur="$(env_get_value "$env_file" "COMPOSE_PROFILES")"
     if command -v python3 >/dev/null 2>&1; then
-        _prof_new="$(DB_MODE="$_db_ha_mode" CUR_PROF="$_prof_cur" python3 -c '
+        _prof_new="$(DB_MODE="$_db_ha_mode" STACK_TIER_VAL="$_stack_tier" WAF_VAL="$_waf_enabled" CUR_PROF="$_prof_cur" python3 -c '
 import os
-mode = os.environ.get("DB_MODE", "local-ha").strip() or "local-ha"
+mode = (os.environ.get("DB_MODE") or "local-ha").strip() or "local-ha"
+tier = (os.environ.get("STACK_TIER_VAL") or "full").strip().lower()
+waf = (os.environ.get("WAF_VAL") or "0").strip()
 cur = os.environ.get("CUR_PROF", "")
 db_modes = {"local-ha", "patroni", "external"}
+managed = {"local-ha-replica", "redis-ha", "medium", "full", "appsec"}
 seen = set()
 out = []
 for tok in [t.strip() for t in cur.split(",")]:
     if not tok:
         continue
     low = tok.lower()
-    if low in db_modes and low != mode.lower():
+    if low in db_modes or low in managed:
         continue
     if low not in seen:
         seen.add(low)
         out.append(tok)
-for want in [mode, "medium", "full"]:
-    if want.lower() not in seen:
-        seen.add(want.lower())
-        out.append(want)
-print(",".join(out))
+desired = [mode]
+if tier in ("medium", "full"):
+    if mode.lower() == "local-ha":
+        desired.append("local-ha-replica")
+    desired.extend(["redis-ha", "medium"])
+if tier == "full":
+    desired.append("full")
+if waf == "1":
+    desired.append("appsec")
+# Keep DB mode + tier profiles ordered deterministically, followed by custom tokens.
+final = []
+final_seen = set()
+for tok in desired + out:
+    low = tok.lower()
+    if low not in final_seen:
+        final_seen.add(low)
+        final.append(tok)
+print(",".join(final))
 ' || true)"
         if [ -n "$_prof_new" ] && [ "$_prof_new" != "$_prof_cur" ]; then
             env_set_value "$env_file" "COMPOSE_PROFILES" "$_prof_new"
         fi
     else
-        env_append_csv_values "$env_file" "COMPOSE_PROFILES" "$_db_ha_mode" "medium" "full" > /dev/null
+        env_set_value "$env_file" "COMPOSE_PROFILES" "$_default_profiles"
     fi
     # Read-replica routing must name the replica the compose stack actually
-    # starts. Empty here + compose-level default used to agree by accident;
-    # make it explicit so .env, pgcat, and the dashboard disagree never.
-    # External mode keeps operator-managed values (never overwrite).
+    # starts. Lite skips same-host postgres-replica; medium/full start it
+    # in local-ha mode. External mode keeps operator-managed values.
     local _replica_hosts=""
     _replica_hosts="$(env_get_value "$env_file" "DB_REPLICA_HOSTS")"
-    if [ -z "$_replica_hosts" ]; then
+    if [ "$_stack_tier" = "lite" ]; then
+        if [ "$_db_ha_mode" = "local-ha" ] && [ "$_replica_hosts" = "postgres-replica:5432" ]; then
+            env_set_value "$env_file" "DB_REPLICA_HOSTS" ""
+        elif [ "$_db_ha_mode" = "patroni" ] && [ -z "$_replica_hosts" ]; then
+            env_set_value "$env_file" "DB_REPLICA_HOSTS" "haproxy:5001"
+        fi
+    elif [ -z "$_replica_hosts" ]; then
         case "$_db_ha_mode" in
             patroni) env_set_value "$env_file" "DB_REPLICA_HOSTS" "haproxy:5001" ;;
             local-ha) env_set_value "$env_file" "DB_REPLICA_HOSTS" "postgres-replica:5432" ;;
@@ -9134,18 +9922,26 @@ print(",".join(out))
     _size_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
     [ -n "$_size_ram_mb" ] || _size_ram_mb=8192
     _size_cpus="$(nproc 2>/dev/null || echo 4)"
-    local _want_workers="" _want_buffers="" _want_cache=""
+    local _want_workers="" _want_buffers="" _want_cache="" _want_celery_autoscale="" _want_wal_keep="" _want_obs_retention=""
     if [ "$_size_cpus" -le 2 ]; then _want_workers=2; else _want_workers=4; fi
-    if [ "$_size_ram_mb" -le 4096 ]; then _want_buffers=256MB; _want_cache=1GB
-    elif [ "$_size_ram_mb" -le 8192 ]; then _want_buffers=512MB; _want_cache=2GB
-    else _want_buffers=1GB; _want_cache=4GB; fi
+    if [ "$_size_ram_mb" -le 4096 ]; then
+        _want_buffers=256MB; _want_cache=1GB; _want_celery_autoscale="2,0"; _want_wal_keep="64MB"
+    elif [ "$_size_ram_mb" -le 8192 ]; then
+        _want_buffers=512MB; _want_cache=2GB; _want_celery_autoscale="4,0"; _want_wal_keep="512MB"
+    else
+        _want_buffers=1GB; _want_cache=4GB; _want_celery_autoscale="4,0"; _want_wal_keep="1GB"
+    fi
+    if [ "$_stack_tier" = "lite" ]; then _want_wal_keep="64MB"; fi
+    if [ "$_size_ram_mb" -lt 12288 ]; then _want_obs_retention="7d"; else _want_obs_retention="30d"; fi
     env_ensure_var "$env_file" "GUNICORN_WORKERS" "$_want_workers" "Gunicorn workers (host-sized; burst via autoscaler)"
     env_ensure_var "$env_file" "DB_SHARED_BUFFERS" "$_want_buffers" "Postgres shared buffers (host-sized; pinned shm)"
     env_ensure_var "$env_file" "DB_EFFECTIVE_CACHE_SIZE" "$_want_cache" "Postgres planner cache hint (no RAM cost)"
     env_ensure_var "$env_file" "CELERY_QUEUES" "celery,fast,deploy" "Main worker drains all queues (burst workers idle-stop safely)"
+    env_ensure_var "$env_file" "CELERY_AUTOSCALE" "$_want_celery_autoscale" "Main Celery worker autoscale max,min"
     env_ensure_var "$env_file" "CELERY_AUTOSCALE_ENABLED" "true" "Idle-stop burst workers on empty queues"
-    env_ensure_var "$env_file" "PROMETHEUS_RETENTION" "30d" "Prometheus TSDB retention (main driver of metrics disk+RAM growth; 7d on small hosts)"
-    env_ensure_var "$env_file" "LOKI_RETENTION" "30d" "Loki log retention (set together with PROMETHEUS_RETENTION)"
+    env_ensure_var "$env_file" "PG_WAL_KEEP_SIZE" "$_want_wal_keep" "Postgres retained WAL floor (64MB lite, 512MB medium, 1GB full)"
+    env_ensure_var "$env_file" "PROMETHEUS_RETENTION" "$_want_obs_retention" "Prometheus TSDB retention (7d <12GB, 30d >=12GB)"
+    env_ensure_var "$env_file" "LOKI_RETENTION" "$_want_obs_retention" "Loki log retention (set together with PROMETHEUS_RETENTION)"
     env_ensure_var "$env_file" "FALCO_MEMORY_LIMIT" "1024M" "Falco runtime-security memory cap (1024M prevents modern_ebpf OOM)"
     # Registry public bind: without an explicit override the compose
     # fallback is a hardcoded IP from another host and the registry port
@@ -9529,13 +10325,13 @@ unset _SCRIPT_DIR
 # --- lib/preflight.sh ---
 check_internet() {
     echo -e "${BLUE}  → Checking internet connectivity...${NC}"
-    if ! curl -Is --connect-timeout 5 https://google.com ; then
+    if ! curl -Is --connect-timeout 5 --max-time 15 https://google.com ; then
         echo -e "${RED}  ✗ No internet access. Check your firewall/network settings.${NC}"
         exit 1
     fi
-    if ! host github.com ; then
+    if ! timeout 15 host github.com ; then
          # Fallback to ping if host is missing
-         if ! ping -c 1 github.com ; then
+         if ! timeout 10 ping -c 1 github.com ; then
              echo -e "${RED}  ✗ DNS resolution failed for github.com.${NC}"
              exit 1
          fi
@@ -9701,7 +10497,7 @@ apt_run() {
         wait_for_apt_lock || return 1
         # SECURITY/HARDENING: avoid set +e / set -e toggling. Capture rc via
         # explicit conditional so set -e stays in effect the whole time.
-        if output="$("$@" )"; then
+        if output="$(timeout "${SMSLY_APT_CMD_TIMEOUT:-600}" "$@" )"; then
             rc=0
         else
             rc=$?
@@ -10409,7 +11205,6 @@ if [ "$REFRESH_MODE" = "true" ]; then
     if [ -f "$INSTALL_DIR/lib/harden.sh" ]; then
 # --- lib/harden.sh ---
 #!/bin/bash
-set +e
 
 _harden_log() {
     local level="$1"; shift
@@ -10419,6 +11214,39 @@ _harden_log() {
         err)  echo -e "${RED}  ✗ [harden] $*${NC}" ;;
         info) echo -e "${BLUE}  → [harden] $*${NC}" ;;
     esac
+}
+
+# Resolve effective STACK_TIER (lite|medium|full) without requiring env.sh.
+_harden_stack_tier() {
+    local _tier="${STACK_TIER:-}"
+    local _env_file="${INSTALL_DIR:-/opt/smsly-hosting}/.env"
+    if [ -z "$_tier" ] && [ -f "$_env_file" ]; then
+        _tier="$(grep -E '^STACK_TIER=' "$_env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]\r"'\''' || true)"
+    fi
+    if [ -z "$_tier" ] && [ -f "$_env_file" ]; then
+        local _profs=""
+        _profs="$(grep -E '^COMPOSE_PROFILES=' "$_env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]\r"'\''' || true)"
+        if [ -n "$_profs" ]; then
+            case ",${_profs}," in
+                *,full,*) _tier="full" ;;
+                *,medium,*) _tier="medium" ;;
+                *) _tier="lite" ;;
+            esac
+        fi
+    fi
+    if [ -z "$_tier" ]; then
+        local _ram_mb=""
+        _ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+        [ -n "$_ram_mb" ] || _ram_mb=8192
+        if [ "$_ram_mb" -lt 6144 ]; then
+            _tier="lite"
+        elif [ "$_ram_mb" -lt 12288 ]; then
+            _tier="medium"
+        else
+            _tier="full"
+        fi
+    fi
+    printf '%s' "$_tier"
 }
 
 # --- lib/harden_fail2ban.sh ---
@@ -10588,7 +11416,7 @@ _harden_ufw_wg0_rules() {
     if ip link show wg0 >/dev/null 2>&1; then
         local _ufw_v=""
         _ufw_v="$(ufw status verbose 2>/dev/null || true)"
-        echo "$_ufw_v" | grep -q "5000/tcp.*ALLOW" \
+        echo "$_ufw_v" | grep -qE "(^|[[:space:]])5000(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])5000(/tcp)?([[:space:]]|$)" \
             || ufw allow in on wg0 to any port 5000 proto tcp \
             || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
         echo "$_ufw_v" | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
@@ -10597,9 +11425,21 @@ _harden_ufw_wg0_rules() {
         echo "$_ufw_v" | grep -qE "(^|[[:space:]])8000(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])8000(/tcp)?([[:space:]]|$)" \
             || ufw allow in on wg0 to any port 8000 proto tcp \
             || echo -e "${YELLOW}    ⚠ ufw allow node api on wg0 failed${NC}"
+        local _cryptd_gate="${CRYPTD_DB_GATE_ENABLED:-}"
+        if [ -z "$_cryptd_gate" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+            _cryptd_gate="$(grep -E '^CRYPTD_DB_GATE_ENABLED=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '\r"' | tr '[:upper:]' '[:lower:]' || true)"
+        fi
+        if [ "$_cryptd_gate" = "true" ]; then
+            echo "$_ufw_v" | grep -qE "(^|[[:space:]])15432(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])15432(/tcp)?([[:space:]]|$)" \
+                || ufw allow in on wg0 to any port 15432 proto tcp \
+                || echo -e "${YELLOW}    ⚠ ufw allow cryptd pg gate (15432) on wg0 failed${NC}"
+            echo "$_ufw_v" | grep -qE "(^|[[:space:]])16379(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])16379(/tcp)?([[:space:]]|$)" \
+                || ufw allow in on wg0 to any port 16379 proto tcp \
+                || echo -e "${YELLOW}    ⚠ ufw allow cryptd redis gate (16379) on wg0 failed${NC}"
+        fi
     fi
     if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
-        local _nip
+        local _nip=""
         for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
             [ -n "$_nip" ] || continue
             ufw allow from "$_nip" to any port 5000 proto tcp \
@@ -10608,20 +11448,66 @@ _harden_ufw_wg0_rules() {
     fi
 }
 
+_harden_ufw_media_rules() {
+    if [ "${SMSLY_NODE_ROLE:-}" = "media" ] || [ "${MODE_MEDIA_NODE:-false}" = "true" ]; then
+        local _mport=""
+        for _mport in 5060/tcp 5060/udp 3478/tcp 3478/udp 7880/tcp 7881/tcp 30000:31000/udp; do
+            ufw allow "$_mport" || echo -e "${YELLOW}    ⚠ ufw allow $_mport failed${NC}"
+        done
+    fi
+}
+
+_harden_ufw_master_ip_valid() {
+    local _ip="${1:-}"
+    [ -n "$_ip" ] && [ "$_ip" != "127.0.0.1" ] && ! echo "$_ip" | grep -qE '^(0\.0\.0\.0|localhost)$'
+}
+
 _harden_ufw_bootstrap() {
     command -v ufw  || apt_run apt-get install -y ufw  || true
     command -v ufw  || return 1
 
+    local _is_agent_lite=false
+    if [ "${MODE_AGENT_LITE:-false}" = "true" ] || [ "${INSTALL_MODE:-}" = "agent-lite" ]; then
+        _is_agent_lite=true
+    fi
+    local _master_ip="${MASTER_IP:-}"
+    if [ -z "$_master_ip" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        _master_ip="$(grep -E '^MASTER_IP=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '\r"' || true)"
+    fi
+    local _lockdown_master=false
+    if _harden_ufw_master_ip_valid "$_master_ip"; then
+        _lockdown_master=true
+    fi
+
     # Already active — just verify ports are open, then bail
     if ufw status  | grep -qi "active"; then
-        for port in 22 80 443 51820 33500; do
-            ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
-        done
+        local _ufw_cur=""
+        _ufw_cur="$(ufw status verbose 2>/dev/null || true)"
+        if [ "$_is_agent_lite" = "true" ] && [ "$_lockdown_master" = "true" ]; then
+            echo "$_ufw_cur" | grep -qE "22(/tcp)?[[:space:]]+ALLOW.*${_master_ip}" \
+                || ufw allow from "$_master_ip" to any port 22 || echo -e "${YELLOW}    ⚠ ufw allow 22 from $_master_ip failed${NC}"
+            echo "$_ufw_cur" | grep -qE "80(/tcp)?[[:space:]]+ALLOW.*${_master_ip}" \
+                || ufw allow from "$_master_ip" to any port 80 || echo -e "${YELLOW}    ⚠ ufw allow 80 from $_master_ip failed${NC}"
+            for port in 51820/udp 33500/udp; do
+                echo "$_ufw_cur" | grep -qE "${port}.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
+            done
+        elif [ "$_lockdown_master" = "true" ]; then
+            echo "$_ufw_cur" | grep -qE "22(/tcp)?[[:space:]]+ALLOW.*${_master_ip}" \
+                || ufw allow from "$_master_ip" to any port 22 || echo -e "${YELLOW}    ⚠ ufw allow 22 from $_master_ip failed${NC}"
+            for port in 80/tcp 443/tcp 51820/udp 33500/udp; do
+                echo "$_ufw_cur" | grep -qE "${port}.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
+            done
+        else
+            for port in 22 80 443 51820 33500; do
+                echo "$_ufw_cur" | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
+            done
+        fi
         _harden_ufw_wg0_rules
-        # Whitelist Docker bridges
+        _harden_ufw_media_rules
+        # Allow only DNS (:53) on Docker bridges (never blanket-allow tenant bridges to host ports)
         for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
             ip link show "$iface" >/dev/null 2>&1 || continue
-            ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
+            ufw allow in on "$iface" to any port 53 || echo -e "${YELLOW}    ⚠ ufw allow DNS on $iface failed${NC}"
         done
         return 0
     fi
@@ -10630,22 +11516,34 @@ _harden_ufw_bootstrap() {
     ufw --force default deny incoming || echo -e "${YELLOW}    s ufw default deny incoming failed${NC}"
     ufw --force default allow outgoing || echo -e "${YELLOW}    s ufw default allow outgoing failed${NC}"
 
-    local ssh_port=$(ss -tlnp 2>/dev/null | grep sshd | awk '{print $4}' | awk -F: '{print $NF}' | head -1)
-    if [ -n "$ssh_port" ]; then
+    local ssh_port=""
+    ssh_port=$(ss -tlnp 2>/dev/null | grep sshd | awk '{print $4}' | awk -F: '{print $NF}' | head -1)
+    if [ "$_lockdown_master" = "true" ]; then
+        ufw allow from "$_master_ip" to any port "${ssh_port:-22}" proto tcp || echo -e "${YELLOW}    ⚠ ufw allow ssh from $_master_ip failed${NC}"
+    elif [ -n "$ssh_port" ]; then
         ufw allow "$ssh_port/tcp" || echo -e "${YELLOW}    s ufw allow ssh port $ssh_port failed${NC}"
     else
         ufw allow ssh || echo -e "${YELLOW}    s ufw allow ssh failed${NC}"
     fi
-    ufw allow 80/tcp || echo -e "${YELLOW}    ⚠ ufw allow 80/tcp failed${NC}"
-    ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
+    if [ "$_is_agent_lite" = "true" ]; then
+        if [ "$_lockdown_master" = "true" ]; then
+            ufw allow from "$_master_ip" to any port 80 proto tcp || echo -e "${YELLOW}    ⚠ ufw allow 80 from $_master_ip failed${NC}"
+        else
+            echo -e "${YELLOW}    ⚠ Agent-Lite missing MASTER_IP — skipping blanket port 80/443${NC}"
+        fi
+    else
+        ufw allow 80/tcp || echo -e "${YELLOW}    ⚠ ufw allow 80/tcp failed${NC}"
+        ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
+    fi
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
     ufw allow 33500/udp || echo -e "${YELLOW}    ⚠ ufw allow 33500/udp failed${NC}"
 
     _harden_ufw_wg0_rules
+    _harden_ufw_media_rules
 
     for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
         ip link show "$iface" >/dev/null 2>&1 || continue
-        ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
+        ufw allow in on "$iface" to any port 53 || echo -e "${YELLOW}    ⚠ ufw allow DNS on $iface failed${NC}"
     done
     ufw --force enable || echo -e "${YELLOW}    ⚠ ufw enable failed${NC}"
     # Verify it actually came up
@@ -10695,8 +11593,8 @@ _harden_apparmor_verify() {
 _harden_auditd_bootstrap() {
     command -v auditd  || apt_run apt-get install -y auditd audispd-plugins  || true
 
-    if [ ! -f /etc/audit/rules.d/smsly.rules ]; then
-        mkdir -p /etc/audit/rules.d
+    mkdir -p /etc/audit/rules.d
+    if [ ! -f /etc/audit/rules.d/smsly.rules ] || grep -qE '^-a always,exit -F arch=b64 -S mount -k filesystem-mounts$' /etc/audit/rules.d/smsly.rules 2>/dev/null; then
         cat > /etc/audit/rules.d/smsly.rules <<'AUDIT_EOF'
 -w /etc/shadow -p wa -k identity
 -w /etc/passwd -p wa -k identity
@@ -10705,9 +11603,26 @@ _harden_auditd_bootstrap() {
 -w /opt/smsly-hosting/.env -p wa -k smsly-config
 -w /opt/smsly-hosting/secrets/ -p wa -k smsly-secrets
 -a always,exit -F arch=b64 -S execve -F path=/usr/bin/docker -k docker-exec
--a always,exit -F arch=b64 -S mount -k filesystem-mounts
--a exit,always -F arch=b64 -S execve -F euid=0 -F auid>=1000 -k priv-esc
+-a always,exit -F arch=b64 -S mount -F auid>=1000 -F auid!=4294967295 -k filesystem-mounts
+-a exit,always -F arch=b64 -S execve -F euid=0 -F auid>=1000 -F auid!=4294967295 -k priv-esc
 AUDIT_EOF
+    fi
+    if [ -f /etc/audit/auditd.conf ]; then
+        if grep -qE '^[[:space:]]*max_log_file[[:space:]]*=' /etc/audit/auditd.conf; then
+            sed -i 's/^[[:space:]]*max_log_file[[:space:]]*=.*/max_log_file = 50/' /etc/audit/auditd.conf || true
+        else
+            echo 'max_log_file = 50' >> /etc/audit/auditd.conf || true
+        fi
+        if grep -qE '^[[:space:]]*num_logs[[:space:]]*=' /etc/audit/auditd.conf; then
+            sed -i 's/^[[:space:]]*num_logs[[:space:]]*=.*/num_logs = 5/' /etc/audit/auditd.conf || true
+        else
+            echo 'num_logs = 5' >> /etc/audit/auditd.conf || true
+        fi
+        if grep -qE '^[[:space:]]*max_log_file_action[[:space:]]*=' /etc/audit/auditd.conf; then
+            sed -i 's/^[[:space:]]*max_log_file_action[[:space:]]*=.*/max_log_file_action = rotate/' /etc/audit/auditd.conf || true
+        else
+            echo 'max_log_file_action = rotate' >> /etc/audit/auditd.conf || true
+        fi
     fi
     systemctl enable auditd || echo -e "${YELLOW}    ⚠ auditd enable failed${NC}"
     systemctl restart auditd || echo -e "${YELLOW}    ⚠ auditd restart failed${NC}"
@@ -10827,7 +11742,7 @@ with open('$daemon_cfg','w') as f: json.dump(cfg, f, indent=2)
         _smsly_ctrs="$(docker ps --format '{{.Names}}'  | grep -c smsly || true)"
         if [ "$_smsly_ctrs" -eq 0 ]; then
             _harden_log info "Docker daemon config changed — restarting Docker..."
-            systemctl restart docker || { _harden_log error "Docker restart failed"; }
+            systemctl restart docker || { _harden_log err "Docker restart failed"; }
             for _i in $(seq 1 30); do
                 docker info  && break
                 sleep 2
@@ -10873,6 +11788,14 @@ _harden_crowdsec_bootstrap() {
     # attaches the middleware to user routers.
     _harden_crowdsec_traefik_plugin_gate
     [ "${NODE_CROWDSEC:-1}" = "1" ] || { _harden_log info "crowdsec skipped (NODE_CROWDSEC=0)"; return 0; }
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _cs_tier=""
+        _cs_tier="$(_harden_stack_tier)"
+        if [ "$_cs_tier" = "lite" ]; then
+            _harden_log info "crowdsec skipped (STACK_TIER=lite)"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
@@ -10893,9 +11816,10 @@ _harden_crowdsec_bootstrap() {
         # starts crowdsec right after .env is ready, and verify converges it.
         return 0
     fi
-    docker compose \
+    timeout 120 docker compose \
         "${env_args[@]}" \
         -f "$_cf" \
+        --profile medium \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
         docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' && break
@@ -11148,9 +12072,9 @@ _harden_crowdsec_cloudflare_bouncer() {
     _cf="$(_harden_crowdsec_compose_file)"
     local _up_rc=1
     if [ "$_prev_hash" != "$_new_hash" ]; then
-        docker compose "${env_args[@]}" -f "$_cf" up -d --force-recreate --no-deps crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
+        timeout 120 docker compose "${env_args[@]}" -f "$_cf" --profile medium up -d --force-recreate --no-deps crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
     else
-        docker compose "${env_args[@]}" -f "$_cf" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
+        timeout 120 docker compose "${env_args[@]}" -f "$_cf" --profile medium up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
     fi
     if [ "$_up_rc" = "0" ]; then
         _harden_log ok "cloudflare bouncer running (edge enforcement)"
@@ -11161,6 +12085,14 @@ _harden_crowdsec_cloudflare_bouncer() {
 
 _harden_crowdsec_verify() {
     [ "${NODE_CROWDSEC:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _cs_tier=""
+        _cs_tier="$(_harden_stack_tier)"
+        if [ "$_cs_tier" = "lite" ]; then
+            _harden_log info "crowdsec skipped (STACK_TIER=lite)"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
@@ -11304,7 +12236,7 @@ _harden_openappsec_bootstrap() {
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
     # Explicit service list — never --remove-orphans on this stack (AGENTS.md #16).
-    if ! timeout 570 docker compose "${env_args[@]}" -f "$COMPOSE_FILE" \
+    if ! timeout 570 docker compose "${env_args[@]}" -f "$COMPOSE_FILE" --profile appsec \
             up -d appsec-agent appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db appsec-envoy 2>&1 | tail -5; then
         echo -e "${YELLOW}  ⚠ open-appsec docker compose up failed${NC}"
         return 1
@@ -11346,9 +12278,9 @@ _harden_openappsec_reconcile() {
     local env_args=()
     [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
     local compose_file="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" stop --timeout 15 \
+    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" --profile appsec stop --timeout 15 \
         appsec-agent appsec-envoy appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db >/dev/null 2>&1 || true
-    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" rm -f \
+    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" --profile appsec rm -f \
         appsec-agent appsec-envoy appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db >/dev/null 2>&1 || true
     return 0
 }
@@ -11390,6 +12322,14 @@ _harden_openappsec_verify() {
 
 _harden_falco_bootstrap() {
     [ "${NODE_FALCO:-1}" = "1" ] || { _harden_log info "falco skipped (NODE_FALCO=0)"; return 0; }
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _falco_tier=""
+        _falco_tier="$(_harden_stack_tier)"
+        if [ "$_falco_tier" != "full" ]; then
+            _harden_log info "falco skipped (STACK_TIER=${_falco_tier})"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     local compose_file="$INSTALL_DIR/infrastructure/docker/docker-compose.falco.yml"
     [ -f "$compose_file" ] || return 1
@@ -11409,7 +12349,7 @@ _harden_falco_bootstrap() {
     # class). smsly-hosting matches docker-compose.prod.yml `name:` and
     # the full-profile falco service (same container_name, no named
     # volumes, so the two definitions converge on one container).
-    docker compose \
+    timeout 180 docker compose \
         -p smsly-hosting \
         "${env_args[@]}" \
         -f "$compose_file" \
@@ -11424,7 +12364,19 @@ _harden_falco_bootstrap() {
 
 _harden_falco_verify() {
     [ "${NODE_FALCO:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _falco_tier=""
+        _falco_tier="$(_harden_stack_tier)"
+        if [ "$_falco_tier" != "full" ]; then
+            _harden_log info "falco skipped (STACK_TIER=${_falco_tier})"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
+    if [ -e "${SMSLY_TIER_STATE_DIR:-/var/lib/smsly/tiers}/runtime-security.asleep" ]; then
+        _harden_log info "falco asleep (runtime-security tier sleeping) — skipping"
+        return 0
+    fi
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         # One self-heal attempt: resume runs can skip the bootstrap step
         # (checkpointed), and first-boot probe load can outlast the
@@ -11576,32 +12528,61 @@ _harden_trivy_bootstrap() {
     fi
 
     _harden_log info "Installing Trivy vulnerability scanner..."
-    local trivy_version="v0.54.1"
-    local arch
+    local trivy_version="v0.76.2"
+    local arch="" expected_deb_sha="" expected_tgz_sha=""
     arch="$(uname -m)"
     case "$arch" in
-        x86_64)  arch="64bit" ;;
-        aarch64) arch="ARM64" ;;
+        x86_64)
+            arch="64bit"
+            expected_deb_sha="7edaf64c8a2a0ae02137f776c6e56adf285fc36ec76b045274afdc462f20f092"
+            expected_tgz_sha="bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+            ;;
+        aarch64)
+            arch="ARM64"
+            expected_deb_sha="0c576cd78352a2084435d393ea31565a3637cc129dd052c422f1e72fd678ee76"
+            expected_tgz_sha="ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3"
+            ;;
         *)       _harden_log warn "Trivy — unsupported architecture: $arch"; return 1 ;;
     esac
 
     local deb_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.deb"
-    local tmp_deb
+    local tmp_deb=""
     tmp_deb="$(mktemp /tmp/trivy.XXXXXX.deb)"
 
-    # Attempt 1: Direct DEB download with retries and timeouts
+    # Attempt 1: Direct DEB download with pinned SHA256 verification
     if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$deb_url" -o "$tmp_deb" ; then
-        if ! dpkg -i "$tmp_deb" ; then
-            apt-get install -f -y  || true
-            dpkg -i "$tmp_deb"  || true
+        if printf '%s  %s\n' "$expected_deb_sha" "$tmp_deb" | sha256sum -c - >/dev/null 2>&1; then
+            if ! dpkg -i "$tmp_deb" ; then
+                apt-get install -f -y  || true
+                dpkg -i "$tmp_deb"  || true
+            fi
+        else
+            _harden_log warn "Trivy DEB checksum mismatch — rejecting unverified artifact"
         fi
         rm -f "$tmp_deb"
     else
         rm -f "$tmp_deb"
-        _harden_log info "Direct DEB download failed — trying official APT repo and install script..."
+        _harden_log info "Direct DEB download failed — trying official verified tarball and APT repo..."
     fi
 
-    # Attempt 2: Official APT Repository fallback
+    # Attempt 2: Direct tar.gz release download with pinned SHA256 verification
+    if ! command -v trivy >/dev/null 2>&1; then
+        local tgz_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.tar.gz"
+        local tmp_tgz="" tmp_dir=""
+        tmp_tgz="$(mktemp /tmp/trivy.XXXXXX.tar.gz)"
+        tmp_dir="$(mktemp -d /tmp/trivy-extract.XXXXXX)"
+        if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$tgz_url" -o "$tmp_tgz"; then
+            if printf '%s  %s\n' "$expected_tgz_sha" "$tmp_tgz" | sha256sum -c - >/dev/null 2>&1; then
+                tar -xzf "$tmp_tgz" -C "$tmp_dir" trivy >/dev/null 2>&1 && \
+                    install -m 0755 "$tmp_dir/trivy" /usr/local/bin/trivy >/dev/null 2>&1 || true
+            else
+                _harden_log warn "Trivy tarball checksum mismatch — rejecting unverified artifact"
+            fi
+        fi
+        rm -rf "$tmp_tgz" "$tmp_dir"
+    fi
+
+    # Attempt 3: Official GPG-signed APT Repository fallback
     if ! command -v trivy ; then
         apt-get update -qq  || true
         if ! apt-get install -y trivy ; then
@@ -11612,11 +12593,6 @@ _harden_trivy_bootstrap() {
                 apt-get install -y trivy  || true
             fi
         fi
-    fi
-
-    # Attempt 3: Official Contrib script fallback
-    if ! command -v trivy ; then
-        curl --retry 2 --connect-timeout 10 -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin  || true
     fi
 
     if command -v trivy ; then
@@ -11698,11 +12674,11 @@ _harden_envoy_registry_login() {
         [ -n "$user" ] || user="smsly-registry"
     fi
     [ -n "$user" ] && [ -n "$pass" ] || return 1
-    printf '%s\n' "$pass" | docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
+    printf '%s\n' "$pass" | timeout 30 docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
     # The sidecar flow pulls via registry:5000 but pushes via 127.0.0.1:5000
     # (see _harden_envoy_image_bootstrap) — the daemon keys credentials per
     # hostname, so both need a login or the push 401s (fresh-install gap).
-    printf '%s\n' "$pass" | docker login --username "$user" --password-stdin 127.0.0.1:5000 >/dev/null 2>&1 || true
+    printf '%s\n' "$pass" | timeout 30 docker login --username "$user" --password-stdin 127.0.0.1:5000 >/dev/null 2>&1 || true
 }
 
 _harden_envoy_image_bootstrap() {
@@ -11723,19 +12699,19 @@ _harden_envoy_image_bootstrap() {
     # must stay visible instead of dying silently (2026-09-12).
     _harden_envoy_registry_login || _harden_log warn "no registry login available — pull/push may 401"
     local envoy_tag="registry:5000/smsly/envoy-spire-sidecar:latest"
-    if docker image inspect "$envoy_tag" >/dev/null 2>&1; then
+    if timeout 10 docker image inspect "$envoy_tag" >/dev/null 2>&1; then
         return 0
     fi
-    if docker pull "$envoy_tag" >/dev/null 2>&1; then
+    if timeout 120 docker pull "$envoy_tag" >/dev/null 2>&1; then
         _harden_log ok "envoy sidecar image present"
         return 0
     fi
     local loop_tag="127.0.0.1:5000/smsly/envoy-spire-sidecar:latest"
-    if ! docker build -t "$envoy_tag" -t "$loop_tag" "$envoy_dir" >/dev/null 2>&1; then
+    if ! timeout 300 docker build -t "$envoy_tag" -t "$loop_tag" "$envoy_dir" >/dev/null 2>&1; then
         _harden_log err "envoy sidecar image build failed in $envoy_dir"
         return 1
     fi
-    if ! docker push "$loop_tag" >/dev/null 2>&1; then
+    if ! timeout 120 docker push "$loop_tag" >/dev/null 2>&1; then
         _harden_log err "envoy sidecar image push failed — check registry auth (docker login) and that the registry is up"
         return 1
     fi
@@ -11747,26 +12723,47 @@ _harden_spire_start_agent() {
     # Start one SPIRE agent with a freshly minted single-use join token
     # (mirrors apps/mtls/views.py::_start_agent_with_token).
     # $1 agent container, $2 server container, $3 agent.conf host path,
-    # $4 data volume, $5 socket volume, $6 svids volume.
+    # $4 data volume, $5 socket volume, $6 svids volume, $7 optional trust domain.
     local agent="$1" server="$2" conf="$3" data_vol="$4" sock_vol="$5" svids_vol="$6"
+    local trust_domain="${7:-}"
+    if [ -z "$trust_domain" ]; then
+        if [[ "$agent" == *ecosystem* ]]; then
+            trust_domain="${ECOSYSTEM_TRUST_DOMAIN:-ecosystem.local}"
+        else
+            trust_domain="${SPIFFE_TRUST_DOMAIN:-platform.local}"
+        fi
+    fi
     # A crash-looping agent reports Running=true while Restarting — only a
     # truly stable container may keep its (single-use, now consumed) token.
     if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ] && \
        [ "$(docker inspect -f '{{.State.Restarting}}' "$agent" 2>/dev/null)" != "true" ]; then
         return 0
     fi
-    local token
-    token="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
+    # Export the server trust bundle into the agent data volume so
+    # insecure_bootstrap = false has a valid trust_bundle_path on boot.
+    local _bundle_pem=""
+    _bundle_pem="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server bundle show -socketPath /tmp/spire-server/private/api.sock -format pem 2>/dev/null || true)"
+    if [ -z "$_bundle_pem" ]; then
+        _harden_log warn "$agent — could not export trust bundle from $server"
+        return 1
+    fi
+    if ! printf '%s\n' "$_bundle_pem" | timeout -k 5 30 docker run --rm -i -v "$data_vol:/opt/spire/data" alpine:3.19 sh -c 'mkdir -p /opt/spire/data && chmod 0700 /opt/spire/data && cat > /opt/spire/data/bundle.crt && chmod 0644 /opt/spire/data/bundle.crt' >/dev/null 2>&1; then
+        _harden_log warn "$agent — failed writing trust bundle to $data_vol"
+        return 1
+    fi
+    local token=""
+    token="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1 || true)"
     if [ -z "$token" ]; then
         _harden_log warn "$agent — could not mint join token"
         return 1
     fi
     docker rm -f "$agent" >/dev/null 2>&1 || true
-    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
+    timeout 60 docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --cgroupns host --restart unless-stopped \
         -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
         -v /var/run/docker.sock:/var/run/docker.sock:ro \
         -v "$conf:/etc/spire/agent.conf:ro,z" \
         -e DOCKER_HOST=unix:///var/run/docker.sock \
+        -e "SPIFFE_TRUST_DOMAIN=${trust_domain}" \
         ghcr.io/spiffe/spire-agent:1.9.6 -config /etc/spire/agent.conf -joinToken "$token" >/dev/null 2>&1 || {
         _harden_log warn "$agent — docker run failed"
         return 1
@@ -11780,6 +12777,12 @@ _harden_spire_bootstrap() {
     # their own trust roots.
     if command -v is_master_mode >/dev/null 2>&1 && ! is_master_mode; then
         _harden_log info "spire skipped (not master mode)"
+        return 0
+    fi
+    local _spire_tier=""
+    _spire_tier="$(_harden_stack_tier)"
+    if [ "$_spire_tier" != "full" ]; then
+        _harden_log info "spire skipped (STACK_TIER=${_spire_tier})"
         return 0
     fi
     command -v docker >/dev/null 2>&1 || return 0
@@ -11811,7 +12814,7 @@ _harden_spire_bootstrap() {
         fi
     done
     # Servers are idempotent under compose (running services are kept).
-    docker compose -p smsly-hosting -f "$spire_file" up -d spire-server spire-server-ecosystem >/dev/null 2>&1 || {
+    timeout 120 docker compose -p smsly-hosting -f "$spire_file" up -d spire-server spire-server-ecosystem >/dev/null 2>&1 || {
         _harden_log warn "spire servers failed to start"
         return 1
     }
@@ -11840,6 +12843,14 @@ _harden_spire_bootstrap() {
 
 _harden_spire_verify() {
     [ "${NODE_SPIRE:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode); then
+        local _spire_tier=""
+        _spire_tier="$(_harden_stack_tier)"
+        if [ "$_spire_tier" != "full" ]; then
+            _harden_log info "spire skipped (STACK_TIER=${_spire_tier})"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     if [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent 2>/dev/null)" != "true" ] || \
        [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent-ecosystem 2>/dev/null)" != "true" ]; then
@@ -12158,7 +13169,6 @@ if [ -n "$UPDATE_MODE" ]; then
     if [ -f "$INSTALL_DIR/lib/harden.sh" ]; then
 # --- lib/harden.sh ---
 #!/bin/bash
-set +e
 
 _harden_log() {
     local level="$1"; shift
@@ -12168,6 +13178,39 @@ _harden_log() {
         err)  echo -e "${RED}  ✗ [harden] $*${NC}" ;;
         info) echo -e "${BLUE}  → [harden] $*${NC}" ;;
     esac
+}
+
+# Resolve effective STACK_TIER (lite|medium|full) without requiring env.sh.
+_harden_stack_tier() {
+    local _tier="${STACK_TIER:-}"
+    local _env_file="${INSTALL_DIR:-/opt/smsly-hosting}/.env"
+    if [ -z "$_tier" ] && [ -f "$_env_file" ]; then
+        _tier="$(grep -E '^STACK_TIER=' "$_env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]\r"'\''' || true)"
+    fi
+    if [ -z "$_tier" ] && [ -f "$_env_file" ]; then
+        local _profs=""
+        _profs="$(grep -E '^COMPOSE_PROFILES=' "$_env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]\r"'\''' || true)"
+        if [ -n "$_profs" ]; then
+            case ",${_profs}," in
+                *,full,*) _tier="full" ;;
+                *,medium,*) _tier="medium" ;;
+                *) _tier="lite" ;;
+            esac
+        fi
+    fi
+    if [ -z "$_tier" ]; then
+        local _ram_mb=""
+        _ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+        [ -n "$_ram_mb" ] || _ram_mb=8192
+        if [ "$_ram_mb" -lt 6144 ]; then
+            _tier="lite"
+        elif [ "$_ram_mb" -lt 12288 ]; then
+            _tier="medium"
+        else
+            _tier="full"
+        fi
+    fi
+    printf '%s' "$_tier"
 }
 
 # --- lib/harden_fail2ban.sh ---
@@ -12337,7 +13380,7 @@ _harden_ufw_wg0_rules() {
     if ip link show wg0 >/dev/null 2>&1; then
         local _ufw_v=""
         _ufw_v="$(ufw status verbose 2>/dev/null || true)"
-        echo "$_ufw_v" | grep -q "5000/tcp.*ALLOW" \
+        echo "$_ufw_v" | grep -qE "(^|[[:space:]])5000(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])5000(/tcp)?([[:space:]]|$)" \
             || ufw allow in on wg0 to any port 5000 proto tcp \
             || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
         echo "$_ufw_v" | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
@@ -12346,9 +13389,21 @@ _harden_ufw_wg0_rules() {
         echo "$_ufw_v" | grep -qE "(^|[[:space:]])8000(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])8000(/tcp)?([[:space:]]|$)" \
             || ufw allow in on wg0 to any port 8000 proto tcp \
             || echo -e "${YELLOW}    ⚠ ufw allow node api on wg0 failed${NC}"
+        local _cryptd_gate="${CRYPTD_DB_GATE_ENABLED:-}"
+        if [ -z "$_cryptd_gate" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+            _cryptd_gate="$(grep -E '^CRYPTD_DB_GATE_ENABLED=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '\r"' | tr '[:upper:]' '[:lower:]' || true)"
+        fi
+        if [ "$_cryptd_gate" = "true" ]; then
+            echo "$_ufw_v" | grep -qE "(^|[[:space:]])15432(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])15432(/tcp)?([[:space:]]|$)" \
+                || ufw allow in on wg0 to any port 15432 proto tcp \
+                || echo -e "${YELLOW}    ⚠ ufw allow cryptd pg gate (15432) on wg0 failed${NC}"
+            echo "$_ufw_v" | grep -qE "(^|[[:space:]])16379(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])16379(/tcp)?([[:space:]]|$)" \
+                || ufw allow in on wg0 to any port 16379 proto tcp \
+                || echo -e "${YELLOW}    ⚠ ufw allow cryptd redis gate (16379) on wg0 failed${NC}"
+        fi
     fi
     if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
-        local _nip
+        local _nip=""
         for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
             [ -n "$_nip" ] || continue
             ufw allow from "$_nip" to any port 5000 proto tcp \
@@ -12357,20 +13412,66 @@ _harden_ufw_wg0_rules() {
     fi
 }
 
+_harden_ufw_media_rules() {
+    if [ "${SMSLY_NODE_ROLE:-}" = "media" ] || [ "${MODE_MEDIA_NODE:-false}" = "true" ]; then
+        local _mport=""
+        for _mport in 5060/tcp 5060/udp 3478/tcp 3478/udp 7880/tcp 7881/tcp 30000:31000/udp; do
+            ufw allow "$_mport" || echo -e "${YELLOW}    ⚠ ufw allow $_mport failed${NC}"
+        done
+    fi
+}
+
+_harden_ufw_master_ip_valid() {
+    local _ip="${1:-}"
+    [ -n "$_ip" ] && [ "$_ip" != "127.0.0.1" ] && ! echo "$_ip" | grep -qE '^(0\.0\.0\.0|localhost)$'
+}
+
 _harden_ufw_bootstrap() {
     command -v ufw  || apt_run apt-get install -y ufw  || true
     command -v ufw  || return 1
 
+    local _is_agent_lite=false
+    if [ "${MODE_AGENT_LITE:-false}" = "true" ] || [ "${INSTALL_MODE:-}" = "agent-lite" ]; then
+        _is_agent_lite=true
+    fi
+    local _master_ip="${MASTER_IP:-}"
+    if [ -z "$_master_ip" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        _master_ip="$(grep -E '^MASTER_IP=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '\r"' || true)"
+    fi
+    local _lockdown_master=false
+    if _harden_ufw_master_ip_valid "$_master_ip"; then
+        _lockdown_master=true
+    fi
+
     # Already active — just verify ports are open, then bail
     if ufw status  | grep -qi "active"; then
-        for port in 22 80 443 51820 33500; do
-            ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
-        done
+        local _ufw_cur=""
+        _ufw_cur="$(ufw status verbose 2>/dev/null || true)"
+        if [ "$_is_agent_lite" = "true" ] && [ "$_lockdown_master" = "true" ]; then
+            echo "$_ufw_cur" | grep -qE "22(/tcp)?[[:space:]]+ALLOW.*${_master_ip}" \
+                || ufw allow from "$_master_ip" to any port 22 || echo -e "${YELLOW}    ⚠ ufw allow 22 from $_master_ip failed${NC}"
+            echo "$_ufw_cur" | grep -qE "80(/tcp)?[[:space:]]+ALLOW.*${_master_ip}" \
+                || ufw allow from "$_master_ip" to any port 80 || echo -e "${YELLOW}    ⚠ ufw allow 80 from $_master_ip failed${NC}"
+            for port in 51820/udp 33500/udp; do
+                echo "$_ufw_cur" | grep -qE "${port}.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
+            done
+        elif [ "$_lockdown_master" = "true" ]; then
+            echo "$_ufw_cur" | grep -qE "22(/tcp)?[[:space:]]+ALLOW.*${_master_ip}" \
+                || ufw allow from "$_master_ip" to any port 22 || echo -e "${YELLOW}    ⚠ ufw allow 22 from $_master_ip failed${NC}"
+            for port in 80/tcp 443/tcp 51820/udp 33500/udp; do
+                echo "$_ufw_cur" | grep -qE "${port}.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
+            done
+        else
+            for port in 22 80 443 51820 33500; do
+                echo "$_ufw_cur" | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
+            done
+        fi
         _harden_ufw_wg0_rules
-        # Whitelist Docker bridges
+        _harden_ufw_media_rules
+        # Allow only DNS (:53) on Docker bridges (never blanket-allow tenant bridges to host ports)
         for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
             ip link show "$iface" >/dev/null 2>&1 || continue
-            ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
+            ufw allow in on "$iface" to any port 53 || echo -e "${YELLOW}    ⚠ ufw allow DNS on $iface failed${NC}"
         done
         return 0
     fi
@@ -12379,22 +13480,34 @@ _harden_ufw_bootstrap() {
     ufw --force default deny incoming || echo -e "${YELLOW}    s ufw default deny incoming failed${NC}"
     ufw --force default allow outgoing || echo -e "${YELLOW}    s ufw default allow outgoing failed${NC}"
 
-    local ssh_port=$(ss -tlnp 2>/dev/null | grep sshd | awk '{print $4}' | awk -F: '{print $NF}' | head -1)
-    if [ -n "$ssh_port" ]; then
+    local ssh_port=""
+    ssh_port=$(ss -tlnp 2>/dev/null | grep sshd | awk '{print $4}' | awk -F: '{print $NF}' | head -1)
+    if [ "$_lockdown_master" = "true" ]; then
+        ufw allow from "$_master_ip" to any port "${ssh_port:-22}" proto tcp || echo -e "${YELLOW}    ⚠ ufw allow ssh from $_master_ip failed${NC}"
+    elif [ -n "$ssh_port" ]; then
         ufw allow "$ssh_port/tcp" || echo -e "${YELLOW}    s ufw allow ssh port $ssh_port failed${NC}"
     else
         ufw allow ssh || echo -e "${YELLOW}    s ufw allow ssh failed${NC}"
     fi
-    ufw allow 80/tcp || echo -e "${YELLOW}    ⚠ ufw allow 80/tcp failed${NC}"
-    ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
+    if [ "$_is_agent_lite" = "true" ]; then
+        if [ "$_lockdown_master" = "true" ]; then
+            ufw allow from "$_master_ip" to any port 80 proto tcp || echo -e "${YELLOW}    ⚠ ufw allow 80 from $_master_ip failed${NC}"
+        else
+            echo -e "${YELLOW}    ⚠ Agent-Lite missing MASTER_IP — skipping blanket port 80/443${NC}"
+        fi
+    else
+        ufw allow 80/tcp || echo -e "${YELLOW}    ⚠ ufw allow 80/tcp failed${NC}"
+        ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
+    fi
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
     ufw allow 33500/udp || echo -e "${YELLOW}    ⚠ ufw allow 33500/udp failed${NC}"
 
     _harden_ufw_wg0_rules
+    _harden_ufw_media_rules
 
     for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
         ip link show "$iface" >/dev/null 2>&1 || continue
-        ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
+        ufw allow in on "$iface" to any port 53 || echo -e "${YELLOW}    ⚠ ufw allow DNS on $iface failed${NC}"
     done
     ufw --force enable || echo -e "${YELLOW}    ⚠ ufw enable failed${NC}"
     # Verify it actually came up
@@ -12444,8 +13557,8 @@ _harden_apparmor_verify() {
 _harden_auditd_bootstrap() {
     command -v auditd  || apt_run apt-get install -y auditd audispd-plugins  || true
 
-    if [ ! -f /etc/audit/rules.d/smsly.rules ]; then
-        mkdir -p /etc/audit/rules.d
+    mkdir -p /etc/audit/rules.d
+    if [ ! -f /etc/audit/rules.d/smsly.rules ] || grep -qE '^-a always,exit -F arch=b64 -S mount -k filesystem-mounts$' /etc/audit/rules.d/smsly.rules 2>/dev/null; then
         cat > /etc/audit/rules.d/smsly.rules <<'AUDIT_EOF'
 -w /etc/shadow -p wa -k identity
 -w /etc/passwd -p wa -k identity
@@ -12454,9 +13567,26 @@ _harden_auditd_bootstrap() {
 -w /opt/smsly-hosting/.env -p wa -k smsly-config
 -w /opt/smsly-hosting/secrets/ -p wa -k smsly-secrets
 -a always,exit -F arch=b64 -S execve -F path=/usr/bin/docker -k docker-exec
--a always,exit -F arch=b64 -S mount -k filesystem-mounts
--a exit,always -F arch=b64 -S execve -F euid=0 -F auid>=1000 -k priv-esc
+-a always,exit -F arch=b64 -S mount -F auid>=1000 -F auid!=4294967295 -k filesystem-mounts
+-a exit,always -F arch=b64 -S execve -F euid=0 -F auid>=1000 -F auid!=4294967295 -k priv-esc
 AUDIT_EOF
+    fi
+    if [ -f /etc/audit/auditd.conf ]; then
+        if grep -qE '^[[:space:]]*max_log_file[[:space:]]*=' /etc/audit/auditd.conf; then
+            sed -i 's/^[[:space:]]*max_log_file[[:space:]]*=.*/max_log_file = 50/' /etc/audit/auditd.conf || true
+        else
+            echo 'max_log_file = 50' >> /etc/audit/auditd.conf || true
+        fi
+        if grep -qE '^[[:space:]]*num_logs[[:space:]]*=' /etc/audit/auditd.conf; then
+            sed -i 's/^[[:space:]]*num_logs[[:space:]]*=.*/num_logs = 5/' /etc/audit/auditd.conf || true
+        else
+            echo 'num_logs = 5' >> /etc/audit/auditd.conf || true
+        fi
+        if grep -qE '^[[:space:]]*max_log_file_action[[:space:]]*=' /etc/audit/auditd.conf; then
+            sed -i 's/^[[:space:]]*max_log_file_action[[:space:]]*=.*/max_log_file_action = rotate/' /etc/audit/auditd.conf || true
+        else
+            echo 'max_log_file_action = rotate' >> /etc/audit/auditd.conf || true
+        fi
     fi
     systemctl enable auditd || echo -e "${YELLOW}    ⚠ auditd enable failed${NC}"
     systemctl restart auditd || echo -e "${YELLOW}    ⚠ auditd restart failed${NC}"
@@ -12576,7 +13706,7 @@ with open('$daemon_cfg','w') as f: json.dump(cfg, f, indent=2)
         _smsly_ctrs="$(docker ps --format '{{.Names}}'  | grep -c smsly || true)"
         if [ "$_smsly_ctrs" -eq 0 ]; then
             _harden_log info "Docker daemon config changed — restarting Docker..."
-            systemctl restart docker || { _harden_log error "Docker restart failed"; }
+            systemctl restart docker || { _harden_log err "Docker restart failed"; }
             for _i in $(seq 1 30); do
                 docker info  && break
                 sleep 2
@@ -12622,6 +13752,14 @@ _harden_crowdsec_bootstrap() {
     # attaches the middleware to user routers.
     _harden_crowdsec_traefik_plugin_gate
     [ "${NODE_CROWDSEC:-1}" = "1" ] || { _harden_log info "crowdsec skipped (NODE_CROWDSEC=0)"; return 0; }
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _cs_tier=""
+        _cs_tier="$(_harden_stack_tier)"
+        if [ "$_cs_tier" = "lite" ]; then
+            _harden_log info "crowdsec skipped (STACK_TIER=lite)"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
@@ -12642,9 +13780,10 @@ _harden_crowdsec_bootstrap() {
         # starts crowdsec right after .env is ready, and verify converges it.
         return 0
     fi
-    docker compose \
+    timeout 120 docker compose \
         "${env_args[@]}" \
         -f "$_cf" \
+        --profile medium \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
         docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' && break
@@ -12897,9 +14036,9 @@ _harden_crowdsec_cloudflare_bouncer() {
     _cf="$(_harden_crowdsec_compose_file)"
     local _up_rc=1
     if [ "$_prev_hash" != "$_new_hash" ]; then
-        docker compose "${env_args[@]}" -f "$_cf" up -d --force-recreate --no-deps crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
+        timeout 120 docker compose "${env_args[@]}" -f "$_cf" --profile medium up -d --force-recreate --no-deps crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
     else
-        docker compose "${env_args[@]}" -f "$_cf" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
+        timeout 120 docker compose "${env_args[@]}" -f "$_cf" --profile medium up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
     fi
     if [ "$_up_rc" = "0" ]; then
         _harden_log ok "cloudflare bouncer running (edge enforcement)"
@@ -12910,6 +14049,14 @@ _harden_crowdsec_cloudflare_bouncer() {
 
 _harden_crowdsec_verify() {
     [ "${NODE_CROWDSEC:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _cs_tier=""
+        _cs_tier="$(_harden_stack_tier)"
+        if [ "$_cs_tier" = "lite" ]; then
+            _harden_log info "crowdsec skipped (STACK_TIER=lite)"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
@@ -13053,7 +14200,7 @@ _harden_openappsec_bootstrap() {
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
     # Explicit service list — never --remove-orphans on this stack (AGENTS.md #16).
-    if ! timeout 570 docker compose "${env_args[@]}" -f "$COMPOSE_FILE" \
+    if ! timeout 570 docker compose "${env_args[@]}" -f "$COMPOSE_FILE" --profile appsec \
             up -d appsec-agent appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db appsec-envoy 2>&1 | tail -5; then
         echo -e "${YELLOW}  ⚠ open-appsec docker compose up failed${NC}"
         return 1
@@ -13095,9 +14242,9 @@ _harden_openappsec_reconcile() {
     local env_args=()
     [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
     local compose_file="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" stop --timeout 15 \
+    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" --profile appsec stop --timeout 15 \
         appsec-agent appsec-envoy appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db >/dev/null 2>&1 || true
-    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" rm -f \
+    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" --profile appsec rm -f \
         appsec-agent appsec-envoy appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db >/dev/null 2>&1 || true
     return 0
 }
@@ -13139,6 +14286,14 @@ _harden_openappsec_verify() {
 
 _harden_falco_bootstrap() {
     [ "${NODE_FALCO:-1}" = "1" ] || { _harden_log info "falco skipped (NODE_FALCO=0)"; return 0; }
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _falco_tier=""
+        _falco_tier="$(_harden_stack_tier)"
+        if [ "$_falco_tier" != "full" ]; then
+            _harden_log info "falco skipped (STACK_TIER=${_falco_tier})"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     local compose_file="$INSTALL_DIR/infrastructure/docker/docker-compose.falco.yml"
     [ -f "$compose_file" ] || return 1
@@ -13158,7 +14313,7 @@ _harden_falco_bootstrap() {
     # class). smsly-hosting matches docker-compose.prod.yml `name:` and
     # the full-profile falco service (same container_name, no named
     # volumes, so the two definitions converge on one container).
-    docker compose \
+    timeout 180 docker compose \
         -p smsly-hosting \
         "${env_args[@]}" \
         -f "$compose_file" \
@@ -13173,7 +14328,19 @@ _harden_falco_bootstrap() {
 
 _harden_falco_verify() {
     [ "${NODE_FALCO:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _falco_tier=""
+        _falco_tier="$(_harden_stack_tier)"
+        if [ "$_falco_tier" != "full" ]; then
+            _harden_log info "falco skipped (STACK_TIER=${_falco_tier})"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
+    if [ -e "${SMSLY_TIER_STATE_DIR:-/var/lib/smsly/tiers}/runtime-security.asleep" ]; then
+        _harden_log info "falco asleep (runtime-security tier sleeping) — skipping"
+        return 0
+    fi
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         # One self-heal attempt: resume runs can skip the bootstrap step
         # (checkpointed), and first-boot probe load can outlast the
@@ -13325,32 +14492,61 @@ _harden_trivy_bootstrap() {
     fi
 
     _harden_log info "Installing Trivy vulnerability scanner..."
-    local trivy_version="v0.54.1"
-    local arch
+    local trivy_version="v0.76.2"
+    local arch="" expected_deb_sha="" expected_tgz_sha=""
     arch="$(uname -m)"
     case "$arch" in
-        x86_64)  arch="64bit" ;;
-        aarch64) arch="ARM64" ;;
+        x86_64)
+            arch="64bit"
+            expected_deb_sha="7edaf64c8a2a0ae02137f776c6e56adf285fc36ec76b045274afdc462f20f092"
+            expected_tgz_sha="bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+            ;;
+        aarch64)
+            arch="ARM64"
+            expected_deb_sha="0c576cd78352a2084435d393ea31565a3637cc129dd052c422f1e72fd678ee76"
+            expected_tgz_sha="ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3"
+            ;;
         *)       _harden_log warn "Trivy — unsupported architecture: $arch"; return 1 ;;
     esac
 
     local deb_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.deb"
-    local tmp_deb
+    local tmp_deb=""
     tmp_deb="$(mktemp /tmp/trivy.XXXXXX.deb)"
 
-    # Attempt 1: Direct DEB download with retries and timeouts
+    # Attempt 1: Direct DEB download with pinned SHA256 verification
     if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$deb_url" -o "$tmp_deb" ; then
-        if ! dpkg -i "$tmp_deb" ; then
-            apt-get install -f -y  || true
-            dpkg -i "$tmp_deb"  || true
+        if printf '%s  %s\n' "$expected_deb_sha" "$tmp_deb" | sha256sum -c - >/dev/null 2>&1; then
+            if ! dpkg -i "$tmp_deb" ; then
+                apt-get install -f -y  || true
+                dpkg -i "$tmp_deb"  || true
+            fi
+        else
+            _harden_log warn "Trivy DEB checksum mismatch — rejecting unverified artifact"
         fi
         rm -f "$tmp_deb"
     else
         rm -f "$tmp_deb"
-        _harden_log info "Direct DEB download failed — trying official APT repo and install script..."
+        _harden_log info "Direct DEB download failed — trying official verified tarball and APT repo..."
     fi
 
-    # Attempt 2: Official APT Repository fallback
+    # Attempt 2: Direct tar.gz release download with pinned SHA256 verification
+    if ! command -v trivy >/dev/null 2>&1; then
+        local tgz_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.tar.gz"
+        local tmp_tgz="" tmp_dir=""
+        tmp_tgz="$(mktemp /tmp/trivy.XXXXXX.tar.gz)"
+        tmp_dir="$(mktemp -d /tmp/trivy-extract.XXXXXX)"
+        if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$tgz_url" -o "$tmp_tgz"; then
+            if printf '%s  %s\n' "$expected_tgz_sha" "$tmp_tgz" | sha256sum -c - >/dev/null 2>&1; then
+                tar -xzf "$tmp_tgz" -C "$tmp_dir" trivy >/dev/null 2>&1 && \
+                    install -m 0755 "$tmp_dir/trivy" /usr/local/bin/trivy >/dev/null 2>&1 || true
+            else
+                _harden_log warn "Trivy tarball checksum mismatch — rejecting unverified artifact"
+            fi
+        fi
+        rm -rf "$tmp_tgz" "$tmp_dir"
+    fi
+
+    # Attempt 3: Official GPG-signed APT Repository fallback
     if ! command -v trivy ; then
         apt-get update -qq  || true
         if ! apt-get install -y trivy ; then
@@ -13361,11 +14557,6 @@ _harden_trivy_bootstrap() {
                 apt-get install -y trivy  || true
             fi
         fi
-    fi
-
-    # Attempt 3: Official Contrib script fallback
-    if ! command -v trivy ; then
-        curl --retry 2 --connect-timeout 10 -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin  || true
     fi
 
     if command -v trivy ; then
@@ -13447,11 +14638,11 @@ _harden_envoy_registry_login() {
         [ -n "$user" ] || user="smsly-registry"
     fi
     [ -n "$user" ] && [ -n "$pass" ] || return 1
-    printf '%s\n' "$pass" | docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
+    printf '%s\n' "$pass" | timeout 30 docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
     # The sidecar flow pulls via registry:5000 but pushes via 127.0.0.1:5000
     # (see _harden_envoy_image_bootstrap) — the daemon keys credentials per
     # hostname, so both need a login or the push 401s (fresh-install gap).
-    printf '%s\n' "$pass" | docker login --username "$user" --password-stdin 127.0.0.1:5000 >/dev/null 2>&1 || true
+    printf '%s\n' "$pass" | timeout 30 docker login --username "$user" --password-stdin 127.0.0.1:5000 >/dev/null 2>&1 || true
 }
 
 _harden_envoy_image_bootstrap() {
@@ -13472,19 +14663,19 @@ _harden_envoy_image_bootstrap() {
     # must stay visible instead of dying silently (2026-09-12).
     _harden_envoy_registry_login || _harden_log warn "no registry login available — pull/push may 401"
     local envoy_tag="registry:5000/smsly/envoy-spire-sidecar:latest"
-    if docker image inspect "$envoy_tag" >/dev/null 2>&1; then
+    if timeout 10 docker image inspect "$envoy_tag" >/dev/null 2>&1; then
         return 0
     fi
-    if docker pull "$envoy_tag" >/dev/null 2>&1; then
+    if timeout 120 docker pull "$envoy_tag" >/dev/null 2>&1; then
         _harden_log ok "envoy sidecar image present"
         return 0
     fi
     local loop_tag="127.0.0.1:5000/smsly/envoy-spire-sidecar:latest"
-    if ! docker build -t "$envoy_tag" -t "$loop_tag" "$envoy_dir" >/dev/null 2>&1; then
+    if ! timeout 300 docker build -t "$envoy_tag" -t "$loop_tag" "$envoy_dir" >/dev/null 2>&1; then
         _harden_log err "envoy sidecar image build failed in $envoy_dir"
         return 1
     fi
-    if ! docker push "$loop_tag" >/dev/null 2>&1; then
+    if ! timeout 120 docker push "$loop_tag" >/dev/null 2>&1; then
         _harden_log err "envoy sidecar image push failed — check registry auth (docker login) and that the registry is up"
         return 1
     fi
@@ -13496,26 +14687,47 @@ _harden_spire_start_agent() {
     # Start one SPIRE agent with a freshly minted single-use join token
     # (mirrors apps/mtls/views.py::_start_agent_with_token).
     # $1 agent container, $2 server container, $3 agent.conf host path,
-    # $4 data volume, $5 socket volume, $6 svids volume.
+    # $4 data volume, $5 socket volume, $6 svids volume, $7 optional trust domain.
     local agent="$1" server="$2" conf="$3" data_vol="$4" sock_vol="$5" svids_vol="$6"
+    local trust_domain="${7:-}"
+    if [ -z "$trust_domain" ]; then
+        if [[ "$agent" == *ecosystem* ]]; then
+            trust_domain="${ECOSYSTEM_TRUST_DOMAIN:-ecosystem.local}"
+        else
+            trust_domain="${SPIFFE_TRUST_DOMAIN:-platform.local}"
+        fi
+    fi
     # A crash-looping agent reports Running=true while Restarting — only a
     # truly stable container may keep its (single-use, now consumed) token.
     if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ] && \
        [ "$(docker inspect -f '{{.State.Restarting}}' "$agent" 2>/dev/null)" != "true" ]; then
         return 0
     fi
-    local token
-    token="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
+    # Export the server trust bundle into the agent data volume so
+    # insecure_bootstrap = false has a valid trust_bundle_path on boot.
+    local _bundle_pem=""
+    _bundle_pem="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server bundle show -socketPath /tmp/spire-server/private/api.sock -format pem 2>/dev/null || true)"
+    if [ -z "$_bundle_pem" ]; then
+        _harden_log warn "$agent — could not export trust bundle from $server"
+        return 1
+    fi
+    if ! printf '%s\n' "$_bundle_pem" | timeout -k 5 30 docker run --rm -i -v "$data_vol:/opt/spire/data" alpine:3.19 sh -c 'mkdir -p /opt/spire/data && chmod 0700 /opt/spire/data && cat > /opt/spire/data/bundle.crt && chmod 0644 /opt/spire/data/bundle.crt' >/dev/null 2>&1; then
+        _harden_log warn "$agent — failed writing trust bundle to $data_vol"
+        return 1
+    fi
+    local token=""
+    token="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1 || true)"
     if [ -z "$token" ]; then
         _harden_log warn "$agent — could not mint join token"
         return 1
     fi
     docker rm -f "$agent" >/dev/null 2>&1 || true
-    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
+    timeout 60 docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --cgroupns host --restart unless-stopped \
         -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
         -v /var/run/docker.sock:/var/run/docker.sock:ro \
         -v "$conf:/etc/spire/agent.conf:ro,z" \
         -e DOCKER_HOST=unix:///var/run/docker.sock \
+        -e "SPIFFE_TRUST_DOMAIN=${trust_domain}" \
         ghcr.io/spiffe/spire-agent:1.9.6 -config /etc/spire/agent.conf -joinToken "$token" >/dev/null 2>&1 || {
         _harden_log warn "$agent — docker run failed"
         return 1
@@ -13529,6 +14741,12 @@ _harden_spire_bootstrap() {
     # their own trust roots.
     if command -v is_master_mode >/dev/null 2>&1 && ! is_master_mode; then
         _harden_log info "spire skipped (not master mode)"
+        return 0
+    fi
+    local _spire_tier=""
+    _spire_tier="$(_harden_stack_tier)"
+    if [ "$_spire_tier" != "full" ]; then
+        _harden_log info "spire skipped (STACK_TIER=${_spire_tier})"
         return 0
     fi
     command -v docker >/dev/null 2>&1 || return 0
@@ -13560,7 +14778,7 @@ _harden_spire_bootstrap() {
         fi
     done
     # Servers are idempotent under compose (running services are kept).
-    docker compose -p smsly-hosting -f "$spire_file" up -d spire-server spire-server-ecosystem >/dev/null 2>&1 || {
+    timeout 120 docker compose -p smsly-hosting -f "$spire_file" up -d spire-server spire-server-ecosystem >/dev/null 2>&1 || {
         _harden_log warn "spire servers failed to start"
         return 1
     }
@@ -13589,6 +14807,14 @@ _harden_spire_bootstrap() {
 
 _harden_spire_verify() {
     [ "${NODE_SPIRE:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode); then
+        local _spire_tier=""
+        _spire_tier="$(_harden_stack_tier)"
+        if [ "$_spire_tier" != "full" ]; then
+            _harden_log info "spire skipped (STACK_TIER=${_spire_tier})"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     if [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent 2>/dev/null)" != "true" ] || \
        [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent-ecosystem 2>/dev/null)" != "true" ]; then
@@ -13918,7 +15144,7 @@ fi
         # Release the lock before re-exec so the new process can acquire it.
         # Closing FD 9 releases the flock.
         exec 9>&-  || true
-        exec env SMSLY_REEXEC=1 NO_SCREEN=true SKIP_SCREEN=1 SMSLY_PRE_UPDATE_HEAD="$PRE_UPDATE_HEAD" PATH="/usr/local/bin:$PATH" bash "$SCRIPT_PATH" --no-screen "$@"
+        exec env SMSLY_REEXEC=1 NO_SCREEN=true SKIP_SCREEN=1 SMSLY_PRE_UPDATE_HEAD="$PRE_UPDATE_HEAD" PATH="/usr/local/bin:$PATH" bash "$INSTALL_DIR/install.sh" --no-screen "$@"
     fi
 # --- end lib/update_git.sh ---
 # --- lib/update_rebuild.sh ---
@@ -13982,6 +15208,7 @@ fi
     # ─── Targeted Rebuild (CRITICAL BLINDSPOT FIX: --no-deps) ────────────────
     # Using --no-deps prevents cascade restart of unrelated services
     if ! is_checkpoint_done "update_containers_rebuilt"; then
+    ensure_compose_profiles
 
     # ─── Safe Update Protocol ─────────────────────────────────────────────
     if [ -f "$INSTALL_DIR/scripts/safe-update.sh" ]; then
@@ -14042,6 +15269,7 @@ fi
                 "SENTINEL_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
                 "CROWDSEC_BOUNCER_KEY|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
                 "CADDY_ASK_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+                "EDGE_JWT_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || openssl rand -hex 64 || true)"
                 "PATRONI_SUPERUSER_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
                 "GRAFANA_PASSWORD|$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))"  || true)"
             )
@@ -14061,12 +15289,10 @@ fi
          done
          if [ "$_missing_count" -gt 0 ]; then
              echo -e "${GREEN}  ✓ Auto-generated $_missing_count missing secret(s)${NC}"
-             # Re-source the env so the new values take effect
-             # in the current shell session.
-             set -a
-             # shellcheck disable=SC1090
-             source "$_env_file"  || true
-             set +a
+             # Load updated .env values safely without shell execution
+             if declare -F env_load_file_safe >/dev/null 2>&1; then
+                 env_load_file_safe "$_env_file"
+             fi
          fi
      fi
      # Unset the helper var to avoid leaking into the rest of the script.
@@ -14126,13 +15352,26 @@ fi
                       echo -e "${YELLOW}  ⚠ iptables-shim build failed (non-fatal)${NC}"
               fi
           fi
+          _upd_ha_svcs="pgcat redis-primary"
+          _upd_tier_early="${STACK_TIER:-}"
+          [ -n "$_upd_tier_early" ] || _upd_tier_early="$(env_get_value "$INSTALL_DIR/.env" "STACK_TIER" || true)"
+          [ -n "$_upd_tier_early" ] || _upd_tier_early="full"
+          if [ "${DB_HA_ENABLED:-local-ha}" = "local-ha" ]; then
+              if [ "$_upd_tier_early" = "lite" ]; then
+                  _upd_ha_svcs="db $_upd_ha_svcs"
+              else
+                  _upd_ha_svcs="db postgres-replica $_upd_ha_svcs redis-replica"
+              fi
+          elif [ "$_upd_tier_early" != "lite" ]; then
+              _upd_ha_svcs="$_upd_ha_svcs redis-replica"
+          fi
           if $_already_migrated; then
               # Data is already on postgres-primary — switch to prod compose
               # immediately but ensure the HA stack is up first.
              echo -e "${BLUE}  → HA stack already has data — ensuring services are up...${NC}"
              docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
                  up -d --wait --wait-timeout 120 \
-                 $( [ "${DB_HA_ENABLED:-local-ha}" = local-ha ] && echo "db postgres-replica" ) pgcat redis-primary redis-replica \
+                 $_upd_ha_svcs \
                   || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
              echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
              env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
@@ -14153,7 +15392,7 @@ fi
                      echo -e "${BLUE}  → Starting HA stack (postgres-primary, pgcat, redis-primary)...${NC}"
                      docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
                          up -d --wait --wait-timeout 120 \
-                         $( [ "${DB_HA_ENABLED:-local-ha}" = local-ha ] && echo "db postgres-replica" ) pgcat redis-primary redis-replica \
+                         $_upd_ha_svcs \
                           || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
 
                      echo -e "${BLUE}  → Running data migration from old @db to postgres-primary...${NC}"
@@ -14177,12 +15416,13 @@ fi
                  echo -e "${BLUE}  → Starting HA stack (fresh install)...${NC}"
                  docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
                      up -d --wait --wait-timeout 120 \
-                     $( [ "${DB_HA_ENABLED:-local-ha}" = local-ha ] && echo "db postgres-replica" ) pgcat redis-primary redis-replica \
+                     $_upd_ha_svcs \
                       || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
                  echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
                  env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
              fi
          fi
+         unset _upd_ha_svcs _upd_tier_early
      fi
      unset _current_compose
 
@@ -14238,20 +15478,27 @@ fi
              env_set_value "$_env_fix_file" "DIRECT_DATABASE_URL" "$_migrated_direct"
          fi
 
-         # Ensure REDIS_MIN_REPLICAS_TO_WRITE is present only when the
-         # prod compose is active (has a replica).  Setting it on the
-         # dev compose will cause NOREPLICAS errors on every write.
-         if echo "$_current_compose_final" | grep -q 'prod'; then
-             if ! grep -q '^REDIS_MIN_REPLICAS_TO_WRITE=' "$_env_fix_file" ; then
-                 echo -e "${YELLOW}  → Adding REDIS_MIN_REPLICAS_TO_WRITE=1 (Redis HA durability)${NC}"
-                 echo 'REDIS_MIN_REPLICAS_TO_WRITE=1' >> "$_env_fix_file"
+         # Populate SENTINEL_HOSTS only when Redis HA is active (non-lite tiers)
+         _cur_sentinels="$(env_get_value "$_env_fix_file" "SENTINEL_HOSTS" || true)"
+         _cur_db_ha="$(env_get_value "$_env_fix_file" "DB_HA_ENABLED" || true)"
+         [ -n "$_cur_db_ha" ] || _cur_db_ha="local-ha"
+         _cur_tier="$(env_get_value "$_env_fix_file" "STACK_TIER" || true)"
+         [ -n "$_cur_tier" ] || _cur_tier="${STACK_TIER:-full}"
+         if [ "$_cur_tier" = "lite" ]; then
+             if [ "$_cur_sentinels" = "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379" ]; then
+                 env_set_value "$_env_fix_file" "SENTINEL_HOSTS" ""
              fi
-         else
-             # Dev/single-node compose — ensure replica requirement is off
-             # so writes don't get rejected.
-             _min_rep="$(grep '^REDIS_MIN_REPLICAS_TO_WRITE=' "$_env_fix_file"  | cut -d= -f2 || true)"
+         elif [ -z "$_cur_sentinels" ] && [ "$_cur_db_ha" = "local-ha" ] && [ "$MODE_AGENT_LITE" != "true" ]; then
+             env_set_value "$_env_fix_file" "SENTINEL_HOSTS" "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379"
+         fi
+         unset _cur_tier
+
+         # Single-host local-ha / single-node Redis: keep REDIS_MIN_REPLICAS_TO_WRITE=0
+         # so a restarting local replica never blocks all writes.
+         _min_rep="$(grep '^REDIS_MIN_REPLICAS_TO_WRITE=' "$_env_fix_file" | cut -d= -f2 || true)"
+         if [ "$_cur_db_ha" = "local-ha" ] || ! echo "$_current_compose_final" | grep -q 'prod'; then
              if [ "$_min_rep" != "0" ]; then
-                 echo -e "${YELLOW}  → Setting REDIS_MIN_REPLICAS_TO_WRITE=0 (single-node, no replica)${NC}"
+                 echo -e "${YELLOW}  → Setting REDIS_MIN_REPLICAS_TO_WRITE=0 (single-host/local-ha)${NC}"
                  env_set_value "$_env_fix_file" "REDIS_MIN_REPLICAS_TO_WRITE" "0"
              fi
          fi
@@ -14268,7 +15515,7 @@ fi
              fi
          fi
 
-         unset _env_fix_file _current_redis_host _redis_url _fixed_redis_url _registry _db_url _pg_commit _current_compose_final _min_rep
+         unset _env_fix_file _current_redis_host _redis_url _fixed_redis_url _registry _db_url _pg_commit _current_compose_final _min_rep _cur_sentinels _cur_db_ha
      fi
 
      # Cache bust only if disk is low (already runs in the disk check above when needed).
@@ -14282,35 +15529,12 @@ fi
                   echo -e "${YELLOW}  → Node mode: no frontend to update. Skipping.${NC}"
               else
                   echo -e "${BLUE}  → Rebuilding frontend container (cached)...${NC}"
-                docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend || echo -e "${YELLOW}    ⚠ docker compose stop frontend failed (non-fatal)${NC}"
-                  docker compose -f "$COMPOSE_FILE" rm -f frontend || echo -e "${YELLOW}    ⚠ docker compose rm frontend failed (non-fatal)${NC}"
                   timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build frontend
+                  docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend || echo -e "${YELLOW}    ⚠ docker compose stop frontend failed (non-fatal)${NC}"
+                  docker compose -f "$COMPOSE_FILE" rm -f frontend || echo -e "${YELLOW}    ⚠ docker compose rm frontend failed (non-fatal)${NC}"
                   docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps frontend
-
-                 # Custom Domain SSL Setup for Frontend Update
-                 if should_manage_caddy; then  # Only for master mode
-                     echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
-                     SSL_SCRIPT="install-custom-domain-ssl.sh"
-                     [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
-                 if [ -f "$SSL_SCRIPT" ]; then
-                     echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                     timeout -k 5 120 bash "$SSL_SCRIPT" install || true
-                     
-                     # Start the services
-                     echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
-                     
-                     # Enable auto-start on boot (if not already enabled)
-                     echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
-                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
-                     
-                     echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
-                     else
-                         echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
-                     fi
-                 fi
-             fi
-             ;;
+              fi
+              ;;
          backend)
             echo -e "${BLUE}  → Rebuilding backend containers (cached)...${NC}"
             build_svcs="backend celery"
@@ -14324,13 +15548,13 @@ fi
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 verify_agent_lite_connectivity
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_redis_service) rabbitmq socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
             else
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) socket-proxy
             fi
             # Stop backend, celery & pgcat so their DB connections don't block
             # migrations (ALTER TABLE requires exclusive locks).
@@ -14373,29 +15597,6 @@ fi
             else
                  docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $celery_svcs
              fi
-             
-             # Custom Domain SSL Setup for Backend Update
-             if should_manage_caddy; then  # Only for master mode
-                 echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
-                 SSL_SCRIPT="install-custom-domain-ssl.sh"
-                 [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
-                 if [ -f "$SSL_SCRIPT" ]; then
-                     echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                     timeout -k 5 120 bash "$SSL_SCRIPT" install || true
-                     
-                     # Start the services
-                     echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
-                     
-                     # Enable auto-start on boot (if not already enabled)
-                     echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
-                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
-                     
-                     echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
-                 else
-                     echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
-                 fi
-             fi
              ;;
           half)
             echo -e "${BLUE}  → [HALF UPDATE] Rebuilding changed services from cache (no image pulls)${NC}"
@@ -14429,7 +15630,7 @@ fi
             echo -e "${BLUE}  → Starting pgcat & backend...${NC}"
             if [ -n "$(get_pgcat_if_exists)" ]; then docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat || echo -e "${YELLOW}    ⚠ docker compose up pgcat failed (non-fatal)${NC}"; fi
             if [ "$MODE_AGENT_LITE" = "true" ]; then
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_redis_service) rabbitmq socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else
@@ -14455,29 +15656,6 @@ fi
                 docker compose -f "$COMPOSE_FILE" restart $restart_svcs || echo -e "${YELLOW}    ⚠ docker compose restart celery failed (non-fatal)${NC}"
              fi
              set_checkpoint "update_db_migrated"
-             
-             # Custom Domain SSL Setup for Half Update
-             if should_manage_caddy; then  # Only for master mode
-                 echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
-                 SSL_SCRIPT="install-custom-domain-ssl.sh"
-                 [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
-                 if [ -f "$SSL_SCRIPT" ]; then
-                     echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                     timeout -k 5 120 bash "$SSL_SCRIPT" install || true
-                     
-                     # Start the services
-                     echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
-                     
-                     # Enable auto-start on boot (if not already enabled)
-                     echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
-                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
-                     
-                     echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
-                 else
-                     echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
-                 fi
-             fi
              ;;
          full)
             echo -e "${BLUE}  → [FULL REBUILD] Rebuilding PaaS core (preserving addon databases)...${NC}"
@@ -14509,15 +15687,15 @@ fi
             # This does a graceful zero-downtime replacement instead of an explicit hard stop
             echo -e "${BLUE}    ↳ Starting all services...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_redis_service) rabbitmq socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
-                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --remove-orphans $CORE_SERVICES
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate $CORE_SERVICES
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
-                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps --remove-orphans $CORE_SERVICES
+                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $CORE_SERVICES
             else
-                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps --remove-orphans $CORE_SERVICES
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $CORE_SERVICES
             fi
 
             if [ "$MODE_AGENT_LITE" != "true" ]; then
@@ -14541,13 +15719,13 @@ fi
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 verify_agent_lite_connectivity
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_redis_service) rabbitmq socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
             else
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) socket-proxy
             fi
             run_backend_migrations --root || {
                 echo -e "${YELLOW}  ⚠ Migration failed — retrying in 15s...${NC}"
@@ -14583,21 +15761,6 @@ fi
                 docker compose -f "$COMPOSE_FILE" restart $restart_svcs || echo -e "${YELLOW}    ⚠ docker compose restart celery failed (non-fatal)${NC}"
             fi
             set_checkpoint "update_db_migrated"
-
-            # Custom Domain SSL Setup for Full Update
-            if should_manage_caddy; then
-                echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
-                SSL_SCRIPT="install-custom-domain-ssl.sh"
-                [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
-                if [ -f "$SSL_SCRIPT" ]; then
-                    timeout -k 5 120 bash "$SSL_SCRIPT" install || true
-                    timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
-                    timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
-                    echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
-                else
-                    echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
-                fi
-            fi
             ;;
     esac
 
@@ -14742,49 +15905,57 @@ fi
         fi
     fi
 
-    # ─── Observability Stack Update (master mode only) ──────────────────────
+    # ─── Observability & Build Caches (master mode, tier-gated) ────────────
+    _upd_tier="$(env_get_value "$INSTALL_DIR/.env" "STACK_TIER" || true)"
+    [ -n "$_upd_tier" ] || _upd_tier="${STACK_TIER:-full}"
     if [ "$MODE_AGENT_LITE" != "true" ] && [ "$MODE_NODE" != "true" ]; then
-        echo -e "${BLUE}  → Updating observability stack...${NC}"
-        # Ensure scripts mounted into containers are executable (git may not preserve +x)
-        chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh  || true
-        chmod +x "$INSTALL_DIR"/infrastructure/docker/infisical-gen-env.sh  || true
-        mkdir -p /opt/smsly-hosting/prometheus-targets
-        if ! chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets ; then
-            echo -e "${YELLOW}  ⚠ Could not chown prometheus-targets to uid 1000${NC}"
+        if [ "$_upd_tier" != "lite" ]; then
+            echo -e "${BLUE}  → Updating observability stack...${NC}"
+            # Ensure scripts mounted into containers are executable (git may not preserve +x)
+            chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh  || true
+            chmod +x "$INSTALL_DIR"/infrastructure/docker/infisical-gen-env.sh  || true
+            mkdir -p /opt/smsly-hosting/prometheus-targets
+            if ! chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets ; then
+                echo -e "${YELLOW}  ⚠ Could not chown prometheus-targets to uid 1000${NC}"
+            fi
+            chmod 2777 /opt/smsly-hosting/prometheus-targets  || true
+            docker compose \
+                --env-file /opt/smsly-hosting/.env \
+                -f infrastructure/docker/docker-compose.observability.yml \
+                up -d --pull always || \
+                echo -e "${YELLOW}  ⚠ Observability stack had issues (non-fatal)${NC}"
+            # Restart containers whose bind-mounted config or environment may have
+            # changed.  docker compose up -d only recreates on IMAGE changes, so
+            # config-file updates require an explicit restart.
+            docker restart smsly-grafana || echo -e "${YELLOW}    ⚠ docker restart smsly-grafana failed (non-fatal)${NC}"
+            docker restart smsly-alertmanager || echo -e "${YELLOW}    ⚠ docker restart smsly-alertmanager failed (non-fatal)${NC}"
+            docker restart smsly-prometheus || echo -e "${YELLOW}    ⚠ docker restart smsly-prometheus failed (non-fatal)${NC}"
+            docker restart smsly-docker-labels || echo -e "${YELLOW}    ⚠ docker restart smsly-docker-labels failed (non-fatal)${NC}"
+            docker restart smsly-promtail || echo -e "${YELLOW}    ⚠ docker restart smsly-promtail failed (non-fatal)${NC}"
+            # Deploy/update docker-labels exporter to all remote nodes and
+            # regenerate Prometheus file_sd target files (docker-labels,
+            # cAdvisor, Node Exporter).
+            backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)
+            if [ -n "$backend_container" ]; then
+                timeout -k 5 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters --force || echo -e "${YELLOW}    ⚠ deploy_docker_labels_exporters failed${NC}"
+            fi
+            echo -e "${GREEN}  ✓ Observability stack updated${NC}"
+        else
+            echo -e "${BLUE}  → Skipping observability stack update (STACK_TIER=lite)${NC}"
         fi
-        chmod 2777 /opt/smsly-hosting/prometheus-targets  || true
-        docker compose \
-            --env-file /opt/smsly-hosting/.env \
-            -f infrastructure/docker/docker-compose.observability.yml \
-            up -d --pull always || \
-            echo -e "${YELLOW}  ⚠ Observability stack had issues (non-fatal)${NC}"
-        # Restart containers whose bind-mounted config or environment may have
-        # changed.  docker compose up -d only recreates on IMAGE changes, so
-        # config-file updates require an explicit restart.
-        docker restart smsly-grafana || echo -e "${YELLOW}    ⚠ docker restart smsly-grafana failed (non-fatal)${NC}"
-        docker restart smsly-alertmanager || echo -e "${YELLOW}    ⚠ docker restart smsly-alertmanager failed (non-fatal)${NC}"
-        docker restart smsly-prometheus || echo -e "${YELLOW}    ⚠ docker restart smsly-prometheus failed (non-fatal)${NC}"
-        docker restart smsly-docker-labels || echo -e "${YELLOW}    ⚠ docker restart smsly-docker-labels failed (non-fatal)${NC}"
-        docker restart smsly-promtail || echo -e "${YELLOW}    ⚠ docker restart smsly-promtail failed (non-fatal)${NC}"
-        # Deploy/update docker-labels exporter to all remote nodes and
-        # regenerate Prometheus file_sd target files (docker-labels,
-        # cAdvisor, Node Exporter).
-        backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)
-        if [ -n "$backend_container" ]; then
-            timeout -k 5 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters --force || echo -e "${YELLOW}    ⚠ deploy_docker_labels_exporters failed${NC}"
+        if [ "$_upd_tier" = "full" ]; then
+            # ─── Build-cache images (apt-cacher-ng floats :latest) ──────────
+            # Fresh deploy starts these explicitly; refresh their images here
+            # so updates don't pin stale cache daemons forever. Non-fatal.
+            echo -e "${BLUE}  → Refreshing build-cache images (apt-cacher, verdaccio)...${NC}"
+            timeout -k 5 240 docker compose -f "$COMPOSE_FILE" --profile full pull --ignore-pull-failures apt-cacher verdaccio 2>&1 | tail -3 || \
+                echo -e "${YELLOW}  ⚠ Build-cache image refresh failed (non-fatal)${NC}"
+            timeout -k 5 120 docker compose -f "$COMPOSE_FILE" --profile full up -d --no-deps apt-cacher verdaccio 2>&1 | tail -3 || \
+                echo -e "${YELLOW}  ⚠ Build-cache services restart failed (non-fatal)${NC}"
         fi
-        echo -e "${GREEN}  ✓ Observability stack updated${NC}"
-        # ─── Build-cache images (apt-cacher-ng floats :latest) ──────────
-        # Fresh deploy starts these explicitly; refresh their images here
-        # so updates don't pin stale cache daemons forever. Non-fatal.
-        # Explicit service names: profile-proof, no --remove-orphans.
-        echo -e "${BLUE}  → Refreshing build-cache images (apt-cacher, verdaccio)...${NC}"
-        timeout -k 5 240 docker compose -f "$COMPOSE_FILE" pull --ignore-pull-failures apt-cacher verdaccio 2>&1 | tail -3 || \
-            echo -e "${YELLOW}  ⚠ Build-cache image refresh failed (non-fatal)${NC}"
-        timeout -k 5 120 docker compose -f "$COMPOSE_FILE" up -d --no-deps apt-cacher verdaccio 2>&1 | tail -3 || \
-            echo -e "${YELLOW}  ⚠ Build-cache services restart failed (non-fatal)${NC}"
     fi
-    if [ -n "${CROWDSEC_BOUNCER_KEY:-}" ]; then
+    unset _upd_tier
+    if [ -n "${CROWDSEC_BOUNCER_KEY:-}" ] && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'smsly-crowdsec'; then
         echo -e "${BLUE}  → Registering CrowdSec Bouncer...${NC}"
         # Idempotent: pre-check keeps logs clean; the "already exists"
         # fallback covers concurrent registration by the harden path.
@@ -14809,7 +15980,7 @@ fi
 if command -v trivy ; then
     echo -e "${BLUE}  → Scanning rebuilt images for vulnerabilities...${NC}"
     for _trivy_img in backend frontend; do
-        _trivy_tag="smsly/${_trivy_img}:latest"
+        _trivy_tag="smsly-hosting-${_trivy_img}:latest"
         if docker image inspect "$_trivy_tag" ; then
             echo -e "${BLUE}    ↳ Scanning $_trivy_tag...${NC}"
             trivy image --scanners vuln --severity CRITICAL,HIGH --exit-code 0 --no-progress "$_trivy_tag"  || \
@@ -14880,8 +16051,8 @@ if not created and not cp.is_active:
     docker container prune -f --filter "label=com.docker.compose.project" --filter "status=exited"  || true
     # Prune BuildKit build cache (saves significant disk space)
     docker builder prune -f --filter "until=24h"  || true
-    # Prune stale rollback backup containers left from failed blue-green promotions
-    docker container prune -f --filter "status=exited"  || true
+    # Prune ephemeral / rollback containers only (preserve stopped addons, sleeping tiers, and Sablier apps)
+    docker container prune -f --filter "label=com.smsly.ephemeral=true" --filter "status=exited"  || true
     # Prune dangling images left over after the new images were tagged
     docker image prune -f  || true
     for ctr in $(docker ps -a --filter "status=exited" --filter "name=-rollback-" --format '{{.Names}}'  || true); do
@@ -14958,6 +16129,33 @@ gen_hex_secret() {
     python3 -c "import secrets; print(secrets.token_hex(${bytes}))"  || openssl rand -hex "$bytes"
 }
 
+env_load_file_safe() {
+    local env_file="${1:-}"
+    [ -f "$env_file" ] || return 0
+    local _line="" _key="" _val=""
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        _line="${_line%$'\r'}"
+        [[ -z "$_line" || "$_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$_line" == export[[:space:]]* ]] && _line="${_line#export }"
+        [[ "$_line" == *=* ]] || continue
+        _key="${_line%%=*}"
+        _key="${_key#"${_key%%[![:space:]]*}"}"
+        _key="${_key%"${_key##*[![:space:]]}"}"
+        [[ "$_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        _val="${_line#*=}"
+        if [[ "$_val" == \"*\" && "$_val" == *\" && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+            _val="${_val//\\\"/\"}"
+            _val="${_val//\\\$/\$}"
+            _val="${_val//\\\`/\`}"
+            _val="${_val//\\\\/\\}"
+        elif [[ "$_val" == \'*\' && "$_val" == *\' && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+        fi
+        export "$_key=$_val"
+    done < "$env_file"
+}
+
 env_get_value() {
     local env_file="$1"
     local var_name="$2"
@@ -14977,8 +16175,18 @@ key = sys.argv[2]
 value = sys.argv[3]
 prefix = f"{key}="
 
+def _format_val(val: str) -> str:
+    if val == "":
+        return ""
+    if any(c.isspace() or c in '#$`\\"\'&;|<>()*?[]~!' for c in val):
+        escaped = val.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
+        return f'"{escaped}"'
+    return val
+
+formatted = _format_val(value)
+
 if not env_path.exists():
-    env_path.write_text(f"{key}={value}\n")
+    env_path.write_text(f"{key}={formatted}\n")
     sys.exit(0)
 
 lines = env_path.read_text().splitlines()
@@ -14988,14 +16196,14 @@ found = False
 for line in lines:
     if line.startswith(prefix):
         if not found:
-            updated.append(f"{key}={value}")
+            updated.append(f"{key}={formatted}")
             found = True
         # Skip any subsequent duplicates
         continue
     updated.append(line)
 
 if not found:
-    updated.append(f"{key}={value}")
+    updated.append(f"{key}={formatted}")
 
 env_path.write_text("\n".join(updated) + "\n")
 PY
@@ -15135,6 +16343,215 @@ NC='\033[0m'
 export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
 export NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}"
 # --- end lib/logging.sh ---
+# --- lib/env.sh ---
+gen_hex_secret() {
+    local bytes="${1:-16}"
+    python3 -c "import secrets; print(secrets.token_hex(${bytes}))"  || openssl rand -hex "$bytes"
+}
+
+env_load_file_safe() {
+    local env_file="${1:-}"
+    [ -f "$env_file" ] || return 0
+    local _line="" _key="" _val=""
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        _line="${_line%$'\r'}"
+        [[ -z "$_line" || "$_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$_line" == export[[:space:]]* ]] && _line="${_line#export }"
+        [[ "$_line" == *=* ]] || continue
+        _key="${_line%%=*}"
+        _key="${_key#"${_key%%[![:space:]]*}"}"
+        _key="${_key%"${_key##*[![:space:]]}"}"
+        [[ "$_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        _val="${_line#*=}"
+        if [[ "$_val" == \"*\" && "$_val" == *\" && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+            _val="${_val//\\\"/\"}"
+            _val="${_val//\\\$/\$}"
+            _val="${_val//\\\`/\`}"
+            _val="${_val//\\\\/\\}"
+        elif [[ "$_val" == \'*\' && "$_val" == *\' && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+        fi
+        export "$_key=$_val"
+    done < "$env_file"
+}
+
+env_get_value() {
+    local env_file="$1"
+    local var_name="$2"
+    grep -m1 "^${var_name}=" "$env_file"  | cut -d= -f2- | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//' || true
+}
+
+env_set_value() {
+    local env_file="$1"
+    local var_name="$2"
+    local var_value="$3"
+    python3 - "$env_file" "$var_name" "$var_value" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+prefix = f"{key}="
+
+def _format_val(val: str) -> str:
+    if val == "":
+        return ""
+    if any(c.isspace() or c in '#$`\\"\'&;|<>()*?[]~!' for c in val):
+        escaped = val.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
+        return f'"{escaped}"'
+    return val
+
+formatted = _format_val(value)
+
+if not env_path.exists():
+    env_path.write_text(f"{key}={formatted}\n")
+    sys.exit(0)
+
+lines = env_path.read_text().splitlines()
+updated = []
+found = False
+
+for line in lines:
+    if line.startswith(prefix):
+        if not found:
+            updated.append(f"{key}={formatted}")
+            found = True
+        # Skip any subsequent duplicates
+        continue
+    updated.append(line)
+
+if not found:
+    updated.append(f"{key}={formatted}")
+
+env_path.write_text("\n".join(updated) + "\n")
+PY
+}
+
+sanitize_node_identifier() {
+    local value="${1:-}"
+    value="$(printf '%s' "$value" | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+    if [ -z "$value" ]; then
+        value="$(hostname  | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+    fi
+    [ -n "$value" ] || value="agent"
+    printf '%s' "$value"
+}
+
+env_append_csv_values() {
+    local env_file="$1"
+    local var_name="$2"
+    shift 2
+
+    python3 - "$env_file" "$var_name" "$@" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+requested = [value.strip() for value in sys.argv[3:] if value.strip()]
+prefix = f"{key}="
+
+lines = env_path.read_text().splitlines() if env_path.exists() else []
+updated = []
+found = False
+changed = False
+
+for line in lines:
+    if line.startswith(prefix):
+        if not found:
+            values = [value.strip() for value in line[len(prefix):].split(",") if value.strip()]
+            seen = {value.lower() for value in values}
+            for value in requested:
+                if value.lower() not in seen:
+                    values.append(value)
+                    seen.add(value.lower())
+                    changed = True
+            updated.append(f"{key}={','.join(values)}")
+            found = True
+        else:
+            changed = True
+        continue
+    updated.append(line)
+
+if not found:
+    updated.append(f"{key}={','.join(requested)}")
+    changed = True
+
+if changed:
+    env_path.write_text("\n".join(updated) + "\n")
+
+print("changed" if changed else "unchanged")
+PY
+}
+
+sync_env_domain_allowlists() {
+    local env_file="$1"
+    local domain="${2:-}"
+    local public_ip="${3:-}"
+    local changed=false
+    local result=""
+    local allowed_hosts=("localhost" "127.0.0.1" "backend" "smsly-hosting-backend-1")
+    local csrf_origins=("http://localhost:8090")
+    local cors_origins=("http://localhost:8090")
+
+    [ -f "$env_file" ] || return 0
+
+    [ -n "$domain" ] || domain="$(env_get_value "$env_file" "DOMAIN")"
+    [ -n "$public_ip" ] || public_ip="$(env_get_value "$env_file" "PUBLIC_IP")"
+
+    if [ -n "$domain" ]; then
+        allowed_hosts+=("$domain")
+        csrf_origins+=("https://${domain}" "http://${domain}")
+        cors_origins+=("https://${domain}" "http://${domain}")
+    fi
+
+    if [ -n "$public_ip" ]; then
+        allowed_hosts+=("$public_ip")
+        csrf_origins+=("http://${public_ip}:8090" "http://${public_ip}")
+        cors_origins+=("http://${public_ip}:8090" "http://${public_ip}")
+    fi
+
+    # Automatically add all node IPs (including WireGuard VPN mesh IPs like 10.100.x.x)
+    local current_ips
+    current_ips="$(hostname -I  | tr -s ' ' '\n' | grep -v '^$' || true)"
+    if [ -n "$current_ips" ]; then
+        for ip in $current_ips; do
+            allowed_hosts+=("$ip")
+            csrf_origins+=("http://${ip}:8090" "http://${ip}" "https://${ip}")
+            cors_origins+=("http://${ip}:8090" "http://${ip}" "https://${ip}")
+        done
+    fi
+
+    result="$(env_append_csv_values "$env_file" "ALLOWED_HOSTS" "${allowed_hosts[@]}")"
+    [ "$result" = "changed" ] && changed=true
+    result="$(env_append_csv_values "$env_file" "CSRF_TRUSTED_ORIGINS" "${csrf_origins[@]}")"
+    [ "$result" = "changed" ] && changed=true
+    result="$(env_append_csv_values "$env_file" "CORS_ALLOWED_ORIGINS" "${cors_origins[@]}")"
+    [ "$result" = "changed" ] && changed=true
+
+    if [ "$changed" = true ]; then
+        echo -e "${GREEN}  ✓ Synced domain allowlists in .env${NC}"
+    fi
+}
+
+env_ensure_var() {
+    local env_file="$1"
+    local var_name="$2"
+    local var_value="$3"
+    local var_comment="${4:-}"
+    local current_val
+    current_val="$(env_get_value "$env_file" "$var_name")"
+
+    if [ -z "$current_val" ]; then
+        echo -e "${BLUE}  -> Setting $var_name in .env${NC}"
+        [ -n "$var_comment" ] && ! grep -q "# $var_comment" "$env_file"  && echo "# $var_comment" >> "$env_file"
+        env_set_value "$env_file" "$var_name" "$var_value"
+        echo -e "${GREEN}  OK $var_name set${NC}"
+    fi
+}
+# --- end lib/env.sh ---
 # --- lib/validation.sh ---
 is_valid_ipv4() {
     local ip="$1"
@@ -15292,7 +16709,13 @@ configure_docker_mirror() {
         local new
         new="$(cat /etc/docker/daemon.json  || echo '')"
         if [ "$prev" != "$new" ]; then
-            systemctl restart docker || true
+            local _smsly_ctrs=0
+            _smsly_ctrs="$(docker ps -q --filter "name=smsly-" 2>/dev/null | wc -l || echo 0)"
+            if [ "${_smsly_ctrs:-0}" -eq 0 ]; then
+                timeout 120 systemctl restart docker || true
+            else
+                echo -e "${YELLOW}  ⚠ Docker daemon config changed but $_smsly_ctrs SMSLY containers are running — deferring restart${NC}"
+            fi
         fi
     fi
 
@@ -15593,13 +17016,29 @@ ensure_infrastructure_permissions() {
     [ -f "$coredns_config_dir/mesh.hosts" ] && chmod 664 "$coredns_config_dir/mesh.hosts" || true
 
     if command -v docker ; then
-        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data|caddy_logs)$')"
+        local _vol_pattern='(^|_)(backups_data|caddy_data|caddy_logs)$'
+        if is_node_mode; then
+            _vol_pattern='(^|_)(backups_data|caddy_data|caddy_logs|caddy_config)$'
+        fi
+        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E "$_vol_pattern" || true)"
         for vol in ${_vol_names:-backups_data}; do
             if docker volume inspect "$vol" >/dev/null 2>&1; then
                 echo -e "${BLUE}     ↳ Setting permissions for volume: $vol...${NC}"
                 timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             else
                 echo -e "${YELLOW}     ⚠ $vol volume not found — skipping chown${NC}"
+            fi
+        done
+        for vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)postgres-archive$' || true); do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
+                echo -e "${BLUE}     ↳ Setting permissions for volume: $vol (70:70)...${NC}"
+                timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 70:70 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
+            fi
+        done
+        for vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)verdaccio_data$' || true); do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
+                echo -e "${BLUE}     ↳ Setting permissions for volume: $vol (10001:65533)...${NC}"
+                timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 10001:65533 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             fi
         done
     fi
@@ -16055,11 +17494,18 @@ refresh_runtime_services() {
         reload_container_caddy  || true
     fi
 
-    if [ "$MODE_AGENT_LITE" != "true" ]; then
+    local _refresh_tier="${STACK_TIER:-}"
+    if [ -z "$_refresh_tier" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        _refresh_tier="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "STACK_TIER" || true)"
+    fi
+    [ -n "$_refresh_tier" ] || _refresh_tier="full"
+    if [ "$MODE_AGENT_LITE" != "true" ] && [ "$_refresh_tier" != "lite" ]; then
         echo -e "${BLUE}  → Refreshing Observability Stack...${NC}"
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
-            docker compose -f infrastructure/docker/docker-compose.observability.yml pull || echo -e "${YELLOW}    ⚠ Observability pull failed${NC}"
-            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d || echo -e "${YELLOW}    ⚠ Observability up failed${NC}"
+            local _obs_env_args=()
+            [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && _obs_env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
+            timeout 300 docker compose "${_obs_env_args[@]}" -f infrastructure/docker/docker-compose.observability.yml pull || echo -e "${YELLOW}    ⚠ Observability pull failed${NC}"
+            timeout 300 docker compose "${_obs_env_args[@]}" -f infrastructure/docker/docker-compose.observability.yml up -d || echo -e "${YELLOW}    ⚠ Observability up failed${NC}"
             for obs_ctr in smsly-loki smsly-promtail smsly-prometheus smsly-cadvisor smsly-node-exporter smsly-grafana; do
                 i=0
                 while [ $i -lt 30 ]; do
@@ -16576,7 +18022,27 @@ ensure_compose_profiles() {
             return 0
         fi
     fi
-    export COMPOSE_PROFILES="local-ha,medium,full"
+    local tier="${STACK_TIER:-}"
+    if [ -z "$tier" ] && [ -f "$env_file" ]; then
+        tier="$(grep -E '^STACK_TIER=' "$env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]')"
+    fi
+    if [ -z "$tier" ]; then
+        local ram_mb=""
+        ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+        [ -n "$ram_mb" ] || ram_mb=8192
+        if [ "$ram_mb" -lt 6144 ]; then
+            tier="lite"
+        elif [ "$ram_mb" -lt 12288 ]; then
+            tier="medium"
+        else
+            tier="full"
+        fi
+    fi
+    case "$tier" in
+        lite)   export COMPOSE_PROFILES="local-ha" ;;
+        medium) export COMPOSE_PROFILES="local-ha,local-ha-replica,redis-ha,medium" ;;
+        *)      export COMPOSE_PROFILES="local-ha,local-ha-replica,redis-ha,medium,full,appsec" ;;
+    esac
 }
 
 acquire_install_lock() {
@@ -16641,7 +18107,7 @@ get_migration_database_alias() {
 
 diagnose_migration_locks() {
     local env_file="${INSTALL_DIR:-.}/.env"
-    [ -f "$env_file" ] && source "$env_file"  || true
+    env_load_file_safe "$env_file"
 
     echo -e "${YELLOW}  -> PostgreSQL activity snapshot (lock diagnosis):${NC}"
     timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
@@ -16785,9 +18251,8 @@ EOF
 reload_container_caddy() {
     should_manage_caddy || return 0
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    if command -v docker  && docker compose -f "$compose_f" ps -q caddy  | grep -q .; then
+    if command -v docker >/dev/null 2>&1 && docker compose -f "$compose_f" ps -q caddy  | grep -q .; then
         timeout -k 5 20 docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile < /dev/null || \
-            timeout -k 5 20 docker compose -f "$compose_f" restart caddy || \
             echo -e "${YELLOW}    ⚠ Caddy reload failed${NC}"
     fi
 }
@@ -16987,15 +18452,128 @@ sync_agent_lite_rabbitmq_password() {
 
 ensure_security_tools() {
     export PATH="/usr/local/bin:$PATH"
-    if ! command -v trivy  && [ ! -x "/usr/local/bin/trivy" ]; then
-        echo -e "${BLUE}  → Installing Trivy vulnerability scanner...${NC}"
-        curl -sfL --connect-timeout 15 --max-time 120 https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin  || true
+    if ! declare -F _harden_log >/dev/null 2>&1; then
+        _harden_log() {
+            local level="$1"; shift
+            case "$level" in
+                ok)   echo -e "${GREEN:-}  ✓ [harden] $*${NC:-}" ;;
+                warn) echo -e "${YELLOW:-}  ⚠ [harden] $*${NC:-}" ;;
+                err)  echo -e "${RED:-}  ✗ [harden] $*${NC:-}" ;;
+                info) echo -e "${BLUE:-}  → [harden] $*${NC:-}" ;;
+            esac
+        }
     fi
-    if ! command -v cosign  && [ ! -x "/usr/local/bin/cosign" ]; then
-        echo -e "${BLUE}  → Installing Cosign image attestation utility...${NC}"
-        local cosign_arch
-        cosign_arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
-        curl -sfL --connect-timeout 15 --max-time 120 -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${cosign_arch}"  && chmod +x /usr/local/bin/cosign || true
+    if ! declare -F _harden_trivy_bootstrap >/dev/null 2>&1; then
+        if [ -f "${_SCRIPT_DIR:-${INSTALL_DIR:-/opt/smsly-hosting}/lib}/harden_trivy.sh" ]; then
+# --- lib/harden_trivy.sh ---
+#!/bin/bash
+
+_harden_trivy_bootstrap() {
+    if command -v trivy ; then
+        return 0  # already installed
+    fi
+
+    _harden_log info "Installing Trivy vulnerability scanner..."
+    local trivy_version="v0.76.2"
+    local arch="" expected_deb_sha="" expected_tgz_sha=""
+    arch="$(uname -m)"
+    case "$arch" in
+        x86_64)
+            arch="64bit"
+            expected_deb_sha="7edaf64c8a2a0ae02137f776c6e56adf285fc36ec76b045274afdc462f20f092"
+            expected_tgz_sha="bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+            ;;
+        aarch64)
+            arch="ARM64"
+            expected_deb_sha="0c576cd78352a2084435d393ea31565a3637cc129dd052c422f1e72fd678ee76"
+            expected_tgz_sha="ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3"
+            ;;
+        *)       _harden_log warn "Trivy — unsupported architecture: $arch"; return 1 ;;
+    esac
+
+    local deb_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.deb"
+    local tmp_deb=""
+    tmp_deb="$(mktemp /tmp/trivy.XXXXXX.deb)"
+
+    # Attempt 1: Direct DEB download with pinned SHA256 verification
+    if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$deb_url" -o "$tmp_deb" ; then
+        if printf '%s  %s\n' "$expected_deb_sha" "$tmp_deb" | sha256sum -c - >/dev/null 2>&1; then
+            if ! dpkg -i "$tmp_deb" ; then
+                apt-get install -f -y  || true
+                dpkg -i "$tmp_deb"  || true
+            fi
+        else
+            _harden_log warn "Trivy DEB checksum mismatch — rejecting unverified artifact"
+        fi
+        rm -f "$tmp_deb"
+    else
+        rm -f "$tmp_deb"
+        _harden_log info "Direct DEB download failed — trying official verified tarball and APT repo..."
+    fi
+
+    # Attempt 2: Direct tar.gz release download with pinned SHA256 verification
+    if ! command -v trivy >/dev/null 2>&1; then
+        local tgz_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.tar.gz"
+        local tmp_tgz="" tmp_dir=""
+        tmp_tgz="$(mktemp /tmp/trivy.XXXXXX.tar.gz)"
+        tmp_dir="$(mktemp -d /tmp/trivy-extract.XXXXXX)"
+        if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$tgz_url" -o "$tmp_tgz"; then
+            if printf '%s  %s\n' "$expected_tgz_sha" "$tmp_tgz" | sha256sum -c - >/dev/null 2>&1; then
+                tar -xzf "$tmp_tgz" -C "$tmp_dir" trivy >/dev/null 2>&1 && \
+                    install -m 0755 "$tmp_dir/trivy" /usr/local/bin/trivy >/dev/null 2>&1 || true
+            else
+                _harden_log warn "Trivy tarball checksum mismatch — rejecting unverified artifact"
+            fi
+        fi
+        rm -rf "$tmp_tgz" "$tmp_dir"
+    fi
+
+    # Attempt 3: Official GPG-signed APT Repository fallback
+    if ! command -v trivy ; then
+        apt-get update -qq  || true
+        if ! apt-get install -y trivy ; then
+            if command -v gpg ; then
+                curl --retry 2 --connect-timeout 10 -fsSL https://aquasecurity.github.io/trivy-repo/deb/public.key  | gpg --dearmor -o /usr/share/keyrings/trivy.gpg  || true
+                echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc  || echo stable) main" > /etc/apt/sources.list.d/trivy.list  || true
+                apt-get update -qq  || true
+                apt-get install -y trivy  || true
+            fi
+        fi
+    fi
+
+    if command -v trivy ; then
+        _harden_log ok "Trivy installed successfully"
+        return 0
+    fi
+    _harden_log warn "Trivy — download and installation fallbacks failed"
+    return 1
+}
+
+_harden_trivy_verify() {
+    if command -v trivy ; then
+        local ver
+        ver="$(trivy --version  | head -1 || true)"
+        _harden_log ok "Trivy available: ${ver}"
+        return 0
+    fi
+    _harden_log warn "Trivy — not installed (image vulnerability scanning unavailable)"
+    return 1
+}
+# --- end lib/harden_trivy.sh ---
+        fi
+    fi
+    if declare -F _harden_trivy_bootstrap >/dev/null 2>&1; then
+        _harden_trivy_bootstrap || true
+    fi
+    if ! declare -F _cosign_ensure_binary >/dev/null 2>&1; then
+        local _cosign_script="${INSTALL_DIR:-/opt/smsly-hosting}/scripts/cosign-verify.sh"
+        [ -f "$_cosign_script" ] || _cosign_script="${_SCRIPT_DIR:-.}/../scripts/cosign-verify.sh"
+        if [ -f "$_cosign_script" ]; then
+            source "$_cosign_script" || true
+        fi
+    fi
+    if declare -F _cosign_ensure_binary >/dev/null 2>&1; then
+        _cosign_ensure_binary || true
     fi
     return 0
 }
@@ -17518,6 +19096,7 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 64)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
     env_ensure_var "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 64)" "FRP tunnel relay authentication token"
     env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
+    env_ensure_var "$env_file" "EDGE_JWT_SECRET" "$(gen_hex_secret 64)" "Edge JWT signing secret for Traefik forward-auth and Caddy authorize"
     env_ensure_var "$env_file" "PATRONI_SUPERUSER_PASSWORD" "$(gen_hex_secret 32)" "Patroni superuser password for HA cluster"
     env_ensure_var "$env_file" "NODE_SECURITY" "1" "Enable full hardening stack (auditd, kernel, docker, gVisor/Kata)"
     env_ensure_var "$env_file" "NODE_OBSERVABILITY" "1" "Enable node metrics stack (cadvisor, node-exporter, docker-labels)"
@@ -17525,19 +19104,57 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "NODE_FALCO" "1" "Enable Falco runtime security"
     env_ensure_var "$env_file" "NODE_SPIRE" "1" "Enable SPIRE mTLS"
     env_ensure_var "$env_file" "NODE_LOG_SHIPPING" "1" "Ship node access logs to master CrowdSec (security path, independent of observability metrics)"
-    # WAF shadow is default-on at >=8GB RAM, off below (the shadow costs
-    # ~1-2GB real). Fill-if-absent so an explicit operator value survives
-    # updates; mirrors the fresh_config sizing ladder.
+    # Resolve stack tier first (<6GB=lite, 6-12GB=medium, >=12GB=full) so
+    # existing lite/medium installs preserve their tier across --update.
+    local _db_ha_mode="" _prof_cur="" _prof_new="" _stack_tier="" _tier_ram_mb=""
+    _db_ha_mode="$(env_get_value "$env_file" "DB_HA_ENABLED")"
+    [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
+    env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
+
+    _prof_cur="$(env_get_value "$env_file" "COMPOSE_PROFILES")"
+    _stack_tier="$(env_get_value "$env_file" "STACK_TIER")"
+    case "$_stack_tier" in
+        lite|medium|full) ;;
+        *)
+            if [ -n "$_prof_cur" ]; then
+                case ",${_prof_cur}," in
+                    *,full,*) _stack_tier="full" ;;
+                    *,medium,*) _stack_tier="medium" ;;
+                    *) _stack_tier="lite" ;;
+                esac
+            else
+                _tier_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+                [ -n "$_tier_ram_mb" ] || _tier_ram_mb=8192
+                if [ "$_tier_ram_mb" -lt 6144 ]; then
+                    _stack_tier="lite"
+                elif [ "$_tier_ram_mb" -lt 12288 ]; then
+                    _stack_tier="medium"
+                else
+                    _stack_tier="full"
+                fi
+            fi
+            env_set_value "$env_file" "STACK_TIER" "$_stack_tier"
+            ;;
+    esac
+
+    # WAF shadow is default-on at >=12GB RAM (full tier), off below (costs
+    # ~1.5-2.2GB real). Fill-if-absent so an explicit operator value
+    # survives updates; mirrors the fresh_config sizing ladder.
     if [ -z "$(env_get_value "$env_file" "OPENAPPSEC_ENABLED")" ]; then
         local _waf_ram_mb=""
         _waf_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
         [ -n "$_waf_ram_mb" ] || _waf_ram_mb=8192
-        if [ "$_waf_ram_mb" -ge 8192 ]; then
+        if [ "$_waf_ram_mb" -ge 12288 ]; then
             env_set_value "$env_file" "OPENAPPSEC_ENABLED" "1"
         else
             env_set_value "$env_file" "OPENAPPSEC_ENABLED" "0"
         fi
+        if [ "$_stack_tier" != "full" ]; then
+            env_set_value "$env_file" "OPENAPPSEC_ENABLED" "0"
+        fi
     fi
+    local _waf_enabled=""
+    _waf_enabled="$(env_get_value "$env_file" "OPENAPPSEC_ENABLED")"
     env_ensure_var "$env_file" "OPENAPPSEC_MODE" "prevent" "WAF enforcement mode (prevent enforce vs detect-learn shadow); set from Settings → Security Scanning"
     env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'  || python3 -c 'import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
@@ -17548,84 +19165,94 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "REPLICATION_PASSWORD" "$(gen_hex_secret 32)" "PostgreSQL streaming replication password"
     env_ensure_var "$env_file" "SENTINEL_PASSWORD" "$(gen_hex_secret 32)" "Redis Sentinel authentication password"
     env_ensure_var "$env_file" "SENTINEL_SERVICE_NAME" "mymaster" "Redis Sentinel service name"
-    # Auto-detect sentinel containers and populate SENTINEL_HOSTS if empty.
-    # Sentinel containers are named smsly-redis-sentinel-{1,2,3} and listen
-    # on port 26379.  Without this, the backend falls back to direct
-    # redis-primary connection which breaks after sentinel failover.
-    local current_sentinel_hosts
+    # Populate SENTINEL_HOSTS only when Redis HA is active (medium/full);
+    # lite runs single-node Redis so SENTINEL_HOSTS stays empty.
+    local current_sentinel_hosts=""
     current_sentinel_hosts="$(env_get_value "$env_file" "SENTINEL_HOSTS")"
-    if [ -z "$current_sentinel_hosts" ]; then
-        local detected_sentinels=""
-        local _si
-        for _si in 1 2 3; do
-            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-redis-sentinel-${_si}$"; then
-                if [ -n "$detected_sentinels" ]; then
-                    detected_sentinels="${detected_sentinels},"
-                fi
-                detected_sentinels="${detected_sentinels}smsly-redis-sentinel-${_si}:26379"
-            fi
-        done
-        if [ -n "$detected_sentinels" ]; then
-            echo -e "${BLUE}  -> Auto-detected Redis Sentinels: ${detected_sentinels}${NC}"
-            env_set_value "$env_file" "SENTINEL_HOSTS" "$detected_sentinels"
-            echo -e "${GREEN}  OK SENTINEL_HOSTS set${NC}"
+    if [ "$_stack_tier" = "lite" ]; then
+        if [ "$current_sentinel_hosts" = "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379" ]; then
+            env_set_value "$env_file" "SENTINEL_HOSTS" ""
         fi
+    elif [ -z "$current_sentinel_hosts" ] && [ "$_db_ha_mode" = "local-ha" ] && [ "${MODE_AGENT_LITE:-false}" != "true" ] && [ "${MODE_NODE:-false}" != "true" ]; then
+        env_set_value "$env_file" "SENTINEL_HOSTS" "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379"
+        echo -e "${GREEN}  OK SENTINEL_HOSTS set for local-ha${NC}"
     fi
     env_ensure_var "$env_file" "REGISTRY_HTTP_SECRET" "$(gen_hex_secret 32)" "Docker registry HTTP secret"
-    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false" "SSH host key verification (True=strict, False=accept-first)"
-    # DB HA mode + compose profiles: without COMPOSE_PROFILES the profiled
-    # db/postgres services are never created and every backend crashes with
-    # "could not translate host name db" (2026-09-10 fresh-install incident).
-    # Default is full (run everything): local-ha|patroni|external + medium
-    # (observability) + full (Falco, SPIRE servers, apt-cacher, verdaccio).
-    local _db_ha_mode=""
-    _db_ha_mode="$(env_get_value "$env_file" "DB_HA_ENABLED")"
-    [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
-    env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
-    env_ensure_var "$env_file" "COMPOSE_PROFILES" "${_db_ha_mode},medium,full" "Compose profiles to activate (DB mode + observability + full stack)"
-    # Backfill older installs that predate the full default (local-ha or
-    # local-ha,medium): ensure the current DB mode + medium + full are
-    # present, and drop any STALE db-mode token (local-ha|patroni|external)
-    # so two postgres stacks never start side by side (haproxy :7000
-    # would clash with frps :7000). Idempotent, case-insensitive.
-    local _prof_cur="" _prof_new=""
+    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "true" "SSH host key verification (True=strict, False=accept-first)"
+    # Reconcile COMPOSE_PROFILES for (_db_ha_mode, _stack_tier, _waf_enabled):
+    # preserves STACK_TIER across --update and gates appsec strictly on
+    # OPENAPPSEC_ENABLED=1 while stripping stale DB-mode tokens.
+    local _default_profiles="$_db_ha_mode"
+    case "$_stack_tier" in
+        medium)
+            [ "$_db_ha_mode" = "local-ha" ] && _default_profiles="${_default_profiles},local-ha-replica"
+            _default_profiles="${_default_profiles},redis-ha,medium"
+            ;;
+        full)
+            [ "$_db_ha_mode" = "local-ha" ] && _default_profiles="${_default_profiles},local-ha-replica"
+            _default_profiles="${_default_profiles},redis-ha,medium,full"
+            ;;
+    esac
+    [ "$_waf_enabled" = "1" ] && _default_profiles="${_default_profiles},appsec"
+    env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_default_profiles" "Compose profiles to activate (DB mode + tier + optional appsec)"
     _prof_cur="$(env_get_value "$env_file" "COMPOSE_PROFILES")"
     if command -v python3 >/dev/null 2>&1; then
-        _prof_new="$(DB_MODE="$_db_ha_mode" CUR_PROF="$_prof_cur" python3 -c '
+        _prof_new="$(DB_MODE="$_db_ha_mode" STACK_TIER_VAL="$_stack_tier" WAF_VAL="$_waf_enabled" CUR_PROF="$_prof_cur" python3 -c '
 import os
-mode = os.environ.get("DB_MODE", "local-ha").strip() or "local-ha"
+mode = (os.environ.get("DB_MODE") or "local-ha").strip() or "local-ha"
+tier = (os.environ.get("STACK_TIER_VAL") or "full").strip().lower()
+waf = (os.environ.get("WAF_VAL") or "0").strip()
 cur = os.environ.get("CUR_PROF", "")
 db_modes = {"local-ha", "patroni", "external"}
+managed = {"local-ha-replica", "redis-ha", "medium", "full", "appsec"}
 seen = set()
 out = []
 for tok in [t.strip() for t in cur.split(",")]:
     if not tok:
         continue
     low = tok.lower()
-    if low in db_modes and low != mode.lower():
+    if low in db_modes or low in managed:
         continue
     if low not in seen:
         seen.add(low)
         out.append(tok)
-for want in [mode, "medium", "full"]:
-    if want.lower() not in seen:
-        seen.add(want.lower())
-        out.append(want)
-print(",".join(out))
+desired = [mode]
+if tier in ("medium", "full"):
+    if mode.lower() == "local-ha":
+        desired.append("local-ha-replica")
+    desired.extend(["redis-ha", "medium"])
+if tier == "full":
+    desired.append("full")
+if waf == "1":
+    desired.append("appsec")
+# Keep DB mode + tier profiles ordered deterministically, followed by custom tokens.
+final = []
+final_seen = set()
+for tok in desired + out:
+    low = tok.lower()
+    if low not in final_seen:
+        final_seen.add(low)
+        final.append(tok)
+print(",".join(final))
 ' || true)"
         if [ -n "$_prof_new" ] && [ "$_prof_new" != "$_prof_cur" ]; then
             env_set_value "$env_file" "COMPOSE_PROFILES" "$_prof_new"
         fi
     else
-        env_append_csv_values "$env_file" "COMPOSE_PROFILES" "$_db_ha_mode" "medium" "full" > /dev/null
+        env_set_value "$env_file" "COMPOSE_PROFILES" "$_default_profiles"
     fi
     # Read-replica routing must name the replica the compose stack actually
-    # starts. Empty here + compose-level default used to agree by accident;
-    # make it explicit so .env, pgcat, and the dashboard disagree never.
-    # External mode keeps operator-managed values (never overwrite).
+    # starts. Lite skips same-host postgres-replica; medium/full start it
+    # in local-ha mode. External mode keeps operator-managed values.
     local _replica_hosts=""
     _replica_hosts="$(env_get_value "$env_file" "DB_REPLICA_HOSTS")"
-    if [ -z "$_replica_hosts" ]; then
+    if [ "$_stack_tier" = "lite" ]; then
+        if [ "$_db_ha_mode" = "local-ha" ] && [ "$_replica_hosts" = "postgres-replica:5432" ]; then
+            env_set_value "$env_file" "DB_REPLICA_HOSTS" ""
+        elif [ "$_db_ha_mode" = "patroni" ] && [ -z "$_replica_hosts" ]; then
+            env_set_value "$env_file" "DB_REPLICA_HOSTS" "haproxy:5001"
+        fi
+    elif [ -z "$_replica_hosts" ]; then
         case "$_db_ha_mode" in
             patroni) env_set_value "$env_file" "DB_REPLICA_HOSTS" "haproxy:5001" ;;
             local-ha) env_set_value "$env_file" "DB_REPLICA_HOSTS" "postgres-replica:5432" ;;
@@ -17639,18 +19266,26 @@ print(",".join(out))
     _size_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
     [ -n "$_size_ram_mb" ] || _size_ram_mb=8192
     _size_cpus="$(nproc 2>/dev/null || echo 4)"
-    local _want_workers="" _want_buffers="" _want_cache=""
+    local _want_workers="" _want_buffers="" _want_cache="" _want_celery_autoscale="" _want_wal_keep="" _want_obs_retention=""
     if [ "$_size_cpus" -le 2 ]; then _want_workers=2; else _want_workers=4; fi
-    if [ "$_size_ram_mb" -le 4096 ]; then _want_buffers=256MB; _want_cache=1GB
-    elif [ "$_size_ram_mb" -le 8192 ]; then _want_buffers=512MB; _want_cache=2GB
-    else _want_buffers=1GB; _want_cache=4GB; fi
+    if [ "$_size_ram_mb" -le 4096 ]; then
+        _want_buffers=256MB; _want_cache=1GB; _want_celery_autoscale="2,0"; _want_wal_keep="64MB"
+    elif [ "$_size_ram_mb" -le 8192 ]; then
+        _want_buffers=512MB; _want_cache=2GB; _want_celery_autoscale="4,0"; _want_wal_keep="512MB"
+    else
+        _want_buffers=1GB; _want_cache=4GB; _want_celery_autoscale="4,0"; _want_wal_keep="1GB"
+    fi
+    if [ "$_stack_tier" = "lite" ]; then _want_wal_keep="64MB"; fi
+    if [ "$_size_ram_mb" -lt 12288 ]; then _want_obs_retention="7d"; else _want_obs_retention="30d"; fi
     env_ensure_var "$env_file" "GUNICORN_WORKERS" "$_want_workers" "Gunicorn workers (host-sized; burst via autoscaler)"
     env_ensure_var "$env_file" "DB_SHARED_BUFFERS" "$_want_buffers" "Postgres shared buffers (host-sized; pinned shm)"
     env_ensure_var "$env_file" "DB_EFFECTIVE_CACHE_SIZE" "$_want_cache" "Postgres planner cache hint (no RAM cost)"
     env_ensure_var "$env_file" "CELERY_QUEUES" "celery,fast,deploy" "Main worker drains all queues (burst workers idle-stop safely)"
+    env_ensure_var "$env_file" "CELERY_AUTOSCALE" "$_want_celery_autoscale" "Main Celery worker autoscale max,min"
     env_ensure_var "$env_file" "CELERY_AUTOSCALE_ENABLED" "true" "Idle-stop burst workers on empty queues"
-    env_ensure_var "$env_file" "PROMETHEUS_RETENTION" "30d" "Prometheus TSDB retention (main driver of metrics disk+RAM growth; 7d on small hosts)"
-    env_ensure_var "$env_file" "LOKI_RETENTION" "30d" "Loki log retention (set together with PROMETHEUS_RETENTION)"
+    env_ensure_var "$env_file" "PG_WAL_KEEP_SIZE" "$_want_wal_keep" "Postgres retained WAL floor (64MB lite, 512MB medium, 1GB full)"
+    env_ensure_var "$env_file" "PROMETHEUS_RETENTION" "$_want_obs_retention" "Prometheus TSDB retention (7d <12GB, 30d >=12GB)"
+    env_ensure_var "$env_file" "LOKI_RETENTION" "$_want_obs_retention" "Loki log retention (set together with PROMETHEUS_RETENTION)"
     env_ensure_var "$env_file" "FALCO_MEMORY_LIMIT" "1024M" "Falco runtime-security memory cap (1024M prevents modern_ebpf OOM)"
     # Registry public bind: without an explicit override the compose
     # fallback is a hardcoded IP from another host and the registry port
@@ -18048,234 +19683,39 @@ SMSLY_SYNC_EOF
 
     # ─── Caddy: Generate self-signed cert + regenerate Caddyfile ──
     if should_manage_caddy; then
-    ensure_selfsigned_cert
-    if command -v caddy ; then
-        echo -e "${BLUE}  → Regenerating Caddyfile with current service domains...${NC}"
-
-        # ── Step 1: Find the Cloudflare token FIRST (before generating Caddyfile) ──
-        CF_TOKEN=""
-
-        # Priority: .env file > PlatformConfig DB
-        if [ -z "$CF_TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
-            CF_TOKEN="$(grep -m1 '^CLOUDFLARE_API_TOKEN=' "$INSTALL_DIR/.env"  | cut -d= -f2- || true)"
-        fi
-        # Fallback: read from PlatformConfig in the database (set via Settings UI)
-        if [ -z "$CF_TOKEN" ] || [ "$CF_TOKEN" = "fake" ]; then
-            DB_TOKEN="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+        ensure_selfsigned_cert
+        if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
+            echo -e "${BLUE}  → Regenerating Caddyfile from Django caddy_manager...${NC}"
+            if timeout -k 5 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
-config = PlatformConfig.load()
-token = (getattr(config, 'cloudflare_api_token', '') or '').strip()
-if token and token.lower() not in ('fake', 'changeme', 'test', ''):
-    print(token)
-"  || true)"
-            DB_TOKEN="$(echo "$DB_TOKEN" | tr -d '[:space:]')"
-            if [ -n "$DB_TOKEN" ]; then
-                CF_TOKEN="$DB_TOKEN"
-                echo -e "${GREEN}  ✓ Cloudflare token found in Settings DB${NC}"
-                # Sync back to .env so it persists
-                if grep -q 'CLOUDFLARE_API_TOKEN' "$INSTALL_DIR/.env" ; then
-                    sed -i "s/CLOUDFLARE_API_TOKEN=.*/CLOUDFLARE_API_TOKEN=$CF_TOKEN/" "$INSTALL_DIR/.env"
-                else
-                    echo "CLOUDFLARE_API_TOKEN=$CF_TOKEN" >> "$INSTALL_DIR/.env"
-                fi
-            fi
-        fi
-
-        # ── Step 2: Generate Caddyfile WITH dns cloudflare if token exists ──
-        if [ -n "$CF_TOKEN" ] && [ "$CF_TOKEN" != "fake" ]; then
-            echo -e "${GREEN}  ✓ Cloudflare token available — generating Caddyfile with wildcard SSL${NC}"
-
-
-            # Discover domain
-            cf_domain=""
-            cf_domain="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
-from apps.deployments.models import PlatformConfig
-c = PlatformConfig.load()
-d = (c.domain or '').strip()
-if d and d != 'localhost':
-    print(d)
-"  | tr -d '[:space:]' || true)"
-            if [ -z "$cf_domain" ]; then
-                cf_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env"  | cut -d= -f2- || true)"
-            fi
-
-            cf_server_ip="$(detect_public_ip)"
-
-            # Discover wildcard-covered hosts and non-wildcard service blocks.
-            # - Wildcard-covered hosts route through Traefik via matcher.
-            # - Unknown wildcard hosts route to /notice on frontend.
-            # - External custom domains keep explicit direct on-demand TLS blocks with Host rewrite.
-            cf_wildcard_known_hosts=""
-            cf_wildcard_known_hosts="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
-from apps.deployments.models import Service
-from apps.domains.models import Domain, DomainStatus
-from django.db.models import Q
-suffix = '.${cf_domain}'.lower().strip()
-hosts = set()
-for svc in Service.objects.all():
-    d = (svc.public_domain or '').strip().lower()
-    if d and suffix and d.endswith(suffix):
-        hosts.add(d)
-for domain in Domain.objects.filter(
-    status__in=[DomainStatus.ACTIVE, DomainStatus.DNS_VERIFIED, DomainStatus.SSL_PROVISIONING],
-).filter(Q(verified=True) | Q(status=DomainStatus.ACTIVE)):
-    cd = (domain.domain_name or '').strip().lower()
-    if cd and suffix and cd.endswith(suffix):
-        hosts.add(cd)
-print(' '.join(sorted(hosts)))
-"  | tr -d '\r' | tr -d '\n' || true)"
-
-            cf_svc_blocks=""
-            cf_svc_blocks="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
-import os
-upstream = os.environ.get('SMSLY_SERVICE_PROXY_UPSTREAM', 'traefik:80')
-from apps.deployments.models import Service
-from apps.domains.models import Domain, DomainStatus
-from django.db.models import Q
-suffix = '.${cf_domain}'.lower().strip()
-seen = set()
-for svc in Service.objects.all():
-    public_domain = (svc.public_domain or '').strip().lower()
-    if public_domain and (not suffix or not public_domain.endswith(suffix)) and public_domain not in seen:
-        seen.add(public_domain)
-        print(f'{public_domain} {{\n    reverse_proxy {upstream}\n    encode gzip\n}}\n')
-
-for domain in Domain.objects.select_related('service').filter(
-    status__in=[DomainStatus.ACTIVE, DomainStatus.DNS_VERIFIED, DomainStatus.SSL_PROVISIONING],
-).filter(Q(verified=True) | Q(status=DomainStatus.ACTIVE)):
-    custom_domain = (domain.domain_name or '').strip().lower()
-    svc = domain.service
-    public_domain = (svc.public_domain or '').strip().lower() if svc else ''
-    if not custom_domain:
-        continue
-    if suffix and custom_domain.endswith(suffix):
-        continue
-    if custom_domain in seen:
-        continue
-    seen.add(custom_domain)
-
-    if public_domain and public_domain != custom_domain:
-        print(f'{custom_domain} {{\n    tls {{\n        on_demand\n    }}\n    reverse_proxy {upstream} {{\n        header_up Host {public_domain}\n    }}\n    encode gzip\n}}\n')
-    else:
-        print(f'{custom_domain} {{\n    tls {{\n        on_demand\n    }}\n    reverse_proxy {upstream}\n    encode gzip\n}}\n')
-"  | tr -d '\r' || true)"
-
-            # Only generate wildcard Caddyfile for real domains
-            cf_is_real_domain=false
-            if [ -n "$cf_domain" ] && [ "$cf_domain" != "localhost" ]; then
-                if ! echo "$cf_domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
-                    cf_is_real_domain=true
-                fi
-            fi
-
-            if [ "$cf_is_real_domain" = "true" ]; then
-                cf_known_stanza=""
-                if [ -n "$cf_wildcard_known_hosts" ]; then
-                    cf_known_stanza="    @known_hosts host ${cf_wildcard_known_hosts}
-    handle @known_hosts {
-        reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
-    }"
-                fi
-
-                cat > /tmp/Caddyfile.tmp <<CFCADDY
-# Auto-generated with Cloudflare DNS challenge (wildcard SSL)
-{
-    on_demand_tls {
-        ask http://backend:8000/api/v1/services/check-domain/
-    }
-}
-
-${cf_domain} {
-    reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
-    encode gzip
-    log {
-        output file /var/log/caddy/access.log
-    }
-}
-
-*.${cf_domain} {
-    tls {
-        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-    }
-${cf_known_stanza}
-    handle {
-        reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
-    }
-}
-
-${cf_server_ip} {
-    tls internal
-    redir http://${cf_server_ip}{uri} 308
-}
-
-${cf_svc_blocks}
-CFCADDY
-                if install_caddyfile_atomically /tmp/Caddyfile.tmp "wildcard Caddyfile"; then
-                    echo -e "${GREEN}  ✓ Caddyfile generated with wildcard SSL for *.${cf_domain}${NC}"
-                else
-                    echo -e "${YELLOW}  ⚠ Wildcard Caddyfile could not be applied. Falling back to standard HTTPS for ${cf_domain}.${NC}"
-                    generate_safe_caddyfile "wildcard Caddyfile apply failed"
-                fi
-                rm -f /tmp/Caddyfile.tmp
-            else
-                # IP mode or no domain — fall back to safe Caddyfile
-                generate_safe_caddyfile "update flow (IP mode)"
-            fi
-        else
-            # No valid token — generate safe Caddyfile (no dns cloudflare)
-            generate_safe_caddyfile "update flow caddy regen"
-
-            # NOTE: Cloudflare dns-challenge stripping is now handled by
-            # generate_safe_caddyfile itself, which never emits 'dns cloudflare'
-            # blocks when no token is present. (Removed dead 'if false' block.)
-        fi
-
-        # Final validation — if still broken, regenerate safe fallback
-        if caddy_needs_fix; then
-            generate_safe_caddyfile "post-update validation"
-        fi
-
-        reload_container_caddy  || true
-
-        # ─── Python-based Caddyfile overlay (preview-aware routing) ─────────────
-        # The bash heredoc above generates a static template without preview
-        # environment routing. Django's generate_caddyfile() includes direct
-        # container routing for local preview environments, so we overlay it.
-        echo -e "${BLUE}  → Overlaying preview-aware Caddyfile from Django...${NC}"
-        timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
-from apps.deployments.models import PlatformConfig
-from services.caddy_manager import generate_caddyfile, apply_caddyfile
+from apps.deployments.services.caddy_manager import generate_caddyfile, apply_caddyfile
 config = PlatformConfig.load()
 content = generate_caddyfile(config)
 token = (getattr(config, 'cloudflare_api_token', '') or '').strip()
 result = apply_caddyfile(content, cloudflare_token=token, preserve_existing_token=True)
 print(result.get('message', 'ok'))
-"  && echo -e "${GREEN}  ✓ Preview-aware Caddyfile applied${NC}" || \
-            echo -e "${YELLOW}  ⚠ Python Caddyfile overlay failed (non-fatal, static template still active)${NC}"
+"; then
+                echo -e "${GREEN}  ✓ Caddyfile synced from Django${NC}"
+            else
+                echo -e "${YELLOW}  ⚠ Django Caddyfile sync failed — falling back to safe Caddyfile${NC}"
+                generate_safe_caddyfile "post-update fallback" || true
+            fi
 
-        reload_container_caddy  || true
+            reload_container_caddy || true
 
-        # Verify Caddy is running
-        sleep 2
-        if docker compose -f "$COMPOSE_FILE" ps -q caddy  | grep -q .; then
-            echo -e "${GREEN}  ✓ Caddy config regenerated and running${NC}"
-        else
-            echo -e "${YELLOW}  ⚠ Caddy failed to start. Run: journalctl -u caddy --no-pager -n 20${NC}"
-        fi
-
-        POST_CADDY_DOMAIN="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+            POST_CADDY_DOMAIN="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
 c = PlatformConfig.load()
 d = (c.domain or '').strip()
 if d and d != 'localhost':
     print(d)
 "  | tr -d '[:space:]' || true)"
-        if [ -z "$POST_CADDY_DOMAIN" ]; then
-            POST_CADDY_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env"  | cut -d= -f2- || true)"
-        fi
+            if [ -z "$POST_CADDY_DOMAIN" ]; then
+                POST_CADDY_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env"  | cut -d= -f2- || true)"
+            fi
 
-        install_caddy_health_guard "$POST_CADDY_DOMAIN"
-    fi
+            install_caddy_health_guard "$POST_CADDY_DOMAIN"
+        fi
     fi
 
     # NOTE: heredocs (not `bash -c "..."`) on purpose: the bundle regen
@@ -18294,6 +19734,215 @@ NC='\033[0m'
 export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
 export NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}"
 # --- end lib/logging.sh ---
+# --- lib/env.sh ---
+gen_hex_secret() {
+    local bytes="${1:-16}"
+    python3 -c "import secrets; print(secrets.token_hex(${bytes}))"  || openssl rand -hex "$bytes"
+}
+
+env_load_file_safe() {
+    local env_file="${1:-}"
+    [ -f "$env_file" ] || return 0
+    local _line="" _key="" _val=""
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        _line="${_line%$'\r'}"
+        [[ -z "$_line" || "$_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$_line" == export[[:space:]]* ]] && _line="${_line#export }"
+        [[ "$_line" == *=* ]] || continue
+        _key="${_line%%=*}"
+        _key="${_key#"${_key%%[![:space:]]*}"}"
+        _key="${_key%"${_key##*[![:space:]]}"}"
+        [[ "$_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        _val="${_line#*=}"
+        if [[ "$_val" == \"*\" && "$_val" == *\" && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+            _val="${_val//\\\"/\"}"
+            _val="${_val//\\\$/\$}"
+            _val="${_val//\\\`/\`}"
+            _val="${_val//\\\\/\\}"
+        elif [[ "$_val" == \'*\' && "$_val" == *\' && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+        fi
+        export "$_key=$_val"
+    done < "$env_file"
+}
+
+env_get_value() {
+    local env_file="$1"
+    local var_name="$2"
+    grep -m1 "^${var_name}=" "$env_file"  | cut -d= -f2- | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//' || true
+}
+
+env_set_value() {
+    local env_file="$1"
+    local var_name="$2"
+    local var_value="$3"
+    python3 - "$env_file" "$var_name" "$var_value" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+prefix = f"{key}="
+
+def _format_val(val: str) -> str:
+    if val == "":
+        return ""
+    if any(c.isspace() or c in '#$`\\"\'&;|<>()*?[]~!' for c in val):
+        escaped = val.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
+        return f'"{escaped}"'
+    return val
+
+formatted = _format_val(value)
+
+if not env_path.exists():
+    env_path.write_text(f"{key}={formatted}\n")
+    sys.exit(0)
+
+lines = env_path.read_text().splitlines()
+updated = []
+found = False
+
+for line in lines:
+    if line.startswith(prefix):
+        if not found:
+            updated.append(f"{key}={formatted}")
+            found = True
+        # Skip any subsequent duplicates
+        continue
+    updated.append(line)
+
+if not found:
+    updated.append(f"{key}={formatted}")
+
+env_path.write_text("\n".join(updated) + "\n")
+PY
+}
+
+sanitize_node_identifier() {
+    local value="${1:-}"
+    value="$(printf '%s' "$value" | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+    if [ -z "$value" ]; then
+        value="$(hostname  | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+    fi
+    [ -n "$value" ] || value="agent"
+    printf '%s' "$value"
+}
+
+env_append_csv_values() {
+    local env_file="$1"
+    local var_name="$2"
+    shift 2
+
+    python3 - "$env_file" "$var_name" "$@" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+requested = [value.strip() for value in sys.argv[3:] if value.strip()]
+prefix = f"{key}="
+
+lines = env_path.read_text().splitlines() if env_path.exists() else []
+updated = []
+found = False
+changed = False
+
+for line in lines:
+    if line.startswith(prefix):
+        if not found:
+            values = [value.strip() for value in line[len(prefix):].split(",") if value.strip()]
+            seen = {value.lower() for value in values}
+            for value in requested:
+                if value.lower() not in seen:
+                    values.append(value)
+                    seen.add(value.lower())
+                    changed = True
+            updated.append(f"{key}={','.join(values)}")
+            found = True
+        else:
+            changed = True
+        continue
+    updated.append(line)
+
+if not found:
+    updated.append(f"{key}={','.join(requested)}")
+    changed = True
+
+if changed:
+    env_path.write_text("\n".join(updated) + "\n")
+
+print("changed" if changed else "unchanged")
+PY
+}
+
+sync_env_domain_allowlists() {
+    local env_file="$1"
+    local domain="${2:-}"
+    local public_ip="${3:-}"
+    local changed=false
+    local result=""
+    local allowed_hosts=("localhost" "127.0.0.1" "backend" "smsly-hosting-backend-1")
+    local csrf_origins=("http://localhost:8090")
+    local cors_origins=("http://localhost:8090")
+
+    [ -f "$env_file" ] || return 0
+
+    [ -n "$domain" ] || domain="$(env_get_value "$env_file" "DOMAIN")"
+    [ -n "$public_ip" ] || public_ip="$(env_get_value "$env_file" "PUBLIC_IP")"
+
+    if [ -n "$domain" ]; then
+        allowed_hosts+=("$domain")
+        csrf_origins+=("https://${domain}" "http://${domain}")
+        cors_origins+=("https://${domain}" "http://${domain}")
+    fi
+
+    if [ -n "$public_ip" ]; then
+        allowed_hosts+=("$public_ip")
+        csrf_origins+=("http://${public_ip}:8090" "http://${public_ip}")
+        cors_origins+=("http://${public_ip}:8090" "http://${public_ip}")
+    fi
+
+    # Automatically add all node IPs (including WireGuard VPN mesh IPs like 10.100.x.x)
+    local current_ips
+    current_ips="$(hostname -I  | tr -s ' ' '\n' | grep -v '^$' || true)"
+    if [ -n "$current_ips" ]; then
+        for ip in $current_ips; do
+            allowed_hosts+=("$ip")
+            csrf_origins+=("http://${ip}:8090" "http://${ip}" "https://${ip}")
+            cors_origins+=("http://${ip}:8090" "http://${ip}" "https://${ip}")
+        done
+    fi
+
+    result="$(env_append_csv_values "$env_file" "ALLOWED_HOSTS" "${allowed_hosts[@]}")"
+    [ "$result" = "changed" ] && changed=true
+    result="$(env_append_csv_values "$env_file" "CSRF_TRUSTED_ORIGINS" "${csrf_origins[@]}")"
+    [ "$result" = "changed" ] && changed=true
+    result="$(env_append_csv_values "$env_file" "CORS_ALLOWED_ORIGINS" "${cors_origins[@]}")"
+    [ "$result" = "changed" ] && changed=true
+
+    if [ "$changed" = true ]; then
+        echo -e "${GREEN}  ✓ Synced domain allowlists in .env${NC}"
+    fi
+}
+
+env_ensure_var() {
+    local env_file="$1"
+    local var_name="$2"
+    local var_value="$3"
+    local var_comment="${4:-}"
+    local current_val
+    current_val="$(env_get_value "$env_file" "$var_name")"
+
+    if [ -z "$current_val" ]; then
+        echo -e "${BLUE}  -> Setting $var_name in .env${NC}"
+        [ -n "$var_comment" ] && ! grep -q "# $var_comment" "$env_file"  && echo "# $var_comment" >> "$env_file"
+        env_set_value "$env_file" "$var_name" "$var_value"
+        echo -e "${GREEN}  OK $var_name set${NC}"
+    fi
+}
+# --- end lib/env.sh ---
 # --- lib/validation.sh ---
 is_valid_ipv4() {
     local ip="$1"
@@ -18451,7 +20100,13 @@ configure_docker_mirror() {
         local new
         new="$(cat /etc/docker/daemon.json  || echo '')"
         if [ "$prev" != "$new" ]; then
-            systemctl restart docker || true
+            local _smsly_ctrs=0
+            _smsly_ctrs="$(docker ps -q --filter "name=smsly-" 2>/dev/null | wc -l || echo 0)"
+            if [ "${_smsly_ctrs:-0}" -eq 0 ]; then
+                timeout 120 systemctl restart docker || true
+            else
+                echo -e "${YELLOW}  ⚠ Docker daemon config changed but $_smsly_ctrs SMSLY containers are running — deferring restart${NC}"
+            fi
         fi
     fi
 
@@ -18752,13 +20407,29 @@ ensure_infrastructure_permissions() {
     [ -f "$coredns_config_dir/mesh.hosts" ] && chmod 664 "$coredns_config_dir/mesh.hosts" || true
 
     if command -v docker ; then
-        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data|caddy_logs)$')"
+        local _vol_pattern='(^|_)(backups_data|caddy_data|caddy_logs)$'
+        if is_node_mode; then
+            _vol_pattern='(^|_)(backups_data|caddy_data|caddy_logs|caddy_config)$'
+        fi
+        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E "$_vol_pattern" || true)"
         for vol in ${_vol_names:-backups_data}; do
             if docker volume inspect "$vol" >/dev/null 2>&1; then
                 echo -e "${BLUE}     ↳ Setting permissions for volume: $vol...${NC}"
                 timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             else
                 echo -e "${YELLOW}     ⚠ $vol volume not found — skipping chown${NC}"
+            fi
+        done
+        for vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)postgres-archive$' || true); do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
+                echo -e "${BLUE}     ↳ Setting permissions for volume: $vol (70:70)...${NC}"
+                timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 70:70 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
+            fi
+        done
+        for vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)verdaccio_data$' || true); do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
+                echo -e "${BLUE}     ↳ Setting permissions for volume: $vol (10001:65533)...${NC}"
+                timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 10001:65533 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             fi
         done
     fi
@@ -19214,11 +20885,18 @@ refresh_runtime_services() {
         reload_container_caddy  || true
     fi
 
-    if [ "$MODE_AGENT_LITE" != "true" ]; then
+    local _refresh_tier="${STACK_TIER:-}"
+    if [ -z "$_refresh_tier" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        _refresh_tier="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "STACK_TIER" || true)"
+    fi
+    [ -n "$_refresh_tier" ] || _refresh_tier="full"
+    if [ "$MODE_AGENT_LITE" != "true" ] && [ "$_refresh_tier" != "lite" ]; then
         echo -e "${BLUE}  → Refreshing Observability Stack...${NC}"
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
-            docker compose -f infrastructure/docker/docker-compose.observability.yml pull || echo -e "${YELLOW}    ⚠ Observability pull failed${NC}"
-            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d || echo -e "${YELLOW}    ⚠ Observability up failed${NC}"
+            local _obs_env_args=()
+            [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && _obs_env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
+            timeout 300 docker compose "${_obs_env_args[@]}" -f infrastructure/docker/docker-compose.observability.yml pull || echo -e "${YELLOW}    ⚠ Observability pull failed${NC}"
+            timeout 300 docker compose "${_obs_env_args[@]}" -f infrastructure/docker/docker-compose.observability.yml up -d || echo -e "${YELLOW}    ⚠ Observability up failed${NC}"
             for obs_ctr in smsly-loki smsly-promtail smsly-prometheus smsly-cadvisor smsly-node-exporter smsly-grafana; do
                 i=0
                 while [ $i -lt 30 ]; do
@@ -19735,7 +21413,27 @@ ensure_compose_profiles() {
             return 0
         fi
     fi
-    export COMPOSE_PROFILES="local-ha,medium,full"
+    local tier="${STACK_TIER:-}"
+    if [ -z "$tier" ] && [ -f "$env_file" ]; then
+        tier="$(grep -E '^STACK_TIER=' "$env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]')"
+    fi
+    if [ -z "$tier" ]; then
+        local ram_mb=""
+        ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+        [ -n "$ram_mb" ] || ram_mb=8192
+        if [ "$ram_mb" -lt 6144 ]; then
+            tier="lite"
+        elif [ "$ram_mb" -lt 12288 ]; then
+            tier="medium"
+        else
+            tier="full"
+        fi
+    fi
+    case "$tier" in
+        lite)   export COMPOSE_PROFILES="local-ha" ;;
+        medium) export COMPOSE_PROFILES="local-ha,local-ha-replica,redis-ha,medium" ;;
+        *)      export COMPOSE_PROFILES="local-ha,local-ha-replica,redis-ha,medium,full,appsec" ;;
+    esac
 }
 
 acquire_install_lock() {
@@ -19800,7 +21498,7 @@ get_migration_database_alias() {
 
 diagnose_migration_locks() {
     local env_file="${INSTALL_DIR:-.}/.env"
-    [ -f "$env_file" ] && source "$env_file"  || true
+    env_load_file_safe "$env_file"
 
     echo -e "${YELLOW}  -> PostgreSQL activity snapshot (lock diagnosis):${NC}"
     timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
@@ -19944,9 +21642,8 @@ EOF
 reload_container_caddy() {
     should_manage_caddy || return 0
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    if command -v docker  && docker compose -f "$compose_f" ps -q caddy  | grep -q .; then
+    if command -v docker >/dev/null 2>&1 && docker compose -f "$compose_f" ps -q caddy  | grep -q .; then
         timeout -k 5 20 docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile < /dev/null || \
-            timeout -k 5 20 docker compose -f "$compose_f" restart caddy || \
             echo -e "${YELLOW}    ⚠ Caddy reload failed${NC}"
     fi
 }
@@ -20146,15 +21843,128 @@ sync_agent_lite_rabbitmq_password() {
 
 ensure_security_tools() {
     export PATH="/usr/local/bin:$PATH"
-    if ! command -v trivy  && [ ! -x "/usr/local/bin/trivy" ]; then
-        echo -e "${BLUE}  → Installing Trivy vulnerability scanner...${NC}"
-        curl -sfL --connect-timeout 15 --max-time 120 https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin  || true
+    if ! declare -F _harden_log >/dev/null 2>&1; then
+        _harden_log() {
+            local level="$1"; shift
+            case "$level" in
+                ok)   echo -e "${GREEN:-}  ✓ [harden] $*${NC:-}" ;;
+                warn) echo -e "${YELLOW:-}  ⚠ [harden] $*${NC:-}" ;;
+                err)  echo -e "${RED:-}  ✗ [harden] $*${NC:-}" ;;
+                info) echo -e "${BLUE:-}  → [harden] $*${NC:-}" ;;
+            esac
+        }
     fi
-    if ! command -v cosign  && [ ! -x "/usr/local/bin/cosign" ]; then
-        echo -e "${BLUE}  → Installing Cosign image attestation utility...${NC}"
-        local cosign_arch
-        cosign_arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
-        curl -sfL --connect-timeout 15 --max-time 120 -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${cosign_arch}"  && chmod +x /usr/local/bin/cosign || true
+    if ! declare -F _harden_trivy_bootstrap >/dev/null 2>&1; then
+        if [ -f "${_SCRIPT_DIR:-${INSTALL_DIR:-/opt/smsly-hosting}/lib}/harden_trivy.sh" ]; then
+# --- lib/harden_trivy.sh ---
+#!/bin/bash
+
+_harden_trivy_bootstrap() {
+    if command -v trivy ; then
+        return 0  # already installed
+    fi
+
+    _harden_log info "Installing Trivy vulnerability scanner..."
+    local trivy_version="v0.76.2"
+    local arch="" expected_deb_sha="" expected_tgz_sha=""
+    arch="$(uname -m)"
+    case "$arch" in
+        x86_64)
+            arch="64bit"
+            expected_deb_sha="7edaf64c8a2a0ae02137f776c6e56adf285fc36ec76b045274afdc462f20f092"
+            expected_tgz_sha="bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+            ;;
+        aarch64)
+            arch="ARM64"
+            expected_deb_sha="0c576cd78352a2084435d393ea31565a3637cc129dd052c422f1e72fd678ee76"
+            expected_tgz_sha="ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3"
+            ;;
+        *)       _harden_log warn "Trivy — unsupported architecture: $arch"; return 1 ;;
+    esac
+
+    local deb_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.deb"
+    local tmp_deb=""
+    tmp_deb="$(mktemp /tmp/trivy.XXXXXX.deb)"
+
+    # Attempt 1: Direct DEB download with pinned SHA256 verification
+    if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$deb_url" -o "$tmp_deb" ; then
+        if printf '%s  %s\n' "$expected_deb_sha" "$tmp_deb" | sha256sum -c - >/dev/null 2>&1; then
+            if ! dpkg -i "$tmp_deb" ; then
+                apt-get install -f -y  || true
+                dpkg -i "$tmp_deb"  || true
+            fi
+        else
+            _harden_log warn "Trivy DEB checksum mismatch — rejecting unverified artifact"
+        fi
+        rm -f "$tmp_deb"
+    else
+        rm -f "$tmp_deb"
+        _harden_log info "Direct DEB download failed — trying official verified tarball and APT repo..."
+    fi
+
+    # Attempt 2: Direct tar.gz release download with pinned SHA256 verification
+    if ! command -v trivy >/dev/null 2>&1; then
+        local tgz_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.tar.gz"
+        local tmp_tgz="" tmp_dir=""
+        tmp_tgz="$(mktemp /tmp/trivy.XXXXXX.tar.gz)"
+        tmp_dir="$(mktemp -d /tmp/trivy-extract.XXXXXX)"
+        if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$tgz_url" -o "$tmp_tgz"; then
+            if printf '%s  %s\n' "$expected_tgz_sha" "$tmp_tgz" | sha256sum -c - >/dev/null 2>&1; then
+                tar -xzf "$tmp_tgz" -C "$tmp_dir" trivy >/dev/null 2>&1 && \
+                    install -m 0755 "$tmp_dir/trivy" /usr/local/bin/trivy >/dev/null 2>&1 || true
+            else
+                _harden_log warn "Trivy tarball checksum mismatch — rejecting unverified artifact"
+            fi
+        fi
+        rm -rf "$tmp_tgz" "$tmp_dir"
+    fi
+
+    # Attempt 3: Official GPG-signed APT Repository fallback
+    if ! command -v trivy ; then
+        apt-get update -qq  || true
+        if ! apt-get install -y trivy ; then
+            if command -v gpg ; then
+                curl --retry 2 --connect-timeout 10 -fsSL https://aquasecurity.github.io/trivy-repo/deb/public.key  | gpg --dearmor -o /usr/share/keyrings/trivy.gpg  || true
+                echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc  || echo stable) main" > /etc/apt/sources.list.d/trivy.list  || true
+                apt-get update -qq  || true
+                apt-get install -y trivy  || true
+            fi
+        fi
+    fi
+
+    if command -v trivy ; then
+        _harden_log ok "Trivy installed successfully"
+        return 0
+    fi
+    _harden_log warn "Trivy — download and installation fallbacks failed"
+    return 1
+}
+
+_harden_trivy_verify() {
+    if command -v trivy ; then
+        local ver
+        ver="$(trivy --version  | head -1 || true)"
+        _harden_log ok "Trivy available: ${ver}"
+        return 0
+    fi
+    _harden_log warn "Trivy — not installed (image vulnerability scanning unavailable)"
+    return 1
+}
+# --- end lib/harden_trivy.sh ---
+        fi
+    fi
+    if declare -F _harden_trivy_bootstrap >/dev/null 2>&1; then
+        _harden_trivy_bootstrap || true
+    fi
+    if ! declare -F _cosign_ensure_binary >/dev/null 2>&1; then
+        local _cosign_script="${INSTALL_DIR:-/opt/smsly-hosting}/scripts/cosign-verify.sh"
+        [ -f "$_cosign_script" ] || _cosign_script="${_SCRIPT_DIR:-.}/../scripts/cosign-verify.sh"
+        if [ -f "$_cosign_script" ]; then
+            source "$_cosign_script" || true
+        fi
+    fi
+    if declare -F _cosign_ensure_binary >/dev/null 2>&1; then
+        _cosign_ensure_binary || true
     fi
     return 0
 }
@@ -20173,6 +21983,215 @@ NC='\033[0m'
 export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
 export NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}"
 # --- end lib/logging.sh ---
+# --- lib/env.sh ---
+gen_hex_secret() {
+    local bytes="${1:-16}"
+    python3 -c "import secrets; print(secrets.token_hex(${bytes}))"  || openssl rand -hex "$bytes"
+}
+
+env_load_file_safe() {
+    local env_file="${1:-}"
+    [ -f "$env_file" ] || return 0
+    local _line="" _key="" _val=""
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        _line="${_line%$'\r'}"
+        [[ -z "$_line" || "$_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$_line" == export[[:space:]]* ]] && _line="${_line#export }"
+        [[ "$_line" == *=* ]] || continue
+        _key="${_line%%=*}"
+        _key="${_key#"${_key%%[![:space:]]*}"}"
+        _key="${_key%"${_key##*[![:space:]]}"}"
+        [[ "$_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        _val="${_line#*=}"
+        if [[ "$_val" == \"*\" && "$_val" == *\" && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+            _val="${_val//\\\"/\"}"
+            _val="${_val//\\\$/\$}"
+            _val="${_val//\\\`/\`}"
+            _val="${_val//\\\\/\\}"
+        elif [[ "$_val" == \'*\' && "$_val" == *\' && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+        fi
+        export "$_key=$_val"
+    done < "$env_file"
+}
+
+env_get_value() {
+    local env_file="$1"
+    local var_name="$2"
+    grep -m1 "^${var_name}=" "$env_file"  | cut -d= -f2- | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//' || true
+}
+
+env_set_value() {
+    local env_file="$1"
+    local var_name="$2"
+    local var_value="$3"
+    python3 - "$env_file" "$var_name" "$var_value" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+prefix = f"{key}="
+
+def _format_val(val: str) -> str:
+    if val == "":
+        return ""
+    if any(c.isspace() or c in '#$`\\"\'&;|<>()*?[]~!' for c in val):
+        escaped = val.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
+        return f'"{escaped}"'
+    return val
+
+formatted = _format_val(value)
+
+if not env_path.exists():
+    env_path.write_text(f"{key}={formatted}\n")
+    sys.exit(0)
+
+lines = env_path.read_text().splitlines()
+updated = []
+found = False
+
+for line in lines:
+    if line.startswith(prefix):
+        if not found:
+            updated.append(f"{key}={formatted}")
+            found = True
+        # Skip any subsequent duplicates
+        continue
+    updated.append(line)
+
+if not found:
+    updated.append(f"{key}={formatted}")
+
+env_path.write_text("\n".join(updated) + "\n")
+PY
+}
+
+sanitize_node_identifier() {
+    local value="${1:-}"
+    value="$(printf '%s' "$value" | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+    if [ -z "$value" ]; then
+        value="$(hostname  | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+    fi
+    [ -n "$value" ] || value="agent"
+    printf '%s' "$value"
+}
+
+env_append_csv_values() {
+    local env_file="$1"
+    local var_name="$2"
+    shift 2
+
+    python3 - "$env_file" "$var_name" "$@" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+requested = [value.strip() for value in sys.argv[3:] if value.strip()]
+prefix = f"{key}="
+
+lines = env_path.read_text().splitlines() if env_path.exists() else []
+updated = []
+found = False
+changed = False
+
+for line in lines:
+    if line.startswith(prefix):
+        if not found:
+            values = [value.strip() for value in line[len(prefix):].split(",") if value.strip()]
+            seen = {value.lower() for value in values}
+            for value in requested:
+                if value.lower() not in seen:
+                    values.append(value)
+                    seen.add(value.lower())
+                    changed = True
+            updated.append(f"{key}={','.join(values)}")
+            found = True
+        else:
+            changed = True
+        continue
+    updated.append(line)
+
+if not found:
+    updated.append(f"{key}={','.join(requested)}")
+    changed = True
+
+if changed:
+    env_path.write_text("\n".join(updated) + "\n")
+
+print("changed" if changed else "unchanged")
+PY
+}
+
+sync_env_domain_allowlists() {
+    local env_file="$1"
+    local domain="${2:-}"
+    local public_ip="${3:-}"
+    local changed=false
+    local result=""
+    local allowed_hosts=("localhost" "127.0.0.1" "backend" "smsly-hosting-backend-1")
+    local csrf_origins=("http://localhost:8090")
+    local cors_origins=("http://localhost:8090")
+
+    [ -f "$env_file" ] || return 0
+
+    [ -n "$domain" ] || domain="$(env_get_value "$env_file" "DOMAIN")"
+    [ -n "$public_ip" ] || public_ip="$(env_get_value "$env_file" "PUBLIC_IP")"
+
+    if [ -n "$domain" ]; then
+        allowed_hosts+=("$domain")
+        csrf_origins+=("https://${domain}" "http://${domain}")
+        cors_origins+=("https://${domain}" "http://${domain}")
+    fi
+
+    if [ -n "$public_ip" ]; then
+        allowed_hosts+=("$public_ip")
+        csrf_origins+=("http://${public_ip}:8090" "http://${public_ip}")
+        cors_origins+=("http://${public_ip}:8090" "http://${public_ip}")
+    fi
+
+    # Automatically add all node IPs (including WireGuard VPN mesh IPs like 10.100.x.x)
+    local current_ips
+    current_ips="$(hostname -I  | tr -s ' ' '\n' | grep -v '^$' || true)"
+    if [ -n "$current_ips" ]; then
+        for ip in $current_ips; do
+            allowed_hosts+=("$ip")
+            csrf_origins+=("http://${ip}:8090" "http://${ip}" "https://${ip}")
+            cors_origins+=("http://${ip}:8090" "http://${ip}" "https://${ip}")
+        done
+    fi
+
+    result="$(env_append_csv_values "$env_file" "ALLOWED_HOSTS" "${allowed_hosts[@]}")"
+    [ "$result" = "changed" ] && changed=true
+    result="$(env_append_csv_values "$env_file" "CSRF_TRUSTED_ORIGINS" "${csrf_origins[@]}")"
+    [ "$result" = "changed" ] && changed=true
+    result="$(env_append_csv_values "$env_file" "CORS_ALLOWED_ORIGINS" "${cors_origins[@]}")"
+    [ "$result" = "changed" ] && changed=true
+
+    if [ "$changed" = true ]; then
+        echo -e "${GREEN}  ✓ Synced domain allowlists in .env${NC}"
+    fi
+}
+
+env_ensure_var() {
+    local env_file="$1"
+    local var_name="$2"
+    local var_value="$3"
+    local var_comment="${4:-}"
+    local current_val
+    current_val="$(env_get_value "$env_file" "$var_name")"
+
+    if [ -z "$current_val" ]; then
+        echo -e "${BLUE}  -> Setting $var_name in .env${NC}"
+        [ -n "$var_comment" ] && ! grep -q "# $var_comment" "$env_file"  && echo "# $var_comment" >> "$env_file"
+        env_set_value "$env_file" "$var_name" "$var_value"
+        echo -e "${GREEN}  OK $var_name set${NC}"
+    fi
+}
+# --- end lib/env.sh ---
 # --- lib/validation.sh ---
 is_valid_ipv4() {
     local ip="$1"
@@ -20330,7 +22349,13 @@ configure_docker_mirror() {
         local new
         new="$(cat /etc/docker/daemon.json  || echo '')"
         if [ "$prev" != "$new" ]; then
-            systemctl restart docker || true
+            local _smsly_ctrs=0
+            _smsly_ctrs="$(docker ps -q --filter "name=smsly-" 2>/dev/null | wc -l || echo 0)"
+            if [ "${_smsly_ctrs:-0}" -eq 0 ]; then
+                timeout 120 systemctl restart docker || true
+            else
+                echo -e "${YELLOW}  ⚠ Docker daemon config changed but $_smsly_ctrs SMSLY containers are running — deferring restart${NC}"
+            fi
         fi
     fi
 
@@ -20631,13 +22656,29 @@ ensure_infrastructure_permissions() {
     [ -f "$coredns_config_dir/mesh.hosts" ] && chmod 664 "$coredns_config_dir/mesh.hosts" || true
 
     if command -v docker ; then
-        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data|caddy_logs)$')"
+        local _vol_pattern='(^|_)(backups_data|caddy_data|caddy_logs)$'
+        if is_node_mode; then
+            _vol_pattern='(^|_)(backups_data|caddy_data|caddy_logs|caddy_config)$'
+        fi
+        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E "$_vol_pattern" || true)"
         for vol in ${_vol_names:-backups_data}; do
             if docker volume inspect "$vol" >/dev/null 2>&1; then
                 echo -e "${BLUE}     ↳ Setting permissions for volume: $vol...${NC}"
                 timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             else
                 echo -e "${YELLOW}     ⚠ $vol volume not found — skipping chown${NC}"
+            fi
+        done
+        for vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)postgres-archive$' || true); do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
+                echo -e "${BLUE}     ↳ Setting permissions for volume: $vol (70:70)...${NC}"
+                timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 70:70 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
+            fi
+        done
+        for vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)verdaccio_data$' || true); do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
+                echo -e "${BLUE}     ↳ Setting permissions for volume: $vol (10001:65533)...${NC}"
+                timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 10001:65533 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             fi
         done
     fi
@@ -21093,11 +23134,18 @@ refresh_runtime_services() {
         reload_container_caddy  || true
     fi
 
-    if [ "$MODE_AGENT_LITE" != "true" ]; then
+    local _refresh_tier="${STACK_TIER:-}"
+    if [ -z "$_refresh_tier" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        _refresh_tier="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "STACK_TIER" || true)"
+    fi
+    [ -n "$_refresh_tier" ] || _refresh_tier="full"
+    if [ "$MODE_AGENT_LITE" != "true" ] && [ "$_refresh_tier" != "lite" ]; then
         echo -e "${BLUE}  → Refreshing Observability Stack...${NC}"
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
-            docker compose -f infrastructure/docker/docker-compose.observability.yml pull || echo -e "${YELLOW}    ⚠ Observability pull failed${NC}"
-            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d || echo -e "${YELLOW}    ⚠ Observability up failed${NC}"
+            local _obs_env_args=()
+            [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && _obs_env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
+            timeout 300 docker compose "${_obs_env_args[@]}" -f infrastructure/docker/docker-compose.observability.yml pull || echo -e "${YELLOW}    ⚠ Observability pull failed${NC}"
+            timeout 300 docker compose "${_obs_env_args[@]}" -f infrastructure/docker/docker-compose.observability.yml up -d || echo -e "${YELLOW}    ⚠ Observability up failed${NC}"
             for obs_ctr in smsly-loki smsly-promtail smsly-prometheus smsly-cadvisor smsly-node-exporter smsly-grafana; do
                 i=0
                 while [ $i -lt 30 ]; do
@@ -21614,7 +23662,27 @@ ensure_compose_profiles() {
             return 0
         fi
     fi
-    export COMPOSE_PROFILES="local-ha,medium,full"
+    local tier="${STACK_TIER:-}"
+    if [ -z "$tier" ] && [ -f "$env_file" ]; then
+        tier="$(grep -E '^STACK_TIER=' "$env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]')"
+    fi
+    if [ -z "$tier" ]; then
+        local ram_mb=""
+        ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+        [ -n "$ram_mb" ] || ram_mb=8192
+        if [ "$ram_mb" -lt 6144 ]; then
+            tier="lite"
+        elif [ "$ram_mb" -lt 12288 ]; then
+            tier="medium"
+        else
+            tier="full"
+        fi
+    fi
+    case "$tier" in
+        lite)   export COMPOSE_PROFILES="local-ha" ;;
+        medium) export COMPOSE_PROFILES="local-ha,local-ha-replica,redis-ha,medium" ;;
+        *)      export COMPOSE_PROFILES="local-ha,local-ha-replica,redis-ha,medium,full,appsec" ;;
+    esac
 }
 
 acquire_install_lock() {
@@ -21679,7 +23747,7 @@ get_migration_database_alias() {
 
 diagnose_migration_locks() {
     local env_file="${INSTALL_DIR:-.}/.env"
-    [ -f "$env_file" ] && source "$env_file"  || true
+    env_load_file_safe "$env_file"
 
     echo -e "${YELLOW}  -> PostgreSQL activity snapshot (lock diagnosis):${NC}"
     timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
@@ -21823,9 +23891,8 @@ EOF
 reload_container_caddy() {
     should_manage_caddy || return 0
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    if command -v docker  && docker compose -f "$compose_f" ps -q caddy  | grep -q .; then
+    if command -v docker >/dev/null 2>&1 && docker compose -f "$compose_f" ps -q caddy  | grep -q .; then
         timeout -k 5 20 docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile < /dev/null || \
-            timeout -k 5 20 docker compose -f "$compose_f" restart caddy || \
             echo -e "${YELLOW}    ⚠ Caddy reload failed${NC}"
     fi
 }
@@ -22025,15 +24092,128 @@ sync_agent_lite_rabbitmq_password() {
 
 ensure_security_tools() {
     export PATH="/usr/local/bin:$PATH"
-    if ! command -v trivy  && [ ! -x "/usr/local/bin/trivy" ]; then
-        echo -e "${BLUE}  → Installing Trivy vulnerability scanner...${NC}"
-        curl -sfL --connect-timeout 15 --max-time 120 https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin  || true
+    if ! declare -F _harden_log >/dev/null 2>&1; then
+        _harden_log() {
+            local level="$1"; shift
+            case "$level" in
+                ok)   echo -e "${GREEN:-}  ✓ [harden] $*${NC:-}" ;;
+                warn) echo -e "${YELLOW:-}  ⚠ [harden] $*${NC:-}" ;;
+                err)  echo -e "${RED:-}  ✗ [harden] $*${NC:-}" ;;
+                info) echo -e "${BLUE:-}  → [harden] $*${NC:-}" ;;
+            esac
+        }
     fi
-    if ! command -v cosign  && [ ! -x "/usr/local/bin/cosign" ]; then
-        echo -e "${BLUE}  → Installing Cosign image attestation utility...${NC}"
-        local cosign_arch
-        cosign_arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
-        curl -sfL --connect-timeout 15 --max-time 120 -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${cosign_arch}"  && chmod +x /usr/local/bin/cosign || true
+    if ! declare -F _harden_trivy_bootstrap >/dev/null 2>&1; then
+        if [ -f "${_SCRIPT_DIR:-${INSTALL_DIR:-/opt/smsly-hosting}/lib}/harden_trivy.sh" ]; then
+# --- lib/harden_trivy.sh ---
+#!/bin/bash
+
+_harden_trivy_bootstrap() {
+    if command -v trivy ; then
+        return 0  # already installed
+    fi
+
+    _harden_log info "Installing Trivy vulnerability scanner..."
+    local trivy_version="v0.76.2"
+    local arch="" expected_deb_sha="" expected_tgz_sha=""
+    arch="$(uname -m)"
+    case "$arch" in
+        x86_64)
+            arch="64bit"
+            expected_deb_sha="7edaf64c8a2a0ae02137f776c6e56adf285fc36ec76b045274afdc462f20f092"
+            expected_tgz_sha="bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+            ;;
+        aarch64)
+            arch="ARM64"
+            expected_deb_sha="0c576cd78352a2084435d393ea31565a3637cc129dd052c422f1e72fd678ee76"
+            expected_tgz_sha="ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3"
+            ;;
+        *)       _harden_log warn "Trivy — unsupported architecture: $arch"; return 1 ;;
+    esac
+
+    local deb_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.deb"
+    local tmp_deb=""
+    tmp_deb="$(mktemp /tmp/trivy.XXXXXX.deb)"
+
+    # Attempt 1: Direct DEB download with pinned SHA256 verification
+    if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$deb_url" -o "$tmp_deb" ; then
+        if printf '%s  %s\n' "$expected_deb_sha" "$tmp_deb" | sha256sum -c - >/dev/null 2>&1; then
+            if ! dpkg -i "$tmp_deb" ; then
+                apt-get install -f -y  || true
+                dpkg -i "$tmp_deb"  || true
+            fi
+        else
+            _harden_log warn "Trivy DEB checksum mismatch — rejecting unverified artifact"
+        fi
+        rm -f "$tmp_deb"
+    else
+        rm -f "$tmp_deb"
+        _harden_log info "Direct DEB download failed — trying official verified tarball and APT repo..."
+    fi
+
+    # Attempt 2: Direct tar.gz release download with pinned SHA256 verification
+    if ! command -v trivy >/dev/null 2>&1; then
+        local tgz_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.tar.gz"
+        local tmp_tgz="" tmp_dir=""
+        tmp_tgz="$(mktemp /tmp/trivy.XXXXXX.tar.gz)"
+        tmp_dir="$(mktemp -d /tmp/trivy-extract.XXXXXX)"
+        if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$tgz_url" -o "$tmp_tgz"; then
+            if printf '%s  %s\n' "$expected_tgz_sha" "$tmp_tgz" | sha256sum -c - >/dev/null 2>&1; then
+                tar -xzf "$tmp_tgz" -C "$tmp_dir" trivy >/dev/null 2>&1 && \
+                    install -m 0755 "$tmp_dir/trivy" /usr/local/bin/trivy >/dev/null 2>&1 || true
+            else
+                _harden_log warn "Trivy tarball checksum mismatch — rejecting unverified artifact"
+            fi
+        fi
+        rm -rf "$tmp_tgz" "$tmp_dir"
+    fi
+
+    # Attempt 3: Official GPG-signed APT Repository fallback
+    if ! command -v trivy ; then
+        apt-get update -qq  || true
+        if ! apt-get install -y trivy ; then
+            if command -v gpg ; then
+                curl --retry 2 --connect-timeout 10 -fsSL https://aquasecurity.github.io/trivy-repo/deb/public.key  | gpg --dearmor -o /usr/share/keyrings/trivy.gpg  || true
+                echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc  || echo stable) main" > /etc/apt/sources.list.d/trivy.list  || true
+                apt-get update -qq  || true
+                apt-get install -y trivy  || true
+            fi
+        fi
+    fi
+
+    if command -v trivy ; then
+        _harden_log ok "Trivy installed successfully"
+        return 0
+    fi
+    _harden_log warn "Trivy — download and installation fallbacks failed"
+    return 1
+}
+
+_harden_trivy_verify() {
+    if command -v trivy ; then
+        local ver
+        ver="$(trivy --version  | head -1 || true)"
+        _harden_log ok "Trivy available: ${ver}"
+        return 0
+    fi
+    _harden_log warn "Trivy — not installed (image vulnerability scanning unavailable)"
+    return 1
+}
+# --- end lib/harden_trivy.sh ---
+        fi
+    fi
+    if declare -F _harden_trivy_bootstrap >/dev/null 2>&1; then
+        _harden_trivy_bootstrap || true
+    fi
+    if ! declare -F _cosign_ensure_binary >/dev/null 2>&1; then
+        local _cosign_script="${INSTALL_DIR:-/opt/smsly-hosting}/scripts/cosign-verify.sh"
+        [ -f "$_cosign_script" ] || _cosign_script="${_SCRIPT_DIR:-.}/../scripts/cosign-verify.sh"
+        if [ -f "$_cosign_script" ]; then
+            source "$_cosign_script" || true
+        fi
+    fi
+    if declare -F _cosign_ensure_binary >/dev/null 2>&1; then
+        _cosign_ensure_binary || true
     fi
     return 0
 }
@@ -22098,98 +24278,186 @@ _smsly_edge_sidecar_warn() {
     echo -e "${YELLOW:-}  ⚠ edge-sidecar: $*${NC:-}" || echo "  ⚠ edge-sidecar: $*"
 }
 
+_EDGE_SIDECAR_BIN_CHANGED=0
+_EDGE_SIDECAR_ENV_CHANGED=0
+
 # Build the static binary. Prefers a pinned prebuilt artifact when the
 # installer sets SMSLY_EDGE_SIDECAR_URL; otherwise builds with the local
 # Go toolchain (installed best-effort).
 smsly_edge_sidecar_build() {
+    _EDGE_SIDECAR_BIN_CHANGED=0
+    local build_dir="" tmp_bin="" build_log=""
+    build_dir="$(mktemp -d /tmp/smsly-edge-sidecar-build.XXXXXX)"
+    tmp_bin="${build_dir}/smsly-edge-sidecar"
+    build_log="${build_dir}/build.log"
+
     if [ -n "${SMSLY_EDGE_SIDECAR_URL:-}" ] && command -v curl >/dev/null 2>&1; then
-        if curl -fsSL "$SMSLY_EDGE_SIDECAR_URL" -o "$EDGE_SIDECAR_BIN.tmp"; then
-            chmod 0755 "$EDGE_SIDECAR_BIN.tmp" || true
-            mv "$EDGE_SIDECAR_BIN.tmp" "$EDGE_SIDECAR_BIN" || {
-                _smsly_edge_sidecar_warn "could not install prebuilt binary"
-                return 0
-            }
-            _smsly_edge_sidecar_log info "installed prebuilt smsly-edge-sidecar"
+        if timeout 120 curl -fsSL --max-time 90 "$SMSLY_EDGE_SIDECAR_URL" -o "$tmp_bin"; then
+            if [ ! -f "$EDGE_SIDECAR_BIN" ] || ! cmp -s "$tmp_bin" "$EDGE_SIDECAR_BIN"; then
+                chmod 0755 "$tmp_bin" || true
+                mv -f "$tmp_bin" "$EDGE_SIDECAR_BIN" || {
+                    rm -rf "$build_dir"
+                    _smsly_edge_sidecar_warn "could not install prebuilt binary"
+                    return 0
+                }
+                _EDGE_SIDECAR_BIN_CHANGED=1
+                _smsly_edge_sidecar_log info "installed prebuilt smsly-edge-sidecar"
+            else
+                _smsly_edge_sidecar_log info "smsly-edge-sidecar binary unchanged"
+            fi
+            rm -rf "$build_dir"
             return 0
         fi
         _smsly_edge_sidecar_warn "prebuilt download failed, falling back to local build"
     fi
-    if ! command -v go >/dev/null 2>&1; then
-        if command -v apt-get >/dev/null 2>&1; then
-            (apt-get install -y golang-go 2>&1 | tail -2) || true
-        fi
-    fi
-    if ! command -v go >/dev/null 2>&1; then
-        _smsly_edge_sidecar_warn "Go toolchain unavailable — skipping build (edge keeps Django-backed ask/auth)"
-        return 0
-    fi
     if [ ! -f "$EDGE_SIDECAR_SRC_DIR/main.go" ]; then
+        rm -rf "$build_dir"
         _smsly_edge_sidecar_warn "source missing at $EDGE_SIDECAR_SRC_DIR — skipping build"
         return 0
     fi
-    if (cd "$EDGE_SIDECAR_SRC_DIR" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$EDGE_SIDECAR_BIN.tmp" .) 2>&1 | tail -3; then
-        chmod 0755 "$EDGE_SIDECAR_BIN.tmp" || true
-        mv "$EDGE_SIDECAR_BIN.tmp" "$EDGE_SIDECAR_BIN" || {
-            _smsly_edge_sidecar_warn "could not install built binary"
-            return 0
-        }
-        _smsly_edge_sidecar_log info "built and installed smsly-edge-sidecar"
+    local go_bin="" go_ok=0 build_rc=1
+    if command -v go >/dev/null 2>&1; then
+        go_bin="$(command -v go)"
+    elif [ -x "/usr/local/go/bin/go" ]; then
+        go_bin="/usr/local/go/bin/go"
+    fi
+    if [ -n "$go_bin" ]; then
+        local _go_ver="" _go_maj="" _go_min=""
+        _go_ver="$("$go_bin" version 2>/dev/null | sed -n 's/.*go\([0-9]*\)\.\([0-9]*\).*/\1.\2/p' | head -n 1)"
+        _go_maj="${_go_ver%%.*}"
+        _go_min="${_go_ver#*.}"
+        if [ -n "$_go_maj" ] && [ -n "$_go_min" ] && { [ "$_go_maj" -gt 1 ] || { [ "$_go_maj" -eq 1 ] && [ "$_go_min" -ge 22 ]; }; }; then
+            go_ok=1
+        fi
+    fi
+    if [ "$go_ok" -eq 1 ]; then
+        build_rc=0
+        (cd "$EDGE_SIDECAR_SRC_DIR" && timeout 180 env CGO_ENABLED=0 "$go_bin" build -trimpath -ldflags="-s -w" -o "$tmp_bin" .) >"$build_log" 2>&1 || build_rc=$?
+    fi
+    if [ "$build_rc" -ne 0 ] && command -v docker >/dev/null 2>&1 && timeout 10 docker info >/dev/null 2>&1; then
+        local go_image="${EDGE_SIDECAR_GO_IMAGE:-golang:1.22}"
+        _smsly_edge_sidecar_log info "Host Go unavailable or < 1.22; building smsly-edge-sidecar via ${go_image} container..."
+        build_rc=0
+        timeout 300 docker run --rm \
+            -v "${EDGE_SIDECAR_SRC_DIR}:/src:ro" \
+            -v "${build_dir}:/out" \
+            -w /src \
+            -e CGO_ENABLED=0 \
+            "$go_image" \
+            go build -trimpath -ldflags="-s -w" -o "/out/smsly-edge-sidecar" . >"$build_log" 2>&1 || build_rc=$?
+    elif [ "$build_rc" -ne 0 ] && [ "$go_ok" -ne 1 ]; then
+        rm -rf "$build_dir"
+        _smsly_edge_sidecar_warn "Go >= 1.22 toolchain and Docker daemon unavailable — skipping build (edge keeps Django-backed ask/auth)"
+        return 0
+    fi
+    if [ "$build_rc" -eq 0 ] && [ -s "$tmp_bin" ]; then
+        if [ ! -f "$EDGE_SIDECAR_BIN" ] || ! cmp -s "$tmp_bin" "$EDGE_SIDECAR_BIN"; then
+            chmod 0755 "$tmp_bin" || true
+            mv -f "$tmp_bin" "$EDGE_SIDECAR_BIN" || {
+                rm -rf "$build_dir"
+                _smsly_edge_sidecar_warn "could not install built binary"
+                return 0
+            }
+            _EDGE_SIDECAR_BIN_CHANGED=1
+            _smsly_edge_sidecar_log info "built and installed smsly-edge-sidecar"
+        else
+            _smsly_edge_sidecar_log info "smsly-edge-sidecar binary unchanged"
+        fi
     else
+        tail -3 "$build_log" 2>/dev/null || true
         _smsly_edge_sidecar_warn "go build failed — edge keeps Django-backed ask/auth"
     fi
+    rm -rf "$build_dir"
     return 0
 }
 
 # Write /etc/smsly/edge-sidecar.env from .env (secrets never on cmdline).
 smsly_edge_sidecar_write_env() {
+    _EDGE_SIDECAR_ENV_CHANGED=0
     local env_file="${INSTALL_DIR:-/opt/smsly-hosting}/.env"
     local edge_secret="" ask_secret=""
     if [ -f "$env_file" ]; then
         edge_secret="$(grep -E '^EDGE_JWT_SECRET=' "$env_file" | tail -1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//')" || true
         ask_secret="$(grep -E '^CADDY_ASK_SECRET=' "$env_file" | tail -1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//' )" || true
     fi
+    if [ -z "$edge_secret" ]; then
+        edge_secret="$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || openssl rand -hex 64 2>/dev/null || true)"
+        if [ -n "$edge_secret" ] && [ -f "$env_file" ]; then
+            if command -v env_set_value >/dev/null 2>&1; then
+                env_set_value "$env_file" "EDGE_JWT_SECRET" "$edge_secret" || true
+            elif ! grep -q '^EDGE_JWT_SECRET=' "$env_file" 2>/dev/null; then
+                printf 'EDGE_JWT_SECRET=%s\n' "$edge_secret" >> "$env_file" || true
+            fi
+        fi
+    fi
+    if [ -z "$ask_secret" ]; then
+        ask_secret="$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || openssl rand -hex 64 2>/dev/null || true)"
+        if [ -n "$ask_secret" ] && [ -f "$env_file" ]; then
+            if command -v env_set_value >/dev/null 2>&1; then
+                env_set_value "$env_file" "CADDY_ASK_SECRET" "$ask_secret" || true
+            elif ! grep -q '^CADDY_ASK_SECRET=' "$env_file" 2>/dev/null; then
+                printf 'CADDY_ASK_SECRET=%s\n' "$ask_secret" >> "$env_file" || true
+            fi
+        fi
+    fi
     mkdir -p /etc/smsly || true
-    umask 027
-    {
-        echo "# Managed by smsly install — smsly-edge-sidecar env"
-        if [ -n "$edge_secret" ]; then
-            echo "EDGE_JWT_SECRET=$edge_secret"
-        fi
-        if [ -n "$ask_secret" ]; then
-            echo "CADDY_ASK_SECRET=$ask_secret"
-        fi
-    } > "$EDGE_SIDECAR_ENV_FILE.tmp" || {
+    (
+        umask 027
+        {
+            echo "# Managed by smsly install — smsly-edge-sidecar env"
+            if [ -n "$edge_secret" ]; then
+                echo "EDGE_JWT_SECRET=$edge_secret"
+            fi
+            if [ -n "$ask_secret" ]; then
+                echo "CADDY_ASK_SECRET=$ask_secret"
+            fi
+        } > "$EDGE_SIDECAR_ENV_FILE.tmp"
+    ) || {
         _smsly_edge_sidecar_warn "could not write $EDGE_SIDECAR_ENV_FILE"
         return 0
     }
     chmod 0640 "$EDGE_SIDECAR_ENV_FILE.tmp" || true
-    mv "$EDGE_SIDECAR_ENV_FILE.tmp" "$EDGE_SIDECAR_ENV_FILE" || {
-        _smsly_edge_sidecar_warn "could not install $EDGE_SIDECAR_ENV_FILE"
-        return 0
-    }
+    if [ ! -f "$EDGE_SIDECAR_ENV_FILE" ] || ! cmp -s "$EDGE_SIDECAR_ENV_FILE.tmp" "$EDGE_SIDECAR_ENV_FILE"; then
+        mv -f "$EDGE_SIDECAR_ENV_FILE.tmp" "$EDGE_SIDECAR_ENV_FILE" || {
+            rm -f "$EDGE_SIDECAR_ENV_FILE.tmp" || true
+            _smsly_edge_sidecar_warn "could not install $EDGE_SIDECAR_ENV_FILE"
+            return 0
+        }
+        _EDGE_SIDECAR_ENV_CHANGED=1
+    else
+        rm -f "$EDGE_SIDECAR_ENV_FILE.tmp" || true
+    fi
     return 0
 }
 
 # Install + enable the systemd unit. Never fails the update.
 smsly_edge_sidecar_install() {
+    local _unit_changed=0
     smsly_edge_sidecar_build || true
     smsly_edge_sidecar_write_env || true
     if [ ! -f "$EDGE_SIDECAR_UNIT_SRC" ]; then
         _smsly_edge_sidecar_warn "unit source missing ($EDGE_SIDECAR_UNIT_SRC) — skipping"
         return 0
     fi
-    cp "$EDGE_SIDECAR_UNIT_SRC" "$EDGE_SIDECAR_UNIT_DST" 2>/dev/null || {
-        _smsly_edge_sidecar_warn "could not install systemd unit"
-        return 0
-    }
-    systemctl daemon-reload 2>/dev/null || true
-    systemctl enable smsly-edge-sidecar.service 2>/dev/null || \
+    if [ ! -f "$EDGE_SIDECAR_UNIT_DST" ] || ! cmp -s "$EDGE_SIDECAR_UNIT_SRC" "$EDGE_SIDECAR_UNIT_DST"; then
+        cp "$EDGE_SIDECAR_UNIT_SRC" "$EDGE_SIDECAR_UNIT_DST" 2>/dev/null || {
+            _smsly_edge_sidecar_warn "could not install systemd unit"
+            return 0
+        }
+        _unit_changed=1
+        timeout 30 systemctl daemon-reload 2>/dev/null || true
+    fi
+    timeout 30 systemctl enable smsly-edge-sidecar.service 2>/dev/null || \
         _smsly_edge_sidecar_warn "enable failed (non-fatal)"
     if [ -x "$EDGE_SIDECAR_BIN" ]; then
-        systemctl restart smsly-edge-sidecar.service 2>/dev/null || \
-            systemctl start smsly-edge-sidecar.service 2>/dev/null || \
-            _smsly_edge_sidecar_warn "start failed (non-fatal)"
-        _smsly_edge_sidecar_log info "smsly-edge-sidecar installed and started"
+        if [ "$_EDGE_SIDECAR_BIN_CHANGED" -eq 1 ] || [ "$_EDGE_SIDECAR_ENV_CHANGED" -eq 1 ] || [ "$_unit_changed" -eq 1 ] || ! systemctl is-active --quiet smsly-edge-sidecar.service 2>/dev/null; then
+            timeout 60 systemctl restart smsly-edge-sidecar.service 2>/dev/null || \
+                timeout 60 systemctl start smsly-edge-sidecar.service 2>/dev/null || \
+                _smsly_edge_sidecar_warn "start failed (non-fatal)"
+            _smsly_edge_sidecar_log info "smsly-edge-sidecar installed and started"
+        else
+            _smsly_edge_sidecar_log info "smsly-edge-sidecar unchanged and already running"
+        fi
     else
         _smsly_edge_sidecar_warn "binary missing — unit installed but not started"
     fi
@@ -22228,45 +24496,96 @@ _smsly_napd_warn() {
     echo -e "${YELLOW:-}  ⚠ napd: $*${NC:-}" || echo "  ⚠ napd: $*"
 }
 
+_NAPD_BIN_CHANGED=0
+_NAPD_ENV_CHANGED=0
+
 # Build the static binary. Prefers a pinned prebuilt artifact when the
 # installer sets SMSLY_NAPD_URL; otherwise builds with the local Go
 # toolchain (installed best-effort).
 smsly_napd_build() {
+    _NAPD_BIN_CHANGED=0
+    local build_dir="" tmp_bin="" build_log=""
+    build_dir="$(mktemp -d /tmp/smsly-napd-build.XXXXXX)"
+    tmp_bin="${build_dir}/smsly-napd"
+    build_log="${build_dir}/build.log"
+
     if [ -n "${SMSLY_NAPD_URL:-}" ] && command -v curl >/dev/null 2>&1; then
-        if curl -fsSL "$SMSLY_NAPD_URL" -o "$NAPD_BIN.tmp"; then
-            chmod 0755 "$NAPD_BIN.tmp" || true
-            mv "$NAPD_BIN.tmp" "$NAPD_BIN" || {
-                _smsly_napd_warn "could not install prebuilt binary"
-                return 0
-            }
-            _smsly_napd_log info "installed prebuilt smsly-napd"
+        if timeout 120 curl -fsSL --max-time 90 "$SMSLY_NAPD_URL" -o "$tmp_bin"; then
+            if [ ! -f "$NAPD_BIN" ] || ! cmp -s "$tmp_bin" "$NAPD_BIN"; then
+                chmod 0755 "$tmp_bin" || true
+                mv -f "$tmp_bin" "$NAPD_BIN" || {
+                    rm -rf "$build_dir"
+                    _smsly_napd_warn "could not install prebuilt binary"
+                    return 0
+                }
+                _NAPD_BIN_CHANGED=1
+                _smsly_napd_log info "installed prebuilt smsly-napd"
+            else
+                _smsly_napd_log info "smsly-napd binary unchanged"
+            fi
+            rm -rf "$build_dir"
             return 0
         fi
         _smsly_napd_warn "prebuilt download failed, falling back to local build"
     fi
-    if ! command -v go >/dev/null 2>&1; then
-        if command -v apt-get >/dev/null 2>&1; then
-            (apt-get install -y golang-go 2>&1 | tail -2) || true
-        fi
-    fi
-    if ! command -v go >/dev/null 2>&1; then
-        _smsly_napd_warn "Go toolchain unavailable — skipping build (tier sleep/wake stays manual)"
-        return 0
-    fi
     if [ ! -f "$NAPD_SRC_DIR/main.go" ]; then
+        rm -rf "$build_dir"
         _smsly_napd_warn "source missing at $NAPD_SRC_DIR — skipping build"
         return 0
     fi
-    if (cd "$NAPD_SRC_DIR" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$NAPD_BIN.tmp" .) 2>&1 | tail -3; then
-        chmod 0755 "$NAPD_BIN.tmp" || true
-        mv "$NAPD_BIN.tmp" "$NAPD_BIN" || {
-            _smsly_napd_warn "could not install built binary"
-            return 0
-        }
-        _smsly_napd_log info "built and installed smsly-napd"
+    local go_bin="" go_ok=0 build_rc=1
+    if command -v go >/dev/null 2>&1; then
+        go_bin="$(command -v go)"
+    elif [ -x "/usr/local/go/bin/go" ]; then
+        go_bin="/usr/local/go/bin/go"
+    fi
+    if [ -n "$go_bin" ]; then
+        local _go_ver="" _go_maj="" _go_min=""
+        _go_ver="$("$go_bin" version 2>/dev/null | sed -n 's/.*go\([0-9]*\)\.\([0-9]*\).*/\1.\2/p' | head -n 1)"
+        _go_maj="${_go_ver%%.*}"
+        _go_min="${_go_ver#*.}"
+        if [ -n "$_go_maj" ] && [ -n "$_go_min" ] && { [ "$_go_maj" -gt 1 ] || { [ "$_go_maj" -eq 1 ] && [ "$_go_min" -ge 22 ]; }; }; then
+            go_ok=1
+        fi
+    fi
+    if [ "$go_ok" -eq 1 ]; then
+        build_rc=0
+        (cd "$NAPD_SRC_DIR" && timeout 180 env CGO_ENABLED=0 "$go_bin" build -trimpath -ldflags="-s -w" -o "$tmp_bin" .) >"$build_log" 2>&1 || build_rc=$?
+    fi
+    if [ "$build_rc" -ne 0 ] && command -v docker >/dev/null 2>&1 && timeout 10 docker info >/dev/null 2>&1; then
+        local go_image="${NAPD_GO_IMAGE:-golang:1.22}"
+        _smsly_napd_log info "Host Go unavailable or < 1.22; building smsly-napd via ${go_image} container..."
+        build_rc=0
+        timeout 300 docker run --rm \
+            -v "${NAPD_SRC_DIR}:/src:ro" \
+            -v "${build_dir}:/out" \
+            -w /src \
+            -e CGO_ENABLED=0 \
+            "$go_image" \
+            go build -trimpath -ldflags="-s -w" -o "/out/smsly-napd" . >"$build_log" 2>&1 || build_rc=$?
+    elif [ "$build_rc" -ne 0 ] && [ "$go_ok" -ne 1 ]; then
+        rm -rf "$build_dir"
+        _smsly_napd_warn "Go >= 1.22 toolchain and Docker daemon unavailable — skipping build (tier sleep/wake stays manual)"
+        return 0
+    fi
+    if [ "$build_rc" -eq 0 ] && [ -s "$tmp_bin" ]; then
+        if [ ! -f "$NAPD_BIN" ] || ! cmp -s "$tmp_bin" "$NAPD_BIN"; then
+            chmod 0755 "$tmp_bin" || true
+            mv -f "$tmp_bin" "$NAPD_BIN" || {
+                rm -rf "$build_dir"
+                _smsly_napd_warn "could not install built binary"
+                return 0
+            }
+            _NAPD_BIN_CHANGED=1
+            _smsly_napd_log info "built and installed smsly-napd"
+        else
+            _smsly_napd_log info "smsly-napd binary unchanged"
+        fi
     else
+        tail -3 "$build_log" 2>/dev/null || true
         _smsly_napd_warn "go build failed — tier sleep/wake stays manual"
     fi
+    rm -rf "$build_dir"
     return 0
 }
 
@@ -22275,6 +24594,7 @@ smsly_napd_build() {
 # same value from .env via env_file — no restart needed here because the
 # update flow recreates backend containers after this runs.
 smsly_napd_write_env() {
+    _NAPD_ENV_CHANGED=0
     local env_file="${INSTALL_DIR:-/opt/smsly-hosting}/.env"
     local napd_secret=""
     if [ -f "$env_file" ]; then
@@ -22295,44 +24615,60 @@ smsly_napd_write_env() {
         fi
     fi
     mkdir -p /etc/smsly || true
-    umask 027
-    {
-        echo "# Managed by smsly install — smsly-napd env"
-        if [ -n "$napd_secret" ]; then
-            echo "NAPD_SHARED_SECRET=$napd_secret"
-        fi
-    } > "$NAPD_ENV_FILE.tmp" || {
+    (
+        umask 027
+        {
+            echo "# Managed by smsly install — smsly-napd env"
+            if [ -n "$napd_secret" ]; then
+                echo "NAPD_SHARED_SECRET=$napd_secret"
+            fi
+        } > "$NAPD_ENV_FILE.tmp"
+    ) || {
         _smsly_napd_warn "could not write $NAPD_ENV_FILE"
         return 0
     }
     chmod 0640 "$NAPD_ENV_FILE.tmp" || true
-    mv "$NAPD_ENV_FILE.tmp" "$NAPD_ENV_FILE" || {
-        _smsly_napd_warn "could not install $NAPD_ENV_FILE"
-        return 0
-    }
+    if [ ! -f "$NAPD_ENV_FILE" ] || ! cmp -s "$NAPD_ENV_FILE.tmp" "$NAPD_ENV_FILE"; then
+        mv -f "$NAPD_ENV_FILE.tmp" "$NAPD_ENV_FILE" || {
+            rm -f "$NAPD_ENV_FILE.tmp" || true
+            _smsly_napd_warn "could not install $NAPD_ENV_FILE"
+            return 0
+        }
+        _NAPD_ENV_CHANGED=1
+    else
+        rm -f "$NAPD_ENV_FILE.tmp" || true
+    fi
     return 0
 }
 
 # Install + enable the systemd unit. Never fails the update.
 smsly_napd_install() {
+    local _unit_changed=0
     smsly_napd_build || true
     smsly_napd_write_env || true
     if [ ! -f "$NAPD_UNIT_SRC" ]; then
         _smsly_napd_warn "unit source missing ($NAPD_UNIT_SRC) — skipping"
         return 0
     fi
-    cp "$NAPD_UNIT_SRC" "$NAPD_UNIT_DST" 2>/dev/null || {
-        _smsly_napd_warn "could not install systemd unit"
-        return 0
-    }
-    systemctl daemon-reload 2>/dev/null || true
-    systemctl enable smsly-napd.service 2>/dev/null || \
+    if [ ! -f "$NAPD_UNIT_DST" ] || ! cmp -s "$NAPD_UNIT_SRC" "$NAPD_UNIT_DST"; then
+        cp "$NAPD_UNIT_SRC" "$NAPD_UNIT_DST" 2>/dev/null || {
+            _smsly_napd_warn "could not install systemd unit"
+            return 0
+        }
+        _unit_changed=1
+        timeout 30 systemctl daemon-reload 2>/dev/null || true
+    fi
+    timeout 30 systemctl enable smsly-napd.service 2>/dev/null || \
         _smsly_napd_warn "enable failed (non-fatal)"
     if [ -x "$NAPD_BIN" ]; then
-        systemctl restart smsly-napd.service 2>/dev/null || \
-            systemctl start smsly-napd.service 2>/dev/null || \
-            _smsly_napd_warn "start failed (non-fatal)"
-        _smsly_napd_log info "smsly-napd installed and started"
+        if [ "$_NAPD_BIN_CHANGED" -eq 1 ] || [ "$_NAPD_ENV_CHANGED" -eq 1 ] || [ "$_unit_changed" -eq 1 ] || ! systemctl is-active --quiet smsly-napd.service 2>/dev/null; then
+            timeout 60 systemctl restart smsly-napd.service 2>/dev/null || \
+                timeout 60 systemctl start smsly-napd.service 2>/dev/null || \
+                _smsly_napd_warn "start failed (non-fatal)"
+            _smsly_napd_log info "smsly-napd installed and started"
+        else
+            _smsly_napd_log info "smsly-napd unchanged and already running"
+        fi
     else
         _smsly_napd_warn "binary missing — unit installed but not started"
     fi
@@ -22373,8 +24709,8 @@ smsly_cryptd_install() {
         go_bin="/usr/local/go/bin/go"
     fi
 
-    mkdir -p "$env_dir" /var/lib/smsly/keystore /var/lib/smsly/encrypted-volumes
-    chmod 0700 /var/lib/smsly/keystore /var/lib/smsly/encrypted-volumes 2>/dev/null || true
+    mkdir -p "$env_dir" /var/lib/smsly/keystore /var/lib/smsly/encrypted-volumes /var/lib/smsly/volume-keys
+    chmod 0700 /var/lib/smsly/keystore /var/lib/smsly/encrypted-volumes /var/lib/smsly/volume-keys 2>/dev/null || true
 
     # Build static binary atomically; replace only when bytes actually change (AGENTS.md #4).
     local build_dir=""
@@ -22386,9 +24722,10 @@ smsly_cryptd_install() {
         if (cd "$src_dir" && timeout 180 env CGO_ENABLED=0 "$go_bin" build -trimpath -ldflags="-s -w" -o "$tmp_bin" ./cmd/grid-cryptd); then
             build_ok=1
         fi
-    elif command -v docker >/dev/null 2>&1 && timeout 10 docker info >/dev/null 2>&1; then
+    fi
+    if [ "$build_ok" -ne 1 ] && command -v docker >/dev/null 2>&1 && timeout 10 docker info >/dev/null 2>&1; then
         local go_image="${CRYPTD_GO_IMAGE:-golang:1.22}"
-        echo "[cryptd] Host Go not found; building grid-cryptd via ${go_image} container..."
+        echo "[cryptd] Host Go unavailable or build failed; building grid-cryptd via ${go_image} container..."
         if timeout 300 docker run --rm \
             -v "${src_dir}:/src:ro" \
             -v "${build_dir}:/out" \
@@ -22398,7 +24735,7 @@ smsly_cryptd_install() {
             go build -trimpath -ldflags="-s -w" -o "/out/grid-cryptd" ./cmd/grid-cryptd; then
             build_ok=1
         fi
-    else
+    elif [ "$build_ok" -ne 1 ] && [ -z "$go_bin" ]; then
         rm -rf "$build_dir"
         echo "[cryptd] Neither Go toolchain nor Docker daemon available; skipping grid-cryptd build." >&2
         return 0
@@ -22423,10 +24760,10 @@ smsly_cryptd_install() {
     local root_env="$install_dir/.env"
     local shared_sec="${CRYPTD_SHARED_SECRET:-}"
     if [ -z "$shared_sec" ] && [ -f "$root_env" ]; then
-        shared_sec="$(grep -E '^CRYPTD_SHARED_SECRET=' "$root_env" | tail -n 1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//' || true)"
+        shared_sec="$(grep -E '^CRYPTD_SHARED_SECRET=' "$root_env" | tail -n 1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^["'\'']//' -e 's/["'\'']$//' || true)"
     fi
     if [ -z "$shared_sec" ] && [ -f "$env_file" ]; then
-        shared_sec="$(grep -E '^CRYPTD_SHARED_SECRET=' "$env_file" | tail -n 1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//' || true)"
+        shared_sec="$(grep -E '^CRYPTD_SHARED_SECRET=' "$env_file" | tail -n 1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^["'\'']//' -e 's/["'\'']$//' || true)"
     fi
     if [ -z "$shared_sec" ]; then
         if command -v openssl >/dev/null 2>&1; then
@@ -22439,17 +24776,35 @@ smsly_cryptd_install() {
         printf '\nCRYPTD_SHARED_SECRET=%s\n' "$shared_sec" >> "$root_env" || true
     fi
 
-    # Seed /etc/smsly/cryptd.env once if missing.
+    # Seed /etc/smsly/cryptd.env once if missing, then idempotently reconcile
+    # CRYPTD_ENABLED, CRYPTD_SHARED_SECRET, CRYPTD_VAULT_PROVIDER, and
+    # CRYPTD_VAULT_ENDPOINT from .env into /etc/smsly/cryptd.env.
     # Bind 0.0.0.0:9105 so Docker containers (backend/celery) reach host systemd via host.docker.internal
     # (port stays host-local / blocked in UFW; every endpoint except /health requires X-Cryptd-Secret).
+    local env_changed=0
+    local _desired_enabled="${CRYPTD_ENABLED:-}"
+    local _desired_provider="${CRYPTD_VAULT_PROVIDER:-}"
+    local _desired_endpoint="${CRYPTD_VAULT_ENDPOINT:-}"
+    if [ -f "$root_env" ]; then
+        if [ -z "$_desired_enabled" ]; then
+            _desired_enabled="$(grep -E '^CRYPTD_ENABLED=' "$root_env" | tail -n 1 | cut -d= -f2- | tr -d "\r\"'" | tr '[:upper:]' '[:lower:]' || true)"
+        fi
+        if [ -z "$_desired_provider" ]; then
+            _desired_provider="$(grep -E '^CRYPTD_VAULT_PROVIDER=' "$root_env" | tail -n 1 | cut -d= -f2- | tr -d "\r\"'" || true)"
+        fi
+        if [ -z "$_desired_endpoint" ]; then
+            _desired_endpoint="$(grep -E '^CRYPTD_VAULT_ENDPOINT=' "$root_env" | tail -n 1 | cut -d= -f2- | tr -d "\r\"'" || true)"
+        fi
+    fi
+
     if [ ! -f "$env_file" ]; then
         {
             echo "# Trulay Grid Cryptographic Controller (opt-in: set CRYPTD_ENABLED=true and configure external vault)"
-            echo "CRYPTD_ENABLED=${CRYPTD_ENABLED:-false}"
+            echo "CRYPTD_ENABLED=${_desired_enabled:-false}"
             echo "CRYPTD_LISTEN_ADDR=0.0.0.0:9105"
             echo "CRYPTD_SHARED_SECRET=$shared_sec"
-            echo "CRYPTD_VAULT_PROVIDER=${CRYPTD_VAULT_PROVIDER:-http_vault}"
-            echo "CRYPTD_VAULT_ENDPOINT=${CRYPTD_VAULT_ENDPOINT:-}"
+            echo "CRYPTD_VAULT_PROVIDER=${_desired_provider:-http_vault}"
+            echo "CRYPTD_VAULT_ENDPOINT=${_desired_endpoint:-}"
             echo "CRYPTD_EPOCH_DURATION=168h"
             echo "CRYPTD_GRACE_DURATION=24h"
             echo "CRYPTD_KEYSTORE_DIR=/var/lib/smsly/keystore"
@@ -22462,6 +24817,51 @@ smsly_cryptd_install() {
             echo "# CRYPTD_REDIS_UPSTREAM=127.0.0.1:6379"
         } > "$env_file"
         chmod 0600 "$env_file"
+        env_changed=1
+    else
+        local _reconcile_tmp="${env_file}.tmp.$$"
+        cp "$env_file" "$_reconcile_tmp"
+        python3 - "$_reconcile_tmp" "${_desired_enabled}" "${shared_sec}" "${_desired_provider}" "${_desired_endpoint}" <<'PY'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+updates = {}
+if sys.argv[2]:
+    updates["CRYPTD_ENABLED"] = sys.argv[2].lower()
+if sys.argv[3]:
+    updates["CRYPTD_SHARED_SECRET"] = sys.argv[3]
+if sys.argv[4]:
+    updates["CRYPTD_VAULT_PROVIDER"] = sys.argv[4]
+if sys.argv[5]:
+    updates["CRYPTD_VAULT_ENDPOINT"] = sys.argv[5]
+
+lines = p.read_text().splitlines()
+seen = set()
+out = []
+for line in lines:
+    matched = False
+    for k, v in updates.items():
+        if line.startswith(f"{k}="):
+            if k not in seen:
+                out.append(f"{k}={v}")
+                seen.add(k)
+            matched = True
+            break
+    if not matched:
+        out.append(line)
+for k, v in updates.items():
+    if k not in seen:
+        out.append(f"{k}={v}")
+p.write_text("\n".join(out) + "\n")
+PY
+        chmod 0600 "$_reconcile_tmp"
+        if ! cmp -s "$_reconcile_tmp" "$env_file"; then
+            mv -f "$_reconcile_tmp" "$env_file"
+            env_changed=1
+        else
+            rm -f "$_reconcile_tmp"
+        fi
     fi
 
     local unit_changed=0
@@ -22471,8 +24871,12 @@ smsly_cryptd_install() {
             unit_changed=1
         fi
     fi
+    local vault_systemd_dst="/etc/systemd/system/smsly-root-vault.service"
     if [ -f "$vault_unit_src" ]; then
-        cp "$vault_unit_src" /etc/systemd/system/smsly-root-vault.service 2>/dev/null || true
+        if [ ! -f "$vault_systemd_dst" ] || ! cmp -s "$vault_unit_src" "$vault_systemd_dst"; then
+            cp "$vault_unit_src" "$vault_systemd_dst" 2>/dev/null || true
+            unit_changed=1
+        fi
     fi
 
     if command -v systemctl >/dev/null 2>&1; then
@@ -22483,14 +24887,14 @@ smsly_cryptd_install() {
         # Opt-in guard (user chooses to enable CRYPTD_ENABLED=true or not).
         local enabled_flag="false"
         if [ -f "$env_file" ]; then
-            enabled_flag="$(grep -E '^CRYPTD_ENABLED=' "$env_file" | tail -n 1 | cut -d= -f2- | tr -d '"' | tr '[:upper:]' '[:lower:]' || echo false)"
+            enabled_flag="$(grep -E '^CRYPTD_ENABLED=' "$env_file" | tail -n 1 | cut -d= -f2- | tr -d "\r\"'" | tr '[:upper:]' '[:lower:]' || echo false)"
         fi
         if [ "${CRYPTD_ENABLED:-$enabled_flag}" = "true" ]; then
             if [ -f "$root_env" ] && ! grep -qE '^SMSLY_CRYPTD_URL=' "$root_env"; then
                 printf 'SMSLY_CRYPTD_URL=http://host.docker.internal:9105\n' >> "$root_env" || true
             fi
             timeout 30 systemctl enable smsly-cryptd >/dev/null 2>&1 || true
-            if [ "$bin_changed" -eq 1 ] || [ "$unit_changed" -eq 1 ] || ! systemctl is-active --quiet smsly-cryptd; then
+            if [ "$bin_changed" -eq 1 ] || [ "$unit_changed" -eq 1 ] || [ "$env_changed" -eq 1 ] || ! systemctl is-active --quiet smsly-cryptd; then
                 timeout 60 systemctl restart smsly-cryptd || echo "[cryptd] WARN: smsly-cryptd failed to start (check external vault config)" >&2
             fi
         fi
@@ -22824,23 +25228,275 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
     # ─── Re-apply OOM protection (scores reset when containers restart) ──────
     echo -e "${BLUE}  → Re-applying OOM protection for critical containers...${NC}"
-    oom_containers="smsly-hosting-backend-1 $(get_db_service | sed 's|^|smsly-hosting-|' || echo smsly-hosting-postgres-primary) smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1"
-    if [ "$MODE_AGENT_LITE" = "true" ]; then
-        oom_containers="smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1"
+    if [ "${MODE_AGENT_LITE:-false}" = "true" ]; then
+        oom_containers="smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-redis-1 smsly-hosting-rabbitmq-1 smsly-hosting-traefik-1 smsly-hosting-socket-proxy-1"
+    elif command -v is_node_mode >/dev/null 2>&1 && is_node_mode; then
+        oom_containers="smsly-postgres-primary smsly-hosting-redis-1 smsly-hosting-rabbitmq-1 smsly-hosting-caddy-1 smsly-hosting-traefik-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1"
+    else
+        oom_containers="smsly-postgres-primary smsly-patroni-1 smsly-haproxy smsly-redis-primary smsly-hosting-rabbitmq-1 smsly-hosting-caddy-1 smsly-hosting-traefik-1 smsly-hosting-backend-1 smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1"
     fi
     for CONTAINER in $oom_containers; do
-        resolved_container="$(resolve_container_target "$CONTAINER")"
-        CPID=$(docker inspect --format '{{.State.Pid}}' "$resolved_container"  || echo "")
+        resolved_container="$(resolve_container_target "$CONTAINER" 2>/dev/null || true)"
+        [ -n "$resolved_container" ] || continue
+        CPID=$(docker inspect --format '{{.State.Pid}}' "$resolved_container" 2>/dev/null || echo "")
         if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
-            echo -500 > "/proc/$CPID/oom_score_adj"  || true
+            echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
         fi
     done
-    echo -e "${GREEN}  ✓ OOM protection set (core, database, celery, proxy)${NC}"
+    echo -e "${GREEN}  ✓ OOM protection set (core, database, cache, broker, proxy)${NC}"
+
+    # ─── Egress mirror refresh (Alpine CDN rewrite + SSRF guard) ─────────
+    if [ -f "$INSTALL_DIR/lib/egress_mirror.sh" ]; then
+        # shellcheck disable=SC1090
+# --- lib/egress_mirror.sh ---
+#!/usr/bin/env bash
+# Egress mirror for CDN-blocked networks (dl-cdn.alpinelinux.org).
+#
+# Installs a host-local nginx that rewrites dl-cdn requests to working
+# vendor mirrors, and steers port-80 TCP to it via REDIRECT.
+#
+# Why REDIRECT-all instead of matching dl-cdn only: netfilter NAT
+# decisions happen on the SYN (no HTTP payload yet), so Host-based
+# matching cannot steer — only the proxy itself can route by Host.
+# The PREROUTING steer is scoped to the default docker bridge subnet:
+# REDIRECT maps to the incoming interface address and the shim listens
+# only on 127.0.0.1 + the docker0 gateway, so steering any OTHER bridge
+# blackholes its :80 (nothing listens on its gateway; 2026-09-29: node
+# smsly-net containers could not reach mesh :80). App builds run on
+# docker0, so nothing is lost; every other bridge now routes directly.
+# Host-local OUTPUT still takes the local hop, EXCEPT destinations on
+# local/docker/mesh ranges (see _egress_local_return_cidrs below): the
+# transparent proxy resolves the Host header, so traffic aimed at a
+# container IP with an unresolvable Host (published :80 ports via
+# docker-proxy, host diagnostics, Caddy/traefik upstreams) 502s instead
+# of passing through. Those destinations bypass the shim (direct);
+# real internet egress still steers. HTTPS is untouched, and
+# nginx is monitored like any platform service. This is the standard
+# transparent-proxy pattern, not a hack.
+#
+# Idempotent: safe to run on every install/update/resume and at boot.
+# Best-effort: never aborts the caller (returns 0); build failures still
+# surface at the real `apk` step with the vendor error intact.
+
+SMSLY_EGRESS_MIRROR_PORT="${SMSLY_EGRESS_MIRROR_PORT:-8888}"
+
+_egress_log() {
+    echo -e "${BLUE:-}  → [egress-mirror] $*${NC:-}" 2>/dev/null || echo "  → [egress-mirror] $*"
+}
+
+_egress_warn() {
+    echo -e "${YELLOW:-}  ⚠ [egress-mirror] $*${NC:-}" 2>/dev/null || echo "  ⚠ [egress-mirror] $*"
+}
+
+_docker0_gateway() {
+    # Gateway of the default docker bridge (build containers reach the
+    # host through it). Falls back to the conventional default.
+    local gw=""
+    gw="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
+    if [ -z "$gw" ]; then
+        gw="172.17.0.1"
+    fi
+    printf '%s' "$gw"
+}
+
+ensure_egress_mirror() {
+    command -v docker >/dev/null 2>&1 || return 0
+    command -v iptables >/dev/null 2>&1 || { _egress_warn "iptables missing — skipping"; return 0; }
+    local install_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
+    local conf_src="$install_dir/infrastructure/egress-mirror/nginx.conf"
+    [ -f "$conf_src" ] || { _egress_warn "config missing at $conf_src — skipping"; return 0; }
+
+    # 1. nginx on the host (Ubuntu archive; unrelated to the blocked CDNs).
+    if ! command -v nginx >/dev/null 2>&1; then
+        _egress_log "installing nginx for the egress mirror..."
+        if ! timeout 300 apt-get update -qq >/dev/null 2>&1 || ! timeout 600 apt-get install -y -qq nginx >/dev/null 2>&1; then
+            _egress_warn "nginx install failed — app builds needing dl-cdn may fail"
+            return 0
+        fi
+    fi
+    mkdir -p /etc/nginx/smsly 2>/dev/null || true
+    # Render the template: gateway for container builds, public IP because
+    # REDIRECT preserves the original (public) source address on host-local
+    # connections, which must pass the allow rules.
+    _egress_gw="$(_docker0_gateway)"
+    _egress_pub="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "src") print $(i+1)}' | head -n 1)"
+    [ -n "$_egress_pub" ] || _egress_pub="127.0.0.1"
+    sed -e "s|__GATEWAY_IP__|${_egress_gw}|g" -e "s|__HOST_PUBLIC_IP__|${_egress_pub}|g" \
+        "$conf_src" > /etc/nginx/smsly/egress-mirror.conf 2>/dev/null || {
+        _egress_warn "cannot write nginx config — skipping"
+        return 0
+    }
+    # Include from the main context (once): nginx.conf ends with
+    # `include /etc/nginx/conf.d/*.conf;` on stock Ubuntu — our file
+    # must be reachable from there.
+    if [ ! -e /etc/nginx/conf.d/smsly-egress-mirror.conf ]; then
+        ln -sf /etc/nginx/smsly/egress-mirror.conf /etc/nginx/conf.d/smsly-egress-mirror.conf 2>/dev/null || true
+    fi
+    # Ubuntu ships a default site on :80 that collides with the edge
+    # proxy (docker-proxy/Caddy own port 80) and takes nginx down
+    # entirely — including our 8888 listeners. This box never serves
+    # HTTP from host nginx; drop the default site.
+    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+    # FD ceiling: hung upstream connects (dead CDN IPs) pile concurrent
+    # connections until the stock 1024 nofile turns EVERYTHING into 500s
+    # (observed live). Systemd drop-in + daemon-reload; takes effect on
+    # the (re)start below.
+    _nofile_override="/etc/systemd/system/nginx.service.d/smsly-egress-mirror.conf"
+    _nofile_want="$(printf '[Service]\nLimitNOFILE=32768\n')"
+    _nofile_dirty=""
+    mkdir -p "$(dirname "$_nofile_override")" 2>/dev/null || true
+    if [ ! -f "$_nofile_override" ] || [ "$(cat "$_nofile_override" 2>/dev/null)" != "$_nofile_want" ]; then
+        printf '%s\n' "$_nofile_want" > "$_nofile_override" 2>/dev/null || true
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        _nofile_dirty=1
+    fi
+    if ! nginx -t >/dev/null 2>&1; then
+        _egress_warn "nginx config test failed — leaving existing state"
+        return 0
+    fi
+
+    # 2. nginx must serve the gateway + loopback BEFORE traffic is steered.
+    # Always reload: the rendered config changes across runs (template
+    # placeholders, mirror list) while the daemon keeps old config.
+    local gw=""
+    gw="$(_docker0_gateway)"
+    # Bind explicitly (never 0.0.0.0: no public exposure by accident).
+    # Restart (not reload) when the FD override changed — rlimits apply
+    # at process start only.
+    if [ -n "${_nofile_dirty:-}" ] || ! ss -ltn 2>/dev/null | grep -qE "127\.0\.0\.1:${SMSLY_EGRESS_MIRROR_PORT} |${gw//./\\.}:${SMSLY_EGRESS_MIRROR_PORT} "; then
+        _egress_log "starting nginx..."
+        systemctl enable nginx >/dev/null 2>&1 || true
+        systemctl restart nginx >/dev/null 2>&1 || systemctl start nginx >/dev/null 2>&1 || true
+        sleep 2
+    else
+        systemctl reload nginx >/dev/null 2>&1 || systemctl restart nginx >/dev/null 2>&1 || true
+        sleep 1
+    fi
+    if ! ss -ltn 2>/dev/null | grep -q ":${SMSLY_EGRESS_MIRROR_PORT} "; then
+        _egress_warn "nginx not listening on ${SMSLY_EGRESS_MIRROR_PORT} after start (see nginx -t / journalctl -u nginx)"
+    fi
+
+    # 3. Steer port-80 TCP from the default docker bridge to the shim
+    # (PREROUTING covers build containers, OUTPUT covers host-local
+    # processes). REDIRECT keeps it local.
+    #
+    # LOOP-BREAKER (observed live, full platform outage class): the OUTPUT
+    # rule also catches nginx's OWN upstream connections (it proxies TO
+    # port 80). Without an exemption each shimmed request re-enters the
+    # shim recursively until worker_connections/FDs exhaust and EVERYTHING
+    # 500s. nginx workers run as the `user` from nginx.conf (www-data on
+    # Ubuntu) — their port-80 traffic must leave the host directly.
+    _nginx_user="$(grep -E '^[[:space:]]*user[[:space:]]' /etc/nginx/nginx.conf 2>/dev/null | awk '{print $2}' | tr -d ';' | head -n 1)"
+    [ -n "$_nginx_user" ] || _nginx_user="www-data"
+    if ! iptables -t nat -C OUTPUT -p tcp --dport 80 -m owner --uid-owner "$_nginx_user" -j RETURN >/dev/null 2>&1; then
+        iptables -t nat -I OUTPUT 1 -p tcp --dport 80 -m owner --uid-owner "$_nginx_user" -j RETURN 2>/dev/null || \
+            _egress_warn "nginx OUTPUT exemption failed — shim will loop on itself"
+    fi
+    # Scoped to the docker0 subnet: the shim binds 127.0.0.1 + the docker0
+    # gateway only, and REDIRECT targets the incoming interface address —
+    # an unscoped steer sends every other bridge's :80 to a gateway where
+    # nothing listens (UFW DROPs it: silent blackhole). Builds run on
+    # docker0, so scoping loses nothing.
+    _docker_steer_src="$(_docker0_gateway | cut -d. -f1-2).0.0/16"
+    # Exclude link-local metadata, loopback, CGNAT, and RFC1918 destinations from the
+    # PREROUTING steer so container-to-container / metadata / mesh HTTP is never hijacked.
+    local _bypass_cidrs="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10"
+    for _cidr in $_bypass_cidrs; do
+        if ! iptables -t nat -C PREROUTING -s "$_docker_steer_src" -d "$_cidr" -p tcp --dport 80 -j RETURN >/dev/null 2>&1; then
+            iptables -t nat -I PREROUTING 1 -s "$_docker_steer_src" -d "$_cidr" -p tcp --dport 80 -j RETURN 2>/dev/null || \
+                _egress_warn "PREROUTING local bypass failed for $_cidr"
+        fi
+    done
+    if ! iptables -t nat -C PREROUTING -s "$_docker_steer_src" ! -d 169.254.0.0/16 -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
+        iptables -t nat -A PREROUTING -s "$_docker_steer_src" ! -d 169.254.0.0/16 -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || \
+            _egress_warn "PREROUTING rule install failed"
+    fi
+    # Converge: remove legacy PREROUTING steers without the 169.254.0.0/16 exclusion.
+    if iptables -t nat -C PREROUTING -s "$_docker_steer_src" -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
+        iptables -t nat -D PREROUTING -s "$_docker_steer_src" -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || true
+    fi
+    # Converge: remove the legacy unscoped steer if present (it hijacked
+    # :80 from EVERY bridge, including mesh and project networks).
+    if iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
+        iptables -t nat -D PREROUTING -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || true
+    fi
+    if ! iptables -t nat -C OUTPUT -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
+        iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || \
+            _egress_warn "OUTPUT rule install failed"
+    fi
+    # Converge: local/docker/mesh destinations must bypass the shim.
+    # The transparent default server proxies by Host header, so any
+    # :80 connection aimed at a container/bridge/mesh IP whose Host
+    # does not publicly resolve there (every docker-proxy upstream for
+    # published :80 ports, host-to-container diagnostics, Caddy ->
+    # traefik:80 wake path probes from the host) 502s instead of
+    # passing through (2026-10-05: node :8081 always nginx-502 while
+    # container-path traffic was fine). RETURNs are inserted ahead of
+    # the REDIRECT above; internet egress still steers.
+    for _cidr in $_bypass_cidrs; do
+        if ! iptables -t nat -C OUTPUT -d "$_cidr" -p tcp --dport 80 -j RETURN >/dev/null 2>&1; then
+            iptables -t nat -I OUTPUT 2 -d "$_cidr" -p tcp --dport 80 -j RETURN 2>/dev/null || \
+                _egress_warn "OUTPUT local bypass failed for $_cidr"
+        fi
+    done
+
+    # Kernel-level SSRF defense: block nginx ($_nginx_user) from reaching
+    # loopback, RFC1918, link-local/metadata, CGNAT, or 0.0.0.0/8 destinations
+    # even via DNS rebinding. Permit UDP/TCP :53 to local systemd-resolved
+    # (127.0.0.53) first so dl-cdn DNS resolution keeps working.
+    # Insert at top of OUTPUT (ahead of UFW chains) so UFW's broad OUTPUT
+    # rules never short-circuit past the SSRF DROPs.
+    if ! iptables -C OUTPUT -m owner --uid-owner "$_nginx_user" -d 127.0.0.53/32 -p udp --dport 53 -j ACCEPT >/dev/null 2>&1; then
+        iptables -I OUTPUT 1 -m owner --uid-owner "$_nginx_user" -d 127.0.0.53/32 -p udp --dport 53 -j ACCEPT 2>/dev/null || true
+    fi
+    if ! iptables -C OUTPUT -m owner --uid-owner "$_nginx_user" -d 127.0.0.53/32 -p tcp --dport 53 -j ACCEPT >/dev/null 2>&1; then
+        iptables -I OUTPUT 2 -m owner --uid-owner "$_nginx_user" -d 127.0.0.53/32 -p tcp --dport 53 -j ACCEPT 2>/dev/null || true
+    fi
+    for _ssrf_cidr in 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 0.0.0.0/8; do
+        if ! iptables -C OUTPUT -m owner --uid-owner "$_nginx_user" -d "$_ssrf_cidr" -j DROP >/dev/null 2>&1; then
+            iptables -I OUTPUT 3 -m owner --uid-owner "$_nginx_user" -d "$_ssrf_cidr" -j DROP 2>/dev/null || \
+                _egress_warn "OUTPUT SSRF filter drop failed for $_ssrf_cidr"
+        fi
+    done
+    if command -v ip6tables >/dev/null 2>&1; then
+        for _ssrf_v6 in ::1/128 fc00::/7 fe80::/10; do
+            if ! ip6tables -C OUTPUT -m owner --uid-owner "$_nginx_user" -d "$_ssrf_v6" -j DROP >/dev/null 2>&1; then
+                ip6tables -I OUTPUT 1 -m owner --uid-owner "$_nginx_user" -d "$_ssrf_v6" -j DROP 2>/dev/null || true
+            fi
+        done
+    fi
+
+    # 4. End-to-end proof through the shim (host path). A container-path
+    # proof runs separately before unblocking app builds.
+    if timeout 25 curl -s -o /dev/null -w '%{http_code}' \
+            http://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/APKINDEX.tar.gz 2>/dev/null | grep -q "^200$"; then
+        _egress_log "egress mirror serving dl-cdn (200 OK)"
+    else
+        _egress_warn "shim probe failed — app builds may still fail on dl-cdn"
+    fi
+    return 0
+}
+# --- end lib/egress_mirror.sh ---
+        if command -v ensure_egress_mirror >/dev/null 2>&1; then
+            ensure_egress_mirror || true
+        fi
+    fi
+    if [ -f "$INSTALL_DIR/scripts/setup-egress-mirror.sh" ]; then
+        chmod +x "$INSTALL_DIR/scripts/setup-egress-mirror.sh" || true
+        cp "$INSTALL_DIR/scripts/smsly-egress-mirror.service" /etc/systemd/system/smsly-egress-mirror.service 2>/dev/null || true
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl enable smsly-egress-mirror.service 2>/dev/null || true
+    fi
 
     # ─── Ensure iptables-restore systemd service exists ─────────────────────
     if command -v iptables-save ; then
         mkdir -p /etc/iptables
-        iptables-save > /etc/iptables/rules.v4  || true
+        # Strip transient egress-mirror :8888 NAT REDIRECT rules before persisting
+        # so boot-time iptables-restore does not blackhole :80 before nginx starts;
+        # smsly-egress-mirror.service re-installs them after nginx.service is up.
+        local _egress_port="${SMSLY_EGRESS_MIRROR_PORT:-8888}"
+        iptables-save | grep -vE "REDIRECT[[:space:]].*--to-ports?[[:space:]]+${_egress_port}([[:space:]]|\$)" > /etc/iptables/rules.v4 || true
+        unset _egress_port
         if [ ! -f /etc/systemd/system/iptables-restore.service ]; then
             echo -e "${BLUE}  → Installing iptables-restore systemd service...${NC}"
             cat > /etc/systemd/system/iptables-restore.service <<'RESTORE_EOF'
@@ -22871,8 +25527,8 @@ RESTORE_EOF
         cp "$INSTALL_DIR/scripts/caddy-watcher.service" /etc/systemd/system/caddy-watcher.service  || true
         systemctl daemon-reload || echo -e "${YELLOW}    ⚠ systemctl daemon-reload failed (non-fatal)${NC}"
         systemctl enable smsly-update-watcher caddy-watcher || echo -e "${YELLOW}    ⚠ systemctl enable watchers failed (non-fatal)${NC}"
-        systemctl restart smsly-update-watcher caddy-watcher || echo -e "${YELLOW}    ⚠ systemctl restart watchers failed (non-fatal)${NC}"
-        echo -e "${GREEN}  ✓ smsly-update-watcher and caddy-watcher services updated and started${NC}"
+        systemctl restart caddy-watcher || echo -e "${YELLOW}    ⚠ systemctl restart caddy-watcher failed (non-fatal)${NC}"
+        echo -e "${GREEN}  ✓ smsly-update-watcher enabled and caddy-watcher restarted${NC}"
     fi
 
     # ─── Ensure Celery Worker Autoscaler service exists and is configured ──
@@ -22947,6 +25603,9 @@ RESTORE_EOF
         systemctl daemon-reload
         systemctl enable smsly-integrity.timer || echo -e "${YELLOW}    ⚠ systemctl enable integrity timer failed (non-fatal)${NC}"
         systemctl restart smsly-integrity.timer || echo -e "${YELLOW}    ⚠ systemctl restart integrity timer failed (non-fatal)${NC}"
+        if [ -f /etc/crontab ] && grep -q "verify_platform_integrity.sh" /etc/crontab 2>/dev/null; then
+            sed -i '/verify_platform_integrity\.sh/d' /etc/crontab 2>/dev/null || true
+        fi
         echo -e "${GREEN}  ✓ smsly-integrity timer installed and started${NC}"
     fi
 
@@ -23491,7 +26150,6 @@ ensure_security_tools || true
 if [ -f "$INSTALL_DIR/lib/harden.sh" ]; then
 # --- lib/harden.sh ---
 #!/bin/bash
-set +e
 
 _harden_log() {
     local level="$1"; shift
@@ -23501,6 +26159,39 @@ _harden_log() {
         err)  echo -e "${RED}  ✗ [harden] $*${NC}" ;;
         info) echo -e "${BLUE}  → [harden] $*${NC}" ;;
     esac
+}
+
+# Resolve effective STACK_TIER (lite|medium|full) without requiring env.sh.
+_harden_stack_tier() {
+    local _tier="${STACK_TIER:-}"
+    local _env_file="${INSTALL_DIR:-/opt/smsly-hosting}/.env"
+    if [ -z "$_tier" ] && [ -f "$_env_file" ]; then
+        _tier="$(grep -E '^STACK_TIER=' "$_env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]\r"'\''' || true)"
+    fi
+    if [ -z "$_tier" ] && [ -f "$_env_file" ]; then
+        local _profs=""
+        _profs="$(grep -E '^COMPOSE_PROFILES=' "$_env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]\r"'\''' || true)"
+        if [ -n "$_profs" ]; then
+            case ",${_profs}," in
+                *,full,*) _tier="full" ;;
+                *,medium,*) _tier="medium" ;;
+                *) _tier="lite" ;;
+            esac
+        fi
+    fi
+    if [ -z "$_tier" ]; then
+        local _ram_mb=""
+        _ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+        [ -n "$_ram_mb" ] || _ram_mb=8192
+        if [ "$_ram_mb" -lt 6144 ]; then
+            _tier="lite"
+        elif [ "$_ram_mb" -lt 12288 ]; then
+            _tier="medium"
+        else
+            _tier="full"
+        fi
+    fi
+    printf '%s' "$_tier"
 }
 
 # --- lib/harden_fail2ban.sh ---
@@ -23670,7 +26361,7 @@ _harden_ufw_wg0_rules() {
     if ip link show wg0 >/dev/null 2>&1; then
         local _ufw_v=""
         _ufw_v="$(ufw status verbose 2>/dev/null || true)"
-        echo "$_ufw_v" | grep -q "5000/tcp.*ALLOW" \
+        echo "$_ufw_v" | grep -qE "(^|[[:space:]])5000(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])5000(/tcp)?([[:space:]]|$)" \
             || ufw allow in on wg0 to any port 5000 proto tcp \
             || echo -e "${YELLOW}    ⚠ ufw allow registry on wg0 failed${NC}"
         echo "$_ufw_v" | grep -qE "(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])53(/tcp|/udp)?([[:space:]]|$)" \
@@ -23679,9 +26370,21 @@ _harden_ufw_wg0_rules() {
         echo "$_ufw_v" | grep -qE "(^|[[:space:]])8000(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])8000(/tcp)?([[:space:]]|$)" \
             || ufw allow in on wg0 to any port 8000 proto tcp \
             || echo -e "${YELLOW}    ⚠ ufw allow node api on wg0 failed${NC}"
+        local _cryptd_gate="${CRYPTD_DB_GATE_ENABLED:-}"
+        if [ -z "$_cryptd_gate" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+            _cryptd_gate="$(grep -E '^CRYPTD_DB_GATE_ENABLED=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '\r"' | tr '[:upper:]' '[:lower:]' || true)"
+        fi
+        if [ "$_cryptd_gate" = "true" ]; then
+            echo "$_ufw_v" | grep -qE "(^|[[:space:]])15432(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])15432(/tcp)?([[:space:]]|$)" \
+                || ufw allow in on wg0 to any port 15432 proto tcp \
+                || echo -e "${YELLOW}    ⚠ ufw allow cryptd pg gate (15432) on wg0 failed${NC}"
+            echo "$_ufw_v" | grep -qE "(^|[[:space:]])16379(/tcp)?([[:space:]]|$).*on wg0|on wg0.*(^|[[:space:]])16379(/tcp)?([[:space:]]|$)" \
+                || ufw allow in on wg0 to any port 16379 proto tcp \
+                || echo -e "${YELLOW}    ⚠ ufw allow cryptd redis gate (16379) on wg0 failed${NC}"
+        fi
     fi
     if [ -n "${NODE_REGISTRY_ALLOW_IPS:-}" ]; then
-        local _nip
+        local _nip=""
         for _nip in ${NODE_REGISTRY_ALLOW_IPS//,/ }; do
             [ -n "$_nip" ] || continue
             ufw allow from "$_nip" to any port 5000 proto tcp \
@@ -23690,20 +26393,66 @@ _harden_ufw_wg0_rules() {
     fi
 }
 
+_harden_ufw_media_rules() {
+    if [ "${SMSLY_NODE_ROLE:-}" = "media" ] || [ "${MODE_MEDIA_NODE:-false}" = "true" ]; then
+        local _mport=""
+        for _mport in 5060/tcp 5060/udp 3478/tcp 3478/udp 7880/tcp 7881/tcp 30000:31000/udp; do
+            ufw allow "$_mport" || echo -e "${YELLOW}    ⚠ ufw allow $_mport failed${NC}"
+        done
+    fi
+}
+
+_harden_ufw_master_ip_valid() {
+    local _ip="${1:-}"
+    [ -n "$_ip" ] && [ "$_ip" != "127.0.0.1" ] && ! echo "$_ip" | grep -qE '^(0\.0\.0\.0|localhost)$'
+}
+
 _harden_ufw_bootstrap() {
     command -v ufw  || apt_run apt-get install -y ufw  || true
     command -v ufw  || return 1
 
+    local _is_agent_lite=false
+    if [ "${MODE_AGENT_LITE:-false}" = "true" ] || [ "${INSTALL_MODE:-}" = "agent-lite" ]; then
+        _is_agent_lite=true
+    fi
+    local _master_ip="${MASTER_IP:-}"
+    if [ -z "$_master_ip" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        _master_ip="$(grep -E '^MASTER_IP=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '\r"' || true)"
+    fi
+    local _lockdown_master=false
+    if _harden_ufw_master_ip_valid "$_master_ip"; then
+        _lockdown_master=true
+    fi
+
     # Already active — just verify ports are open, then bail
     if ufw status  | grep -qi "active"; then
-        for port in 22 80 443 51820 33500; do
-            ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
-        done
+        local _ufw_cur=""
+        _ufw_cur="$(ufw status verbose 2>/dev/null || true)"
+        if [ "$_is_agent_lite" = "true" ] && [ "$_lockdown_master" = "true" ]; then
+            echo "$_ufw_cur" | grep -qE "22(/tcp)?[[:space:]]+ALLOW.*${_master_ip}" \
+                || ufw allow from "$_master_ip" to any port 22 || echo -e "${YELLOW}    ⚠ ufw allow 22 from $_master_ip failed${NC}"
+            echo "$_ufw_cur" | grep -qE "80(/tcp)?[[:space:]]+ALLOW.*${_master_ip}" \
+                || ufw allow from "$_master_ip" to any port 80 || echo -e "${YELLOW}    ⚠ ufw allow 80 from $_master_ip failed${NC}"
+            for port in 51820/udp 33500/udp; do
+                echo "$_ufw_cur" | grep -qE "${port}.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
+            done
+        elif [ "$_lockdown_master" = "true" ]; then
+            echo "$_ufw_cur" | grep -qE "22(/tcp)?[[:space:]]+ALLOW.*${_master_ip}" \
+                || ufw allow from "$_master_ip" to any port 22 || echo -e "${YELLOW}    ⚠ ufw allow 22 from $_master_ip failed${NC}"
+            for port in 80/tcp 443/tcp 51820/udp 33500/udp; do
+                echo "$_ufw_cur" | grep -qE "${port}.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
+            done
+        else
+            for port in 22 80 443 51820 33500; do
+                echo "$_ufw_cur" | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
+            done
+        fi
         _harden_ufw_wg0_rules
-        # Whitelist Docker bridges
+        _harden_ufw_media_rules
+        # Allow only DNS (:53) on Docker bridges (never blanket-allow tenant bridges to host ports)
         for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
             ip link show "$iface" >/dev/null 2>&1 || continue
-            ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
+            ufw allow in on "$iface" to any port 53 || echo -e "${YELLOW}    ⚠ ufw allow DNS on $iface failed${NC}"
         done
         return 0
     fi
@@ -23712,22 +26461,34 @@ _harden_ufw_bootstrap() {
     ufw --force default deny incoming || echo -e "${YELLOW}    s ufw default deny incoming failed${NC}"
     ufw --force default allow outgoing || echo -e "${YELLOW}    s ufw default allow outgoing failed${NC}"
 
-    local ssh_port=$(ss -tlnp 2>/dev/null | grep sshd | awk '{print $4}' | awk -F: '{print $NF}' | head -1)
-    if [ -n "$ssh_port" ]; then
+    local ssh_port=""
+    ssh_port=$(ss -tlnp 2>/dev/null | grep sshd | awk '{print $4}' | awk -F: '{print $NF}' | head -1)
+    if [ "$_lockdown_master" = "true" ]; then
+        ufw allow from "$_master_ip" to any port "${ssh_port:-22}" proto tcp || echo -e "${YELLOW}    ⚠ ufw allow ssh from $_master_ip failed${NC}"
+    elif [ -n "$ssh_port" ]; then
         ufw allow "$ssh_port/tcp" || echo -e "${YELLOW}    s ufw allow ssh port $ssh_port failed${NC}"
     else
         ufw allow ssh || echo -e "${YELLOW}    s ufw allow ssh failed${NC}"
     fi
-    ufw allow 80/tcp || echo -e "${YELLOW}    ⚠ ufw allow 80/tcp failed${NC}"
-    ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
+    if [ "$_is_agent_lite" = "true" ]; then
+        if [ "$_lockdown_master" = "true" ]; then
+            ufw allow from "$_master_ip" to any port 80 proto tcp || echo -e "${YELLOW}    ⚠ ufw allow 80 from $_master_ip failed${NC}"
+        else
+            echo -e "${YELLOW}    ⚠ Agent-Lite missing MASTER_IP — skipping blanket port 80/443${NC}"
+        fi
+    else
+        ufw allow 80/tcp || echo -e "${YELLOW}    ⚠ ufw allow 80/tcp failed${NC}"
+        ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
+    fi
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
     ufw allow 33500/udp || echo -e "${YELLOW}    ⚠ ufw allow 33500/udp failed${NC}"
 
     _harden_ufw_wg0_rules
+    _harden_ufw_media_rules
 
     for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
         ip link show "$iface" >/dev/null 2>&1 || continue
-        ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
+        ufw allow in on "$iface" to any port 53 || echo -e "${YELLOW}    ⚠ ufw allow DNS on $iface failed${NC}"
     done
     ufw --force enable || echo -e "${YELLOW}    ⚠ ufw enable failed${NC}"
     # Verify it actually came up
@@ -23777,8 +26538,8 @@ _harden_apparmor_verify() {
 _harden_auditd_bootstrap() {
     command -v auditd  || apt_run apt-get install -y auditd audispd-plugins  || true
 
-    if [ ! -f /etc/audit/rules.d/smsly.rules ]; then
-        mkdir -p /etc/audit/rules.d
+    mkdir -p /etc/audit/rules.d
+    if [ ! -f /etc/audit/rules.d/smsly.rules ] || grep -qE '^-a always,exit -F arch=b64 -S mount -k filesystem-mounts$' /etc/audit/rules.d/smsly.rules 2>/dev/null; then
         cat > /etc/audit/rules.d/smsly.rules <<'AUDIT_EOF'
 -w /etc/shadow -p wa -k identity
 -w /etc/passwd -p wa -k identity
@@ -23787,9 +26548,26 @@ _harden_auditd_bootstrap() {
 -w /opt/smsly-hosting/.env -p wa -k smsly-config
 -w /opt/smsly-hosting/secrets/ -p wa -k smsly-secrets
 -a always,exit -F arch=b64 -S execve -F path=/usr/bin/docker -k docker-exec
--a always,exit -F arch=b64 -S mount -k filesystem-mounts
--a exit,always -F arch=b64 -S execve -F euid=0 -F auid>=1000 -k priv-esc
+-a always,exit -F arch=b64 -S mount -F auid>=1000 -F auid!=4294967295 -k filesystem-mounts
+-a exit,always -F arch=b64 -S execve -F euid=0 -F auid>=1000 -F auid!=4294967295 -k priv-esc
 AUDIT_EOF
+    fi
+    if [ -f /etc/audit/auditd.conf ]; then
+        if grep -qE '^[[:space:]]*max_log_file[[:space:]]*=' /etc/audit/auditd.conf; then
+            sed -i 's/^[[:space:]]*max_log_file[[:space:]]*=.*/max_log_file = 50/' /etc/audit/auditd.conf || true
+        else
+            echo 'max_log_file = 50' >> /etc/audit/auditd.conf || true
+        fi
+        if grep -qE '^[[:space:]]*num_logs[[:space:]]*=' /etc/audit/auditd.conf; then
+            sed -i 's/^[[:space:]]*num_logs[[:space:]]*=.*/num_logs = 5/' /etc/audit/auditd.conf || true
+        else
+            echo 'num_logs = 5' >> /etc/audit/auditd.conf || true
+        fi
+        if grep -qE '^[[:space:]]*max_log_file_action[[:space:]]*=' /etc/audit/auditd.conf; then
+            sed -i 's/^[[:space:]]*max_log_file_action[[:space:]]*=.*/max_log_file_action = rotate/' /etc/audit/auditd.conf || true
+        else
+            echo 'max_log_file_action = rotate' >> /etc/audit/auditd.conf || true
+        fi
     fi
     systemctl enable auditd || echo -e "${YELLOW}    ⚠ auditd enable failed${NC}"
     systemctl restart auditd || echo -e "${YELLOW}    ⚠ auditd restart failed${NC}"
@@ -23909,7 +26687,7 @@ with open('$daemon_cfg','w') as f: json.dump(cfg, f, indent=2)
         _smsly_ctrs="$(docker ps --format '{{.Names}}'  | grep -c smsly || true)"
         if [ "$_smsly_ctrs" -eq 0 ]; then
             _harden_log info "Docker daemon config changed — restarting Docker..."
-            systemctl restart docker || { _harden_log error "Docker restart failed"; }
+            systemctl restart docker || { _harden_log err "Docker restart failed"; }
             for _i in $(seq 1 30); do
                 docker info  && break
                 sleep 2
@@ -23955,6 +26733,14 @@ _harden_crowdsec_bootstrap() {
     # attaches the middleware to user routers.
     _harden_crowdsec_traefik_plugin_gate
     [ "${NODE_CROWDSEC:-1}" = "1" ] || { _harden_log info "crowdsec skipped (NODE_CROWDSEC=0)"; return 0; }
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _cs_tier=""
+        _cs_tier="$(_harden_stack_tier)"
+        if [ "$_cs_tier" = "lite" ]; then
+            _harden_log info "crowdsec skipped (STACK_TIER=lite)"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
@@ -23975,9 +26761,10 @@ _harden_crowdsec_bootstrap() {
         # starts crowdsec right after .env is ready, and verify converges it.
         return 0
     fi
-    docker compose \
+    timeout 120 docker compose \
         "${env_args[@]}" \
         -f "$_cf" \
+        --profile medium \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
         docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' && break
@@ -24230,9 +27017,9 @@ _harden_crowdsec_cloudflare_bouncer() {
     _cf="$(_harden_crowdsec_compose_file)"
     local _up_rc=1
     if [ "$_prev_hash" != "$_new_hash" ]; then
-        docker compose "${env_args[@]}" -f "$_cf" up -d --force-recreate --no-deps crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
+        timeout 120 docker compose "${env_args[@]}" -f "$_cf" --profile medium up -d --force-recreate --no-deps crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
     else
-        docker compose "${env_args[@]}" -f "$_cf" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
+        timeout 120 docker compose "${env_args[@]}" -f "$_cf" --profile medium up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
     fi
     if [ "$_up_rc" = "0" ]; then
         _harden_log ok "cloudflare bouncer running (edge enforcement)"
@@ -24243,6 +27030,14 @@ _harden_crowdsec_cloudflare_bouncer() {
 
 _harden_crowdsec_verify() {
     [ "${NODE_CROWDSEC:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _cs_tier=""
+        _cs_tier="$(_harden_stack_tier)"
+        if [ "$_cs_tier" = "lite" ]; then
+            _harden_log info "crowdsec skipped (STACK_TIER=lite)"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
@@ -24386,7 +27181,7 @@ _harden_openappsec_bootstrap() {
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
     # Explicit service list — never --remove-orphans on this stack (AGENTS.md #16).
-    if ! timeout 570 docker compose "${env_args[@]}" -f "$COMPOSE_FILE" \
+    if ! timeout 570 docker compose "${env_args[@]}" -f "$COMPOSE_FILE" --profile appsec \
             up -d appsec-agent appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db appsec-envoy 2>&1 | tail -5; then
         echo -e "${YELLOW}  ⚠ open-appsec docker compose up failed${NC}"
         return 1
@@ -24428,9 +27223,9 @@ _harden_openappsec_reconcile() {
     local env_args=()
     [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
     local compose_file="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" stop --timeout 15 \
+    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" --profile appsec stop --timeout 15 \
         appsec-agent appsec-envoy appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db >/dev/null 2>&1 || true
-    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" rm -f \
+    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" --profile appsec rm -f \
         appsec-agent appsec-envoy appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db >/dev/null 2>&1 || true
     return 0
 }
@@ -24472,6 +27267,14 @@ _harden_openappsec_verify() {
 
 _harden_falco_bootstrap() {
     [ "${NODE_FALCO:-1}" = "1" ] || { _harden_log info "falco skipped (NODE_FALCO=0)"; return 0; }
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _falco_tier=""
+        _falco_tier="$(_harden_stack_tier)"
+        if [ "$_falco_tier" != "full" ]; then
+            _harden_log info "falco skipped (STACK_TIER=${_falco_tier})"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     local compose_file="$INSTALL_DIR/infrastructure/docker/docker-compose.falco.yml"
     [ -f "$compose_file" ] || return 1
@@ -24491,7 +27294,7 @@ _harden_falco_bootstrap() {
     # class). smsly-hosting matches docker-compose.prod.yml `name:` and
     # the full-profile falco service (same container_name, no named
     # volumes, so the two definitions converge on one container).
-    docker compose \
+    timeout 180 docker compose \
         -p smsly-hosting \
         "${env_args[@]}" \
         -f "$compose_file" \
@@ -24506,7 +27309,19 @@ _harden_falco_bootstrap() {
 
 _harden_falco_verify() {
     [ "${NODE_FALCO:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _falco_tier=""
+        _falco_tier="$(_harden_stack_tier)"
+        if [ "$_falco_tier" != "full" ]; then
+            _harden_log info "falco skipped (STACK_TIER=${_falco_tier})"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
+    if [ -e "${SMSLY_TIER_STATE_DIR:-/var/lib/smsly/tiers}/runtime-security.asleep" ]; then
+        _harden_log info "falco asleep (runtime-security tier sleeping) — skipping"
+        return 0
+    fi
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         # One self-heal attempt: resume runs can skip the bootstrap step
         # (checkpointed), and first-boot probe load can outlast the
@@ -24658,32 +27473,61 @@ _harden_trivy_bootstrap() {
     fi
 
     _harden_log info "Installing Trivy vulnerability scanner..."
-    local trivy_version="v0.54.1"
-    local arch
+    local trivy_version="v0.76.2"
+    local arch="" expected_deb_sha="" expected_tgz_sha=""
     arch="$(uname -m)"
     case "$arch" in
-        x86_64)  arch="64bit" ;;
-        aarch64) arch="ARM64" ;;
+        x86_64)
+            arch="64bit"
+            expected_deb_sha="7edaf64c8a2a0ae02137f776c6e56adf285fc36ec76b045274afdc462f20f092"
+            expected_tgz_sha="bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+            ;;
+        aarch64)
+            arch="ARM64"
+            expected_deb_sha="0c576cd78352a2084435d393ea31565a3637cc129dd052c422f1e72fd678ee76"
+            expected_tgz_sha="ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3"
+            ;;
         *)       _harden_log warn "Trivy — unsupported architecture: $arch"; return 1 ;;
     esac
 
     local deb_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.deb"
-    local tmp_deb
+    local tmp_deb=""
     tmp_deb="$(mktemp /tmp/trivy.XXXXXX.deb)"
 
-    # Attempt 1: Direct DEB download with retries and timeouts
+    # Attempt 1: Direct DEB download with pinned SHA256 verification
     if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$deb_url" -o "$tmp_deb" ; then
-        if ! dpkg -i "$tmp_deb" ; then
-            apt-get install -f -y  || true
-            dpkg -i "$tmp_deb"  || true
+        if printf '%s  %s\n' "$expected_deb_sha" "$tmp_deb" | sha256sum -c - >/dev/null 2>&1; then
+            if ! dpkg -i "$tmp_deb" ; then
+                apt-get install -f -y  || true
+                dpkg -i "$tmp_deb"  || true
+            fi
+        else
+            _harden_log warn "Trivy DEB checksum mismatch — rejecting unverified artifact"
         fi
         rm -f "$tmp_deb"
     else
         rm -f "$tmp_deb"
-        _harden_log info "Direct DEB download failed — trying official APT repo and install script..."
+        _harden_log info "Direct DEB download failed — trying official verified tarball and APT repo..."
     fi
 
-    # Attempt 2: Official APT Repository fallback
+    # Attempt 2: Direct tar.gz release download with pinned SHA256 verification
+    if ! command -v trivy >/dev/null 2>&1; then
+        local tgz_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.tar.gz"
+        local tmp_tgz="" tmp_dir=""
+        tmp_tgz="$(mktemp /tmp/trivy.XXXXXX.tar.gz)"
+        tmp_dir="$(mktemp -d /tmp/trivy-extract.XXXXXX)"
+        if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$tgz_url" -o "$tmp_tgz"; then
+            if printf '%s  %s\n' "$expected_tgz_sha" "$tmp_tgz" | sha256sum -c - >/dev/null 2>&1; then
+                tar -xzf "$tmp_tgz" -C "$tmp_dir" trivy >/dev/null 2>&1 && \
+                    install -m 0755 "$tmp_dir/trivy" /usr/local/bin/trivy >/dev/null 2>&1 || true
+            else
+                _harden_log warn "Trivy tarball checksum mismatch — rejecting unverified artifact"
+            fi
+        fi
+        rm -rf "$tmp_tgz" "$tmp_dir"
+    fi
+
+    # Attempt 3: Official GPG-signed APT Repository fallback
     if ! command -v trivy ; then
         apt-get update -qq  || true
         if ! apt-get install -y trivy ; then
@@ -24694,11 +27538,6 @@ _harden_trivy_bootstrap() {
                 apt-get install -y trivy  || true
             fi
         fi
-    fi
-
-    # Attempt 3: Official Contrib script fallback
-    if ! command -v trivy ; then
-        curl --retry 2 --connect-timeout 10 -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin  || true
     fi
 
     if command -v trivy ; then
@@ -24780,11 +27619,11 @@ _harden_envoy_registry_login() {
         [ -n "$user" ] || user="smsly-registry"
     fi
     [ -n "$user" ] && [ -n "$pass" ] || return 1
-    printf '%s\n' "$pass" | docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
+    printf '%s\n' "$pass" | timeout 30 docker login --username "$user" --password-stdin registry:5000 >/dev/null 2>&1
     # The sidecar flow pulls via registry:5000 but pushes via 127.0.0.1:5000
     # (see _harden_envoy_image_bootstrap) — the daemon keys credentials per
     # hostname, so both need a login or the push 401s (fresh-install gap).
-    printf '%s\n' "$pass" | docker login --username "$user" --password-stdin 127.0.0.1:5000 >/dev/null 2>&1 || true
+    printf '%s\n' "$pass" | timeout 30 docker login --username "$user" --password-stdin 127.0.0.1:5000 >/dev/null 2>&1 || true
 }
 
 _harden_envoy_image_bootstrap() {
@@ -24805,19 +27644,19 @@ _harden_envoy_image_bootstrap() {
     # must stay visible instead of dying silently (2026-09-12).
     _harden_envoy_registry_login || _harden_log warn "no registry login available — pull/push may 401"
     local envoy_tag="registry:5000/smsly/envoy-spire-sidecar:latest"
-    if docker image inspect "$envoy_tag" >/dev/null 2>&1; then
+    if timeout 10 docker image inspect "$envoy_tag" >/dev/null 2>&1; then
         return 0
     fi
-    if docker pull "$envoy_tag" >/dev/null 2>&1; then
+    if timeout 120 docker pull "$envoy_tag" >/dev/null 2>&1; then
         _harden_log ok "envoy sidecar image present"
         return 0
     fi
     local loop_tag="127.0.0.1:5000/smsly/envoy-spire-sidecar:latest"
-    if ! docker build -t "$envoy_tag" -t "$loop_tag" "$envoy_dir" >/dev/null 2>&1; then
+    if ! timeout 300 docker build -t "$envoy_tag" -t "$loop_tag" "$envoy_dir" >/dev/null 2>&1; then
         _harden_log err "envoy sidecar image build failed in $envoy_dir"
         return 1
     fi
-    if ! docker push "$loop_tag" >/dev/null 2>&1; then
+    if ! timeout 120 docker push "$loop_tag" >/dev/null 2>&1; then
         _harden_log err "envoy sidecar image push failed — check registry auth (docker login) and that the registry is up"
         return 1
     fi
@@ -24829,26 +27668,47 @@ _harden_spire_start_agent() {
     # Start one SPIRE agent with a freshly minted single-use join token
     # (mirrors apps/mtls/views.py::_start_agent_with_token).
     # $1 agent container, $2 server container, $3 agent.conf host path,
-    # $4 data volume, $5 socket volume, $6 svids volume.
+    # $4 data volume, $5 socket volume, $6 svids volume, $7 optional trust domain.
     local agent="$1" server="$2" conf="$3" data_vol="$4" sock_vol="$5" svids_vol="$6"
+    local trust_domain="${7:-}"
+    if [ -z "$trust_domain" ]; then
+        if [[ "$agent" == *ecosystem* ]]; then
+            trust_domain="${ECOSYSTEM_TRUST_DOMAIN:-ecosystem.local}"
+        else
+            trust_domain="${SPIFFE_TRUST_DOMAIN:-platform.local}"
+        fi
+    fi
     # A crash-looping agent reports Running=true while Restarting — only a
     # truly stable container may keep its (single-use, now consumed) token.
     if [ "$(docker inspect -f '{{.State.Running}}' "$agent" 2>/dev/null)" = "true" ] && \
        [ "$(docker inspect -f '{{.State.Restarting}}' "$agent" 2>/dev/null)" != "true" ]; then
         return 0
     fi
-    local token
-    token="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1)"
+    # Export the server trust bundle into the agent data volume so
+    # insecure_bootstrap = false has a valid trust_bundle_path on boot.
+    local _bundle_pem=""
+    _bundle_pem="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server bundle show -socketPath /tmp/spire-server/private/api.sock -format pem 2>/dev/null || true)"
+    if [ -z "$_bundle_pem" ]; then
+        _harden_log warn "$agent — could not export trust bundle from $server"
+        return 1
+    fi
+    if ! printf '%s\n' "$_bundle_pem" | timeout -k 5 30 docker run --rm -i -v "$data_vol:/opt/spire/data" alpine:3.19 sh -c 'mkdir -p /opt/spire/data && chmod 0700 /opt/spire/data && cat > /opt/spire/data/bundle.crt && chmod 0644 /opt/spire/data/bundle.crt' >/dev/null 2>&1; then
+        _harden_log warn "$agent — failed writing trust bundle to $data_vol"
+        return 1
+    fi
+    local token=""
+    token="$(timeout -k 5 30 docker exec "$server" /opt/spire/bin/spire-server token generate -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep 'Token:' | awk '{print $2}' | head -1 || true)"
     if [ -z "$token" ]; then
         _harden_log warn "$agent — could not mint join token"
         return 1
     fi
     docker rm -f "$agent" >/dev/null 2>&1 || true
-    docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --restart unless-stopped \
+    timeout 60 docker run -d --name "$agent" --hostname "$agent" --network smsly-net --pid host --cgroupns host --restart unless-stopped \
         -v "$data_vol:/opt/spire/data" -v "$sock_vol:/opt/spire/run" -v "$svids_vol:/opt/spire/svids" \
         -v /var/run/docker.sock:/var/run/docker.sock:ro \
         -v "$conf:/etc/spire/agent.conf:ro,z" \
         -e DOCKER_HOST=unix:///var/run/docker.sock \
+        -e "SPIFFE_TRUST_DOMAIN=${trust_domain}" \
         ghcr.io/spiffe/spire-agent:1.9.6 -config /etc/spire/agent.conf -joinToken "$token" >/dev/null 2>&1 || {
         _harden_log warn "$agent — docker run failed"
         return 1
@@ -24862,6 +27722,12 @@ _harden_spire_bootstrap() {
     # their own trust roots.
     if command -v is_master_mode >/dev/null 2>&1 && ! is_master_mode; then
         _harden_log info "spire skipped (not master mode)"
+        return 0
+    fi
+    local _spire_tier=""
+    _spire_tier="$(_harden_stack_tier)"
+    if [ "$_spire_tier" != "full" ]; then
+        _harden_log info "spire skipped (STACK_TIER=${_spire_tier})"
         return 0
     fi
     command -v docker >/dev/null 2>&1 || return 0
@@ -24893,7 +27759,7 @@ _harden_spire_bootstrap() {
         fi
     done
     # Servers are idempotent under compose (running services are kept).
-    docker compose -p smsly-hosting -f "$spire_file" up -d spire-server spire-server-ecosystem >/dev/null 2>&1 || {
+    timeout 120 docker compose -p smsly-hosting -f "$spire_file" up -d spire-server spire-server-ecosystem >/dev/null 2>&1 || {
         _harden_log warn "spire servers failed to start"
         return 1
     }
@@ -24922,6 +27788,14 @@ _harden_spire_bootstrap() {
 
 _harden_spire_verify() {
     [ "${NODE_SPIRE:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode); then
+        local _spire_tier=""
+        _spire_tier="$(_harden_stack_tier)"
+        if [ "$_spire_tier" != "full" ]; then
+            _harden_log info "spire skipped (STACK_TIER=${_spire_tier})"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     if [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent 2>/dev/null)" != "true" ] || \
        [ "$(docker inspect -f '{{.State.Running}}' smsly-spire-agent-ecosystem 2>/dev/null)" != "true" ]; then
@@ -25346,10 +28220,8 @@ if _existing_env_is_complete "$INSTALL_DIR/.env"; then
         exit 1
     fi
 
-    # Source existing values for summary output.
-    set -a
-    source "$INSTALL_DIR/.env"  || true
-    set +a
+    # Load existing values safely without shell execution.
+    env_load_file_safe "$INSTALL_DIR/.env"
     # Same gate as after fresh generation (resume path never generated,
     # so the deps-time run skipped for lack of .env — see below).
     if [ -f "$INSTALL_DIR/lib/harden_crowdsec.sh" ]; then
@@ -25377,6 +28249,14 @@ _harden_crowdsec_bootstrap() {
     # attaches the middleware to user routers.
     _harden_crowdsec_traefik_plugin_gate
     [ "${NODE_CROWDSEC:-1}" = "1" ] || { _harden_log info "crowdsec skipped (NODE_CROWDSEC=0)"; return 0; }
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _cs_tier=""
+        _cs_tier="$(_harden_stack_tier)"
+        if [ "$_cs_tier" = "lite" ]; then
+            _harden_log info "crowdsec skipped (STACK_TIER=lite)"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
@@ -25397,9 +28277,10 @@ _harden_crowdsec_bootstrap() {
         # starts crowdsec right after .env is ready, and verify converges it.
         return 0
     fi
-    docker compose \
+    timeout 120 docker compose \
         "${env_args[@]}" \
         -f "$_cf" \
+        --profile medium \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
         docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' && break
@@ -25652,9 +28533,9 @@ _harden_crowdsec_cloudflare_bouncer() {
     _cf="$(_harden_crowdsec_compose_file)"
     local _up_rc=1
     if [ "$_prev_hash" != "$_new_hash" ]; then
-        docker compose "${env_args[@]}" -f "$_cf" up -d --force-recreate --no-deps crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
+        timeout 120 docker compose "${env_args[@]}" -f "$_cf" --profile medium up -d --force-recreate --no-deps crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
     else
-        docker compose "${env_args[@]}" -f "$_cf" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
+        timeout 120 docker compose "${env_args[@]}" -f "$_cf" --profile medium up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
     fi
     if [ "$_up_rc" = "0" ]; then
         _harden_log ok "cloudflare bouncer running (edge enforcement)"
@@ -25665,6 +28546,14 @@ _harden_crowdsec_cloudflare_bouncer() {
 
 _harden_crowdsec_verify() {
     [ "${NODE_CROWDSEC:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _cs_tier=""
+        _cs_tier="$(_harden_stack_tier)"
+        if [ "$_cs_tier" = "lite" ]; then
+            _harden_log info "crowdsec skipped (STACK_TIER=lite)"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
@@ -25705,9 +28594,7 @@ else
     if [ -f "$INSTALL_DIR/.env" ]; then
         echo -e "${YELLOW}  ⚠ Incomplete .env found (missing DOMAIN/secrets) — regenerating fully${NC}"
         cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.stub-backup" || true
-        set -a
-        source "$INSTALL_DIR/.env" || true
-        set +a
+        env_load_file_safe "$INSTALL_DIR/.env"
         rm -f "$INSTALL_DIR/.env"
     fi
     # ─── Configuration Summary ──────────────────────────────────────────────
@@ -25793,25 +28680,68 @@ else
     [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] || BACKUP_ENCRYPTION_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  || python3 -c "import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())")"
     [ -n "${CROWDSEC_BOUNCER_KEY:-}" ] || CROWDSEC_BOUNCER_KEY="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     [ -n "${REGISTRY_HTTP_SECRET:-}" ] || REGISTRY_HTTP_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
-    [ -n "${CADDY_ASK_SECRET:-}" ] || CADDY_ASK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+    [ -n "${CADDY_ASK_SECRET:-}" ] || CADDY_ASK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || openssl rand -hex 64 || true)"
+    [ -n "${EDGE_JWT_SECRET:-}" ] || EDGE_JWT_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || openssl rand -hex 64 || true)"
     [ -n "${PATRONI_SUPERUSER_PASSWORD:-}" ] || PATRONI_SUPERUSER_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     [ -n "${BACKUP_REQUIRE_ENCRYPTION:-}" ] || BACKUP_REQUIRE_ENCRYPTION="true"
-    # SECURITY: SSH strict host-key checking. Defaults to false (accept-first)
-    # for convenience during initial provisioning. Operators managing trusted
-    # environments with pre-populated known_hosts should set this to "true".
-    [ -n "${SMSLY_STRICT_SSH_HOST_KEY_CHECK:-}" ] || SMSLY_STRICT_SSH_HOST_KEY_CHECK="false"
+    # SECURITY: SSH strict host-key checking defaults to true. Operators
+    # explicitly accepting TOFU on first provision can set this to "false".
+    [ -n "${SMSLY_STRICT_SSH_HOST_KEY_CHECK:-}" ] || SMSLY_STRICT_SSH_HOST_KEY_CHECK="true"
     # Read-replica plumbing (used by pgcat for replica routing).
     # Default follows the DB mode so the replica that the compose stack
     # actually starts is also the one pgcat routes to (previously empty
     # here while compose defaulted to postgres-replica:5432 — same
     # effective value, but .env and runtime disagreed).
+    # Compute hardware tier and WAF default early so DB_REPLICA_HOSTS,
+    # SENTINEL_HOSTS, and COMPOSE_PROFILES align with the host size.
+    ENV_SCHED_CPUS="$(nproc 2>/dev/null || echo 4)"
+    ENV_SCHED_RAM_MB="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+    [ -n "$ENV_SCHED_RAM_MB" ] || ENV_SCHED_RAM_MB=8192
+    _caller_compose_profiles="${COMPOSE_PROFILES:-}"
+    STACK_TIER="${STACK_TIER:-}"
+    case "$STACK_TIER" in
+        lite|medium|full) ;;
+        *)
+            if [ -n "$_caller_compose_profiles" ]; then
+                case ",${_caller_compose_profiles}," in
+                    *,full,*) STACK_TIER="full" ;;
+                    *,medium,*) STACK_TIER="medium" ;;
+                    *) STACK_TIER="lite" ;;
+                esac
+            elif [ "$ENV_SCHED_RAM_MB" -lt 6144 ]; then
+                STACK_TIER="lite"
+            elif [ "$ENV_SCHED_RAM_MB" -lt 12288 ]; then
+                STACK_TIER="medium"
+            else
+                STACK_TIER="full"
+            fi
+            ;;
+    esac
+    # WAF shadow follows host size: the 6-container shadow costs ~1-2GB
+    # real — on <12GB hosts that erases the idle headroom this sizing
+    # exists to protect. On at >=12GB RAM (full tier), off below. An
+    # explicit operator OPENAPPSEC_ENABLED value always wins.
+    ENV_OPENAPPSEC_ENABLED="${OPENAPPSEC_ENABLED:-}"
+    if [ -z "$ENV_OPENAPPSEC_ENABLED" ]; then
+        if [ "$ENV_SCHED_RAM_MB" -ge 12288 ]; then ENV_OPENAPPSEC_ENABLED=1; else ENV_OPENAPPSEC_ENABLED=0; fi
+    fi
+    if [ -z "${OPENAPPSEC_ENABLED:-}" ] && [ "$STACK_TIER" != "full" ]; then
+        ENV_OPENAPPSEC_ENABLED=0
+    fi
+
     [ -n "${REPLICATION_PASSWORD:-}" ] || REPLICATION_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     [ -n "${SENTINEL_PASSWORD:-}" ] || SENTINEL_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     if [ -z "${DB_REPLICA_HOSTS:-}" ]; then
         case "${DB_HA_ENABLED:-local-ha}" in
             patroni) DB_REPLICA_HOSTS="haproxy:5001" ;;
             external) DB_REPLICA_HOSTS="" ;;
-            *) DB_REPLICA_HOSTS="postgres-replica:5432" ;;
+            *)
+                if [ "$STACK_TIER" = "lite" ]; then
+                    DB_REPLICA_HOSTS=""
+                else
+                    DB_REPLICA_HOSTS="postgres-replica:5432"
+                fi
+                ;;
         esac
     fi
 
@@ -25895,8 +28825,25 @@ except Exception:
     # SSH into the master to fetch the correct POSTGRES_PASSWORD.
     if is_agent_lite_mode && [ -n "${MASTER_IP:-}" ] && [ "$MASTER_IP" != "127.0.0.1" ]; then
         echo -e "${BLUE}  → Fetching master DB password via SSH (master: ${MASTER_IP})...${NC}"
-        _master_db_pw="$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes root@${MASTER_IP} \
-            "grep '^POSTGRES_PASSWORD=' /opt/smsly-hosting/.env  | head -1 | cut -d= -f2"  || true)"
+        local _ssh_strict="accept-new"
+        local _ssh_kh=""
+        if [ -n "${MASTER_SSH_FINGERPRINT:-}" ]; then
+            _ssh_kh="$(mktemp /tmp/smsly-master-kh.XXXXXX)"
+            if ssh-keyscan -T 5 "${MASTER_IP}" 2>/dev/null > "$_ssh_kh" && \
+               ssh-keygen -lf "$_ssh_kh" 2>/dev/null | grep -qF "${MASTER_SSH_FINGERPRINT}"; then
+                _ssh_strict="yes"
+            else
+                echo -e "${RED}  ✗ Master SSH host key fingerprint verification failed for ${MASTER_IP}!${NC}"
+                rm -f "$_ssh_kh"
+                _ssh_kh=""
+                _master_db_pw=""
+            fi
+        fi
+        if [ -z "${MASTER_SSH_FINGERPRINT:-}" ] || [ -n "$_ssh_kh" ]; then
+            _master_db_pw="$(ssh -o StrictHostKeyChecking="${_ssh_strict}" ${_ssh_kh:+-o UserKnownHostsFile="$_ssh_kh"} -o ConnectTimeout=10 -o BatchMode=yes root@"${MASTER_IP}" \
+                "grep '^POSTGRES_PASSWORD=' /opt/smsly-hosting/.env  | head -1 | cut -d= -f2"  || true)"
+            [ -n "$_ssh_kh" ] && rm -f "$_ssh_kh"
+        fi
         if [ -n "${_master_db_pw:-}" ]; then
             POSTGRES_PASSWORD="$_master_db_pw"
             echo -e "${GREEN}  ✓ Retrieved master DB password${NC}"
@@ -25922,43 +28869,40 @@ except Exception:
         ENV_TRAEFIK_HTTPS_BIND="0.0.0.0:443"
         ENV_STARTUP_CADDY_SYNC="false"
     fi
-    # Auto-detect Redis Sentinel containers before writing .env.
-    if [ -z "${SENTINEL_HOSTS:-}" ]; then
-        _detected_sentinels=""
-        for _si in 1 2 3; do
-            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-redis-sentinel-${_si}$"; then
-                [ -n "$_detected_sentinels" ] && _detected_sentinels="${_detected_sentinels},"
-                _detected_sentinels="${_detected_sentinels}smsly-redis-sentinel-${_si}:26379"
-            fi
-        done
-        [ -n "$_detected_sentinels" ] && SENTINEL_HOSTS="$_detected_sentinels"
+    # Populate SENTINEL_HOSTS statically for local-ha non-lite tiers instead
+    # of probing docker ps before containers exist. Lite stays single-node.
+    if [ -z "${SENTINEL_HOSTS:-}" ] && [ "${DB_HA_ENABLED:-local-ha}" = "local-ha" ] && [ "$STACK_TIER" != "lite" ] && [ "${MODE_AGENT_LITE:-false}" != "true" ] && [ "${MODE_NODE:-false}" != "true" ]; then
+        SENTINEL_HOSTS="redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379"
     fi
-    # Compute effective compose profiles BEFORE the template: the
-    # observability stack is 'medium'-gated and the security/build-cache
-    # stack (Falco, SPIRE servers, apt-cacher, verdaccio) is 'full'-gated.
-    # Full is the default so a fresh install runs everything.
+    # Compute effective compose profiles BEFORE the template from STACK_TIER
+    # (<6GB=lite, 6-12GB=medium, >=12GB=full) + OPENAPPSEC_ENABLED (appsec
+    # profile). Caller-supplied COMPOSE_PROFILES is respected verbatim.
     # NOTE: this MUST live here, not inside the template heredoc below.
-    # Unquoted heredocs still run backtick/${} expansions, and the bare
-    # ${COMPOSE_PROFILES} + `medium`/`full` backticks that used to live in
-    # the template aborted generation under set -u with zero output,
-    # killing the whole install (2026-09-12).
-    COMPOSE_PROFILES="${COMPOSE_PROFILES:-${DB_HA_ENABLED:-local-ha}}"
-    case ",${COMPOSE_PROFILES}," in
-        *,medium,*) ;;
-        *) COMPOSE_PROFILES="${COMPOSE_PROFILES},medium" ;;
-    esac
-    case ",${COMPOSE_PROFILES}," in
-        *,full,*) ;;
-        *) COMPOSE_PROFILES="${COMPOSE_PROFILES},full" ;;
-    esac
+    _fc_db_ha="${DB_HA_ENABLED:-local-ha}"
+    if [ -z "$_caller_compose_profiles" ]; then
+        COMPOSE_PROFILES="$_fc_db_ha"
+        case "$STACK_TIER" in
+            medium)
+                [ "$_fc_db_ha" = "local-ha" ] && COMPOSE_PROFILES="${COMPOSE_PROFILES},local-ha-replica"
+                COMPOSE_PROFILES="${COMPOSE_PROFILES},redis-ha,medium"
+                ;;
+            full)
+                [ "$_fc_db_ha" = "local-ha" ] && COMPOSE_PROFILES="${COMPOSE_PROFILES},local-ha-replica"
+                COMPOSE_PROFILES="${COMPOSE_PROFILES},redis-ha,medium,full"
+                ;;
+        esac
+        if [ "$ENV_OPENAPPSEC_ENABLED" = "1" ]; then
+            COMPOSE_PROFILES="${COMPOSE_PROFILES},appsec"
+        fi
+    else
+        COMPOSE_PROFILES="$_caller_compose_profiles"
+    fi
+    unset _fc_db_ha _caller_compose_profiles
     # Size-aware runtime sizing BEFORE the template (same heredoc rule as
     # above: compute here, interpolate there). Small hosts idle lean:
     # fewer gunicorn workers, smaller Postgres shared buffers (pinned shm
     # is the largest fixed idle cost). Burst ceilings are NOT touched, so
     # heavy load can still consume up to the docker limits.
-    ENV_SCHED_CPUS="$(nproc 2>/dev/null || echo 4)"
-    ENV_SCHED_RAM_MB="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
-    [ -n "$ENV_SCHED_RAM_MB" ] || ENV_SCHED_RAM_MB=8192
     ENV_GUNICORN_WORKERS="${GUNICORN_WORKERS:-}"
     if [ -z "$ENV_GUNICORN_WORKERS" ]; then
         if [ "$ENV_SCHED_CPUS" -le 2 ]; then ENV_GUNICORN_WORKERS=2; else ENV_GUNICORN_WORKERS=4; fi
@@ -25976,15 +28920,29 @@ except Exception:
         else ENV_DB_EFFECTIVE_CACHE_SIZE=4GB; fi
     fi
     ENV_CELERY_QUEUES="${CELERY_QUEUES:-celery,fast,deploy}"
-    # WAF shadow follows host size: the 6-container shadow costs ~1-2GB
-    # real — on small hosts that erases the idle headroom this sizing
-    # exists to protect. On at >=8GB RAM, off below. An explicit operator
-    # value (env preset or existing .env) always wins.
-    ENV_OPENAPPSEC_ENABLED="${OPENAPPSEC_ENABLED:-}"
-    if [ -z "$ENV_OPENAPPSEC_ENABLED" ]; then
-        if [ "$ENV_SCHED_RAM_MB" -ge 8192 ]; then ENV_OPENAPPSEC_ENABLED=1; else ENV_OPENAPPSEC_ENABLED=0; fi
+    ENV_CELERY_AUTOSCALE="${CELERY_AUTOSCALE:-}"
+    if [ -z "$ENV_CELERY_AUTOSCALE" ]; then
+        if [ "$ENV_SCHED_RAM_MB" -le 4096 ]; then ENV_CELERY_AUTOSCALE="2,0"; else ENV_CELERY_AUTOSCALE="4,0"; fi
     fi
-    echo -e "${BLUE}  → Runtime sizing: ${ENV_GUNICORN_WORKERS} gunicorn workers, PG buffers ${ENV_DB_SHARED_BUFFERS}, WAF shadow ${ENV_OPENAPPSEC_ENABLED}, host ${ENV_SCHED_RAM_MB}MB/${ENV_SCHED_CPUS}CPU${NC}"
+    ENV_PG_WAL_KEEP_SIZE="${PG_WAL_KEEP_SIZE:-}"
+    if [ -z "$ENV_PG_WAL_KEEP_SIZE" ]; then
+        if [ "$STACK_TIER" = "lite" ] || [ "$ENV_SCHED_RAM_MB" -le 4096 ]; then
+            ENV_PG_WAL_KEEP_SIZE="64MB"
+        elif [ "$ENV_SCHED_RAM_MB" -le 8192 ]; then
+            ENV_PG_WAL_KEEP_SIZE="512MB"
+        else
+            ENV_PG_WAL_KEEP_SIZE="1GB"
+        fi
+    fi
+    ENV_PROMETHEUS_RETENTION="${PROMETHEUS_RETENTION:-}"
+    if [ -z "$ENV_PROMETHEUS_RETENTION" ]; then
+        if [ "$ENV_SCHED_RAM_MB" -lt 12288 ]; then ENV_PROMETHEUS_RETENTION="7d"; else ENV_PROMETHEUS_RETENTION="30d"; fi
+    fi
+    ENV_LOKI_RETENTION="${LOKI_RETENTION:-}"
+    if [ -z "$ENV_LOKI_RETENTION" ]; then
+        if [ "$ENV_SCHED_RAM_MB" -lt 12288 ]; then ENV_LOKI_RETENTION="7d"; else ENV_LOKI_RETENTION="30d"; fi
+    fi
+    echo -e "${BLUE}  → Runtime sizing: tier ${STACK_TIER}, ${ENV_GUNICORN_WORKERS} gunicorn workers, PG buffers ${ENV_DB_SHARED_BUFFERS}, WAF shadow ${ENV_OPENAPPSEC_ENABLED}, host ${ENV_SCHED_RAM_MB}MB/${ENV_SCHED_CPUS}CPU${NC}"
     cat <<EOF > "$ENV_TMP"
 # SMSLY Hosting Configuration — Generated $(date -Iseconds)
 ENVIRONMENT=production
@@ -26012,13 +28970,11 @@ DATABASE_CONNECT_TIMEOUT=5
 # Docker Compose natively honors COMPOSE_PROFILES from this file, so
 # every 'docker compose' call picks the right DB stack with no flags.
 DB_HA_ENABLED=${DB_HA_ENABLED:-local-ha}
-# Observability (Loki/Promtail/Grafana/cAdvisor/docker-labels/alertmanager)
-# is 'medium'-gated in docker-compose.prod.yml. Fresh installs previously
-# defaulted to profiles=local-ha only, so the entire monitoring stack
-# silently never started (Grafana embeds 502'd, Loki blackouts went
-# unnoticed, autoscaler Prometheus targets stayed incomplete). Always
-# include 'medium' and 'full' (Falco, SPIRE servers, apt-cacher,
-# verdaccio) so a fresh install runs everything by default.
+# Resource tier (<6GB=lite, 6-12GB=medium, >=12GB=full). Preserved
+# across updates so lite/medium hosts never balloon back to full.
+STACK_TIER=$STACK_TIER
+# Observability + local HA replicas are 'medium'-gated, Falco/SPIRE/caches
+# are 'full'-gated, and open-appsec is 'appsec'-gated (OPENAPPSEC_ENABLED=1).
 COMPOSE_PROFILES=$COMPOSE_PROFILES
 # PgCat upstream. patroni mode routes through HAProxy write/read ports.
 PGCAT_DB_HOST=${PGCAT_DB_HOST:-postgres-primary}
@@ -26030,7 +28986,7 @@ RABBITMQ_DEFAULT_USER=smsly_user
 RABBITMQ_DEFAULT_PASS=$RABBITMQ_PASSWORD
 REDIS_HOST=redis-primary
 REDIS_URL=redis://:$REDIS_PASSWORD@redis-primary:6379/0
-REDIS_MIN_REPLICAS_TO_WRITE=1
+REDIS_MIN_REPLICAS_TO_WRITE=0
 REDIS_MIN_REPLICAS_MAX_LAG=10
 # CELERY_ prefix is required for celery-redbeat to read this (see
 # backend/config/settings.py: CELERY_REDBEAT_REDIS_URL). Without the prefix
@@ -26072,6 +29028,9 @@ CROWDSEC_BOUNCER_KEY=$CROWDSEC_BOUNCER_KEY
 
 # GitHub webhook signature verification
 GITHUB_WEBHOOK_SECRET=$GITHUB_WEBHOOK_SECRET
+
+# Edge JWT signing secret for Traefik forward-auth and Caddy authorize
+EDGE_JWT_SECRET=${EDGE_JWT_SECRET:-}
 
 # Security
 ALLOWED_HOSTS=$DOMAIN,localhost,127.0.0.1
@@ -26161,13 +29120,14 @@ DB_EFFECTIVE_CACHE_SIZE=$ENV_DB_EFFECTIVE_CACHE_SIZE
 # Main celery worker drains ALL queues so burst workers (celery-fast,
 # celery-deploy) can idle-stop without stalling work.
 CELERY_QUEUES=$ENV_CELERY_QUEUES
+CELERY_AUTOSCALE=$ENV_CELERY_AUTOSCALE
 CELERY_AUTOSCALE_ENABLED=${CELERY_AUTOSCALE_ENABLED:-true}
+PG_WAL_KEEP_SIZE=$ENV_PG_WAL_KEEP_SIZE
 
 # Observability retention + Falco cap (operator-tunable; compose falls
-# back to the same defaults when unset, but persisting them here makes
-# .env the single record and lets small hosts pin 7d without compose edits).
-PROMETHEUS_RETENTION=${PROMETHEUS_RETENTION:-30d}
-LOKI_RETENTION=${LOKI_RETENTION:-30d}
+# back to defaults when unset; 7d on <12GB hosts, 30d on >=12GB).
+PROMETHEUS_RETENTION=$ENV_PROMETHEUS_RETENTION
+LOKI_RETENTION=$ENV_LOKI_RETENTION
 FALCO_MEMORY_LIMIT=${FALCO_MEMORY_LIMIT:-1024M}
 
 # The installer runs first-boot Django setup explicitly after the stack starts.
@@ -26290,6 +29250,14 @@ _harden_crowdsec_bootstrap() {
     # attaches the middleware to user routers.
     _harden_crowdsec_traefik_plugin_gate
     [ "${NODE_CROWDSEC:-1}" = "1" ] || { _harden_log info "crowdsec skipped (NODE_CROWDSEC=0)"; return 0; }
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _cs_tier=""
+        _cs_tier="$(_harden_stack_tier)"
+        if [ "$_cs_tier" = "lite" ]; then
+            _harden_log info "crowdsec skipped (STACK_TIER=lite)"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
@@ -26310,9 +29278,10 @@ _harden_crowdsec_bootstrap() {
         # starts crowdsec right after .env is ready, and verify converges it.
         return 0
     fi
-    docker compose \
+    timeout 120 docker compose \
         "${env_args[@]}" \
         -f "$_cf" \
+        --profile medium \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
         docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$' && break
@@ -26565,9 +29534,9 @@ _harden_crowdsec_cloudflare_bouncer() {
     _cf="$(_harden_crowdsec_compose_file)"
     local _up_rc=1
     if [ "$_prev_hash" != "$_new_hash" ]; then
-        docker compose "${env_args[@]}" -f "$_cf" up -d --force-recreate --no-deps crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
+        timeout 120 docker compose "${env_args[@]}" -f "$_cf" --profile medium up -d --force-recreate --no-deps crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
     else
-        docker compose "${env_args[@]}" -f "$_cf" up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
+        timeout 120 docker compose "${env_args[@]}" -f "$_cf" --profile medium up -d crowdsec-cloudflare-bouncer >/dev/null 2>&1 && _up_rc=0 || _up_rc=1
     fi
     if [ "$_up_rc" = "0" ]; then
         _harden_log ok "cloudflare bouncer running (edge enforcement)"
@@ -26578,6 +29547,14 @@ _harden_crowdsec_cloudflare_bouncer() {
 
 _harden_crowdsec_verify() {
     [ "${NODE_CROWDSEC:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _cs_tier=""
+        _cs_tier="$(_harden_stack_tier)"
+        if [ "$_cs_tier" = "lite" ]; then
+            _harden_log info "crowdsec skipped (STACK_TIER=lite)"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(smsly-crowdsec|smsly-hosting-crowdsec-1)$'; then
         _harden_log warn "crowdsec — container not running"
@@ -26646,9 +29623,7 @@ load_install_env_defaults "$INSTALL_DIR/.env"
 
 # Ensure all variables in .env are exported to the environment so they are inherited by docker compose
 if [ -f "$INSTALL_DIR/.env" ]; then
-    set -a
-    source "$INSTALL_DIR/.env"
-    set +a
+    env_load_file_safe "$INSTALL_DIR/.env"
 fi
 # --- end lib/fresh_config.sh ---
 # --- lib/fresh_deploy.sh ---
@@ -26729,8 +29704,8 @@ if command -v docker ; then
     # Caddy container runs as uid 1000 (nextjs user); chown the volume
     # root so the container can read/write its ACME state. Same pattern
     # already used for backups_data in ensure_infrastructure_permissions.
-    if docker volume inspect smsly-hosting_caddy_data ; then
-        docker run --rm -v smsly-hosting_caddy_data:/data alpine chown -R 1000:1000 /data  || true
+    if docker volume inspect smsly-hosting_caddy_data >/dev/null 2>&1; then
+        timeout 90 docker run --rm -v smsly-hosting_caddy_data:/data alpine chown -R 1000:1000 /data  || true
     fi
 fi
 
@@ -26774,7 +29749,8 @@ _regen_registry_tls() {
     mv "${_tmp_dir}/registry.key" "$INSTALL_DIR/certs/registry.key"
     mv "${_tmp_dir}/registry.crt" "$INSTALL_DIR/certs/registry.crt"
     rm -rf "$_tmp_dir"
-    chmod 644 "$INSTALL_DIR/certs/registry.crt" "$INSTALL_DIR/certs/registry.key"
+    chmod 644 "$INSTALL_DIR/certs/registry.crt"
+    chmod 600 "$INSTALL_DIR/certs/registry.key"
 }
 
 _registry_tls_ok() {
@@ -26965,7 +29941,7 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
         if command -v trivy ; then
             echo -e "${BLUE}  → Scanning built images for vulnerabilities...${NC}"
             for _trivy_img in backend frontend; do
-                _trivy_tag="smsly/${_trivy_img}:latest"
+                _trivy_tag="smsly-hosting-${_trivy_img}:latest"
                 if docker image inspect "$_trivy_tag" ; then
                     echo -e "${BLUE}    ↳ Scanning $_trivy_tag...${NC}"
                     trivy image --insecure --scanners vuln --severity CRITICAL,HIGH --exit-code 0 --no-progress "$_trivy_tag"  || echo -e "${YELLOW}    ⚠ $_trivy_tag scan reported warnings — review output above${NC}"
@@ -26987,22 +29963,33 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
         docker compose -f "$COMPOSE_FILE" logs --tail=120  || true
         exit "$DEPLOY_RC"
     fi
-    if is_node_mode && command -v docker >/dev/null 2>&1; then
-        # Node mode skips fresh_caddy, so newly created caddy_data/caddy_logs
-        # named volumes stay root-owned while caddy runs as uid 1000.
+    if command -v docker >/dev/null 2>&1; then
         _nv=""
         _caddy_fixed=false
-        for _nv in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)(caddy_data|caddy_logs)$' || true); do
+        _caddy_pat='(^|_)(caddy_data|caddy_logs)$'
+        if is_node_mode; then
+            _caddy_pat='(^|_)(caddy_data|caddy_logs|caddy_config)$'
+        fi
+        for _nv in $(docker volume ls -q 2>/dev/null | grep -E "$_caddy_pat" || true); do
             timeout 60 docker run --rm -v "${_nv}:/data" alpine chown -R 1000:1000 /data >/dev/null 2>&1 && _caddy_fixed=true || true
         done
-        if [ "$_caddy_fixed" = "true" ]; then
-            docker compose -f "$COMPOSE_FILE" restart caddy >/dev/null 2>&1 || true
+        if is_node_mode && [ "$_caddy_fixed" = "true" ]; then
+            timeout 60 docker compose -f "$COMPOSE_FILE" restart caddy >/dev/null 2>&1 || true
         fi
-        unset _nv _caddy_fixed
+        for _nv in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)postgres-archive$' || true); do
+            timeout 60 docker run --rm -v "${_nv}:/data" alpine chown -R 70:70 /data >/dev/null 2>&1 || true
+        done
+        for _nv in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)verdaccio_data$' || true); do
+            timeout 60 docker run --rm -v "${_nv}:/data" alpine chown -R 10001:65533 /data >/dev/null 2>&1 || true
+        done
+        unset _nv _caddy_fixed _caddy_pat
     fi
+    _deploy_tier="${STACK_TIER:-}"
+    [ -n "$_deploy_tier" ] || _deploy_tier="$(env_get_value "$INSTALL_DIR/.env" "STACK_TIER" || true)"
+    [ -n "$_deploy_tier" ] || _deploy_tier="full"
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         sync_agent_lite_rabbitmq_password
-    else
+    elif [ "$_deploy_tier" != "lite" ]; then
         echo -e "${BLUE}  → Deploying Observability Stack...${NC}"
         # Ensure entrypoint.sh has execute permissions (git may not preserve +x)
         chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh  || true
@@ -27017,18 +30004,18 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
             docker compose -f infrastructure/docker/docker-compose.observability.yml up -d --pull always || \
                 echo -e "${YELLOW}  ⚠ Observability stack start failed (non-fatal)${NC}"
         fi
+    else
+        echo -e "${BLUE}  → Skipping Observability Stack (STACK_TIER=lite)${NC}"
     fi
     # ─── Build-cache services (apt-cacher-ng, verdaccio) ─────────────
-    # These are profile-gated in compose (full/build-cache) so a plain
-    # `up` never starts them — start explicitly by name (profile-proof,
-    # no --remove-orphans). They provide package caches on the platform
-    # network for builds configured to use a proxy; builds without
-    # proxy settings are unaffected. Non-fatal by design.
-    if [ "$MODE_AGENT_LITE" != "true" ]; then
+    # These are profile-gated in compose (full) so a plain `up` never
+    # starts them on lite/medium hosts — start explicitly on full only.
+    if [ "$MODE_AGENT_LITE" != "true" ] && [ "$_deploy_tier" = "full" ]; then
         echo -e "${BLUE}  → Starting build-cache services (apt-cacher, verdaccio)...${NC}"
-        timeout -k 5 240 docker compose -f "$COMPOSE_FILE" up -d apt-cacher verdaccio 2>&1 | tail -3 || \
+        timeout -k 5 240 docker compose -f "$COMPOSE_FILE" --profile full up -d apt-cacher verdaccio 2>&1 | tail -3 || \
             echo -e "${YELLOW}  ⚠ Build-cache services start failed (non-fatal)${NC}"
     fi
+    unset _deploy_tier
     # ─── Egress mirror (Alpine CDN rewrite for blocked networks) ───
     # Nixpacks app builds run `apk add` against dl-cdn.alpinelinux.org
     # with no mirror flag; on networks where that CDN is unreachable
@@ -27186,9 +30173,22 @@ ensure_egress_mirror() {
     # nothing listens (UFW DROPs it: silent blackhole). Builds run on
     # docker0, so scoping loses nothing.
     _docker_steer_src="$(_docker0_gateway | cut -d. -f1-2).0.0/16"
-    if ! iptables -t nat -C PREROUTING -s "$_docker_steer_src" -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
-        iptables -t nat -A PREROUTING -s "$_docker_steer_src" -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || \
+    # Exclude link-local metadata, loopback, CGNAT, and RFC1918 destinations from the
+    # PREROUTING steer so container-to-container / metadata / mesh HTTP is never hijacked.
+    local _bypass_cidrs="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10"
+    for _cidr in $_bypass_cidrs; do
+        if ! iptables -t nat -C PREROUTING -s "$_docker_steer_src" -d "$_cidr" -p tcp --dport 80 -j RETURN >/dev/null 2>&1; then
+            iptables -t nat -I PREROUTING 1 -s "$_docker_steer_src" -d "$_cidr" -p tcp --dport 80 -j RETURN 2>/dev/null || \
+                _egress_warn "PREROUTING local bypass failed for $_cidr"
+        fi
+    done
+    if ! iptables -t nat -C PREROUTING -s "$_docker_steer_src" ! -d 169.254.0.0/16 -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
+        iptables -t nat -A PREROUTING -s "$_docker_steer_src" ! -d 169.254.0.0/16 -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || \
             _egress_warn "PREROUTING rule install failed"
+    fi
+    # Converge: remove legacy PREROUTING steers without the 169.254.0.0/16 exclusion.
+    if iptables -t nat -C PREROUTING -s "$_docker_steer_src" -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" >/dev/null 2>&1; then
+        iptables -t nat -D PREROUTING -s "$_docker_steer_src" -p tcp --dport 80 -j REDIRECT --to-port "$SMSLY_EGRESS_MIRROR_PORT" 2>/dev/null || true
     fi
     # Converge: remove the legacy unscoped steer if present (it hijacked
     # :80 from EVERY bridge, including mesh and project networks).
@@ -27208,12 +30208,38 @@ ensure_egress_mirror() {
     # passing through (2026-10-05: node :8081 always nginx-502 while
     # container-path traffic was fine). RETURNs are inserted ahead of
     # the REDIRECT above; internet egress still steers.
-    for _cidr in 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+    for _cidr in $_bypass_cidrs; do
         if ! iptables -t nat -C OUTPUT -d "$_cidr" -p tcp --dport 80 -j RETURN >/dev/null 2>&1; then
             iptables -t nat -I OUTPUT 2 -d "$_cidr" -p tcp --dport 80 -j RETURN 2>/dev/null || \
                 _egress_warn "OUTPUT local bypass failed for $_cidr"
         fi
     done
+
+    # Kernel-level SSRF defense: block nginx ($_nginx_user) from reaching
+    # loopback, RFC1918, link-local/metadata, CGNAT, or 0.0.0.0/8 destinations
+    # even via DNS rebinding. Permit UDP/TCP :53 to local systemd-resolved
+    # (127.0.0.53) first so dl-cdn DNS resolution keeps working.
+    # Insert at top of OUTPUT (ahead of UFW chains) so UFW's broad OUTPUT
+    # rules never short-circuit past the SSRF DROPs.
+    if ! iptables -C OUTPUT -m owner --uid-owner "$_nginx_user" -d 127.0.0.53/32 -p udp --dport 53 -j ACCEPT >/dev/null 2>&1; then
+        iptables -I OUTPUT 1 -m owner --uid-owner "$_nginx_user" -d 127.0.0.53/32 -p udp --dport 53 -j ACCEPT 2>/dev/null || true
+    fi
+    if ! iptables -C OUTPUT -m owner --uid-owner "$_nginx_user" -d 127.0.0.53/32 -p tcp --dport 53 -j ACCEPT >/dev/null 2>&1; then
+        iptables -I OUTPUT 2 -m owner --uid-owner "$_nginx_user" -d 127.0.0.53/32 -p tcp --dport 53 -j ACCEPT 2>/dev/null || true
+    fi
+    for _ssrf_cidr in 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 0.0.0.0/8; do
+        if ! iptables -C OUTPUT -m owner --uid-owner "$_nginx_user" -d "$_ssrf_cidr" -j DROP >/dev/null 2>&1; then
+            iptables -I OUTPUT 3 -m owner --uid-owner "$_nginx_user" -d "$_ssrf_cidr" -j DROP 2>/dev/null || \
+                _egress_warn "OUTPUT SSRF filter drop failed for $_ssrf_cidr"
+        fi
+    done
+    if command -v ip6tables >/dev/null 2>&1; then
+        for _ssrf_v6 in ::1/128 fc00::/7 fe80::/10; do
+            if ! ip6tables -C OUTPUT -m owner --uid-owner "$_nginx_user" -d "$_ssrf_v6" -j DROP >/dev/null 2>&1; then
+                ip6tables -I OUTPUT 1 -m owner --uid-owner "$_nginx_user" -d "$_ssrf_v6" -j DROP 2>/dev/null || true
+            fi
+        done
+    fi
 
     # 4. End-to-end proof through the shim (host path). A container-path
     # proof runs separately before unblocking app builds.
@@ -27524,9 +30550,221 @@ fi
 # ─── Sync DB password to match .env (handles volume from previous install) ──
 # The DB volume persists with the password from FIRST init.
 # Always reset the password inside PostgreSQL to match the current .env.
-set -a
-source "$INSTALL_DIR/.env"  || true
-set +a
+if command -v env_load_file_safe >/dev/null 2>&1; then
+    env_load_file_safe "$INSTALL_DIR/.env" || true
+elif [ -f "$INSTALL_DIR/lib/env.sh" ]; then
+    # shellcheck source=lib/env.sh
+# --- lib/env.sh ---
+gen_hex_secret() {
+    local bytes="${1:-16}"
+    python3 -c "import secrets; print(secrets.token_hex(${bytes}))"  || openssl rand -hex "$bytes"
+}
+
+env_load_file_safe() {
+    local env_file="${1:-}"
+    [ -f "$env_file" ] || return 0
+    local _line="" _key="" _val=""
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        _line="${_line%$'\r'}"
+        [[ -z "$_line" || "$_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$_line" == export[[:space:]]* ]] && _line="${_line#export }"
+        [[ "$_line" == *=* ]] || continue
+        _key="${_line%%=*}"
+        _key="${_key#"${_key%%[![:space:]]*}"}"
+        _key="${_key%"${_key##*[![:space:]]}"}"
+        [[ "$_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        _val="${_line#*=}"
+        if [[ "$_val" == \"*\" && "$_val" == *\" && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+            _val="${_val//\\\"/\"}"
+            _val="${_val//\\\$/\$}"
+            _val="${_val//\\\`/\`}"
+            _val="${_val//\\\\/\\}"
+        elif [[ "$_val" == \'*\' && "$_val" == *\' && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+        fi
+        export "$_key=$_val"
+    done < "$env_file"
+}
+
+env_get_value() {
+    local env_file="$1"
+    local var_name="$2"
+    grep -m1 "^${var_name}=" "$env_file"  | cut -d= -f2- | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//' || true
+}
+
+env_set_value() {
+    local env_file="$1"
+    local var_name="$2"
+    local var_value="$3"
+    python3 - "$env_file" "$var_name" "$var_value" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+prefix = f"{key}="
+
+def _format_val(val: str) -> str:
+    if val == "":
+        return ""
+    if any(c.isspace() or c in '#$`\\"\'&;|<>()*?[]~!' for c in val):
+        escaped = val.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
+        return f'"{escaped}"'
+    return val
+
+formatted = _format_val(value)
+
+if not env_path.exists():
+    env_path.write_text(f"{key}={formatted}\n")
+    sys.exit(0)
+
+lines = env_path.read_text().splitlines()
+updated = []
+found = False
+
+for line in lines:
+    if line.startswith(prefix):
+        if not found:
+            updated.append(f"{key}={formatted}")
+            found = True
+        # Skip any subsequent duplicates
+        continue
+    updated.append(line)
+
+if not found:
+    updated.append(f"{key}={formatted}")
+
+env_path.write_text("\n".join(updated) + "\n")
+PY
+}
+
+sanitize_node_identifier() {
+    local value="${1:-}"
+    value="$(printf '%s' "$value" | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+    if [ -z "$value" ]; then
+        value="$(hostname  | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+    fi
+    [ -n "$value" ] || value="agent"
+    printf '%s' "$value"
+}
+
+env_append_csv_values() {
+    local env_file="$1"
+    local var_name="$2"
+    shift 2
+
+    python3 - "$env_file" "$var_name" "$@" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+requested = [value.strip() for value in sys.argv[3:] if value.strip()]
+prefix = f"{key}="
+
+lines = env_path.read_text().splitlines() if env_path.exists() else []
+updated = []
+found = False
+changed = False
+
+for line in lines:
+    if line.startswith(prefix):
+        if not found:
+            values = [value.strip() for value in line[len(prefix):].split(",") if value.strip()]
+            seen = {value.lower() for value in values}
+            for value in requested:
+                if value.lower() not in seen:
+                    values.append(value)
+                    seen.add(value.lower())
+                    changed = True
+            updated.append(f"{key}={','.join(values)}")
+            found = True
+        else:
+            changed = True
+        continue
+    updated.append(line)
+
+if not found:
+    updated.append(f"{key}={','.join(requested)}")
+    changed = True
+
+if changed:
+    env_path.write_text("\n".join(updated) + "\n")
+
+print("changed" if changed else "unchanged")
+PY
+}
+
+sync_env_domain_allowlists() {
+    local env_file="$1"
+    local domain="${2:-}"
+    local public_ip="${3:-}"
+    local changed=false
+    local result=""
+    local allowed_hosts=("localhost" "127.0.0.1" "backend" "smsly-hosting-backend-1")
+    local csrf_origins=("http://localhost:8090")
+    local cors_origins=("http://localhost:8090")
+
+    [ -f "$env_file" ] || return 0
+
+    [ -n "$domain" ] || domain="$(env_get_value "$env_file" "DOMAIN")"
+    [ -n "$public_ip" ] || public_ip="$(env_get_value "$env_file" "PUBLIC_IP")"
+
+    if [ -n "$domain" ]; then
+        allowed_hosts+=("$domain")
+        csrf_origins+=("https://${domain}" "http://${domain}")
+        cors_origins+=("https://${domain}" "http://${domain}")
+    fi
+
+    if [ -n "$public_ip" ]; then
+        allowed_hosts+=("$public_ip")
+        csrf_origins+=("http://${public_ip}:8090" "http://${public_ip}")
+        cors_origins+=("http://${public_ip}:8090" "http://${public_ip}")
+    fi
+
+    # Automatically add all node IPs (including WireGuard VPN mesh IPs like 10.100.x.x)
+    local current_ips
+    current_ips="$(hostname -I  | tr -s ' ' '\n' | grep -v '^$' || true)"
+    if [ -n "$current_ips" ]; then
+        for ip in $current_ips; do
+            allowed_hosts+=("$ip")
+            csrf_origins+=("http://${ip}:8090" "http://${ip}" "https://${ip}")
+            cors_origins+=("http://${ip}:8090" "http://${ip}" "https://${ip}")
+        done
+    fi
+
+    result="$(env_append_csv_values "$env_file" "ALLOWED_HOSTS" "${allowed_hosts[@]}")"
+    [ "$result" = "changed" ] && changed=true
+    result="$(env_append_csv_values "$env_file" "CSRF_TRUSTED_ORIGINS" "${csrf_origins[@]}")"
+    [ "$result" = "changed" ] && changed=true
+    result="$(env_append_csv_values "$env_file" "CORS_ALLOWED_ORIGINS" "${cors_origins[@]}")"
+    [ "$result" = "changed" ] && changed=true
+
+    if [ "$changed" = true ]; then
+        echo -e "${GREEN}  ✓ Synced domain allowlists in .env${NC}"
+    fi
+}
+
+env_ensure_var() {
+    local env_file="$1"
+    local var_name="$2"
+    local var_value="$3"
+    local var_comment="${4:-}"
+    local current_val
+    current_val="$(env_get_value "$env_file" "$var_name")"
+
+    if [ -z "$current_val" ]; then
+        echo -e "${BLUE}  -> Setting $var_name in .env${NC}"
+        [ -n "$var_comment" ] && ! grep -q "# $var_comment" "$env_file"  && echo "# $var_comment" >> "$env_file"
+        env_set_value "$env_file" "$var_name" "$var_value"
+        echo -e "${GREEN}  OK $var_name set${NC}"
+    fi
+}
+# --- end lib/env.sh ---
+    env_load_file_safe "$INSTALL_DIR/.env" || true
+fi
 # SQL-escape the password (single quotes doubled) — custom .env passwords
 # may contain quotes that would otherwise break the ALTER USER statement.
 _db_pw_escaped="${POSTGRES_PASSWORD//\'/\'\'}"
@@ -27759,6 +30997,33 @@ gen_hex_secret() {
     python3 -c "import secrets; print(secrets.token_hex(${bytes}))"  || openssl rand -hex "$bytes"
 }
 
+env_load_file_safe() {
+    local env_file="${1:-}"
+    [ -f "$env_file" ] || return 0
+    local _line="" _key="" _val=""
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        _line="${_line%$'\r'}"
+        [[ -z "$_line" || "$_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$_line" == export[[:space:]]* ]] && _line="${_line#export }"
+        [[ "$_line" == *=* ]] || continue
+        _key="${_line%%=*}"
+        _key="${_key#"${_key%%[![:space:]]*}"}"
+        _key="${_key%"${_key##*[![:space:]]}"}"
+        [[ "$_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        _val="${_line#*=}"
+        if [[ "$_val" == \"*\" && "$_val" == *\" && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+            _val="${_val//\\\"/\"}"
+            _val="${_val//\\\$/\$}"
+            _val="${_val//\\\`/\`}"
+            _val="${_val//\\\\/\\}"
+        elif [[ "$_val" == \'*\' && "$_val" == *\' && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+        fi
+        export "$_key=$_val"
+    done < "$env_file"
+}
+
 env_get_value() {
     local env_file="$1"
     local var_name="$2"
@@ -27778,8 +31043,18 @@ key = sys.argv[2]
 value = sys.argv[3]
 prefix = f"{key}="
 
+def _format_val(val: str) -> str:
+    if val == "":
+        return ""
+    if any(c.isspace() or c in '#$`\\"\'&;|<>()*?[]~!' for c in val):
+        escaped = val.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
+        return f'"{escaped}"'
+    return val
+
+formatted = _format_val(value)
+
 if not env_path.exists():
-    env_path.write_text(f"{key}={value}\n")
+    env_path.write_text(f"{key}={formatted}\n")
     sys.exit(0)
 
 lines = env_path.read_text().splitlines()
@@ -27789,14 +31064,14 @@ found = False
 for line in lines:
     if line.startswith(prefix):
         if not found:
-            updated.append(f"{key}={value}")
+            updated.append(f"{key}={formatted}")
             found = True
         # Skip any subsequent duplicates
         continue
     updated.append(line)
 
 if not found:
-    updated.append(f"{key}={value}")
+    updated.append(f"{key}={formatted}")
 
 env_path.write_text("\n".join(updated) + "\n")
 PY
@@ -27936,6 +31211,215 @@ NC='\033[0m'
 export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
 export NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}"
 # --- end lib/logging.sh ---
+# --- lib/env.sh ---
+gen_hex_secret() {
+    local bytes="${1:-16}"
+    python3 -c "import secrets; print(secrets.token_hex(${bytes}))"  || openssl rand -hex "$bytes"
+}
+
+env_load_file_safe() {
+    local env_file="${1:-}"
+    [ -f "$env_file" ] || return 0
+    local _line="" _key="" _val=""
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        _line="${_line%$'\r'}"
+        [[ -z "$_line" || "$_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$_line" == export[[:space:]]* ]] && _line="${_line#export }"
+        [[ "$_line" == *=* ]] || continue
+        _key="${_line%%=*}"
+        _key="${_key#"${_key%%[![:space:]]*}"}"
+        _key="${_key%"${_key##*[![:space:]]}"}"
+        [[ "$_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        _val="${_line#*=}"
+        if [[ "$_val" == \"*\" && "$_val" == *\" && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+            _val="${_val//\\\"/\"}"
+            _val="${_val//\\\$/\$}"
+            _val="${_val//\\\`/\`}"
+            _val="${_val//\\\\/\\}"
+        elif [[ "$_val" == \'*\' && "$_val" == *\' && ${#_val} -ge 2 ]]; then
+            _val="${_val:1:${#_val}-2}"
+        fi
+        export "$_key=$_val"
+    done < "$env_file"
+}
+
+env_get_value() {
+    local env_file="$1"
+    local var_name="$2"
+    grep -m1 "^${var_name}=" "$env_file"  | cut -d= -f2- | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//' || true
+}
+
+env_set_value() {
+    local env_file="$1"
+    local var_name="$2"
+    local var_value="$3"
+    python3 - "$env_file" "$var_name" "$var_value" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+prefix = f"{key}="
+
+def _format_val(val: str) -> str:
+    if val == "":
+        return ""
+    if any(c.isspace() or c in '#$`\\"\'&;|<>()*?[]~!' for c in val):
+        escaped = val.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
+        return f'"{escaped}"'
+    return val
+
+formatted = _format_val(value)
+
+if not env_path.exists():
+    env_path.write_text(f"{key}={formatted}\n")
+    sys.exit(0)
+
+lines = env_path.read_text().splitlines()
+updated = []
+found = False
+
+for line in lines:
+    if line.startswith(prefix):
+        if not found:
+            updated.append(f"{key}={formatted}")
+            found = True
+        # Skip any subsequent duplicates
+        continue
+    updated.append(line)
+
+if not found:
+    updated.append(f"{key}={formatted}")
+
+env_path.write_text("\n".join(updated) + "\n")
+PY
+}
+
+sanitize_node_identifier() {
+    local value="${1:-}"
+    value="$(printf '%s' "$value" | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+    if [ -z "$value" ]; then
+        value="$(hostname  | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+    fi
+    [ -n "$value" ] || value="agent"
+    printf '%s' "$value"
+}
+
+env_append_csv_values() {
+    local env_file="$1"
+    local var_name="$2"
+    shift 2
+
+    python3 - "$env_file" "$var_name" "$@" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+requested = [value.strip() for value in sys.argv[3:] if value.strip()]
+prefix = f"{key}="
+
+lines = env_path.read_text().splitlines() if env_path.exists() else []
+updated = []
+found = False
+changed = False
+
+for line in lines:
+    if line.startswith(prefix):
+        if not found:
+            values = [value.strip() for value in line[len(prefix):].split(",") if value.strip()]
+            seen = {value.lower() for value in values}
+            for value in requested:
+                if value.lower() not in seen:
+                    values.append(value)
+                    seen.add(value.lower())
+                    changed = True
+            updated.append(f"{key}={','.join(values)}")
+            found = True
+        else:
+            changed = True
+        continue
+    updated.append(line)
+
+if not found:
+    updated.append(f"{key}={','.join(requested)}")
+    changed = True
+
+if changed:
+    env_path.write_text("\n".join(updated) + "\n")
+
+print("changed" if changed else "unchanged")
+PY
+}
+
+sync_env_domain_allowlists() {
+    local env_file="$1"
+    local domain="${2:-}"
+    local public_ip="${3:-}"
+    local changed=false
+    local result=""
+    local allowed_hosts=("localhost" "127.0.0.1" "backend" "smsly-hosting-backend-1")
+    local csrf_origins=("http://localhost:8090")
+    local cors_origins=("http://localhost:8090")
+
+    [ -f "$env_file" ] || return 0
+
+    [ -n "$domain" ] || domain="$(env_get_value "$env_file" "DOMAIN")"
+    [ -n "$public_ip" ] || public_ip="$(env_get_value "$env_file" "PUBLIC_IP")"
+
+    if [ -n "$domain" ]; then
+        allowed_hosts+=("$domain")
+        csrf_origins+=("https://${domain}" "http://${domain}")
+        cors_origins+=("https://${domain}" "http://${domain}")
+    fi
+
+    if [ -n "$public_ip" ]; then
+        allowed_hosts+=("$public_ip")
+        csrf_origins+=("http://${public_ip}:8090" "http://${public_ip}")
+        cors_origins+=("http://${public_ip}:8090" "http://${public_ip}")
+    fi
+
+    # Automatically add all node IPs (including WireGuard VPN mesh IPs like 10.100.x.x)
+    local current_ips
+    current_ips="$(hostname -I  | tr -s ' ' '\n' | grep -v '^$' || true)"
+    if [ -n "$current_ips" ]; then
+        for ip in $current_ips; do
+            allowed_hosts+=("$ip")
+            csrf_origins+=("http://${ip}:8090" "http://${ip}" "https://${ip}")
+            cors_origins+=("http://${ip}:8090" "http://${ip}" "https://${ip}")
+        done
+    fi
+
+    result="$(env_append_csv_values "$env_file" "ALLOWED_HOSTS" "${allowed_hosts[@]}")"
+    [ "$result" = "changed" ] && changed=true
+    result="$(env_append_csv_values "$env_file" "CSRF_TRUSTED_ORIGINS" "${csrf_origins[@]}")"
+    [ "$result" = "changed" ] && changed=true
+    result="$(env_append_csv_values "$env_file" "CORS_ALLOWED_ORIGINS" "${cors_origins[@]}")"
+    [ "$result" = "changed" ] && changed=true
+
+    if [ "$changed" = true ]; then
+        echo -e "${GREEN}  ✓ Synced domain allowlists in .env${NC}"
+    fi
+}
+
+env_ensure_var() {
+    local env_file="$1"
+    local var_name="$2"
+    local var_value="$3"
+    local var_comment="${4:-}"
+    local current_val
+    current_val="$(env_get_value "$env_file" "$var_name")"
+
+    if [ -z "$current_val" ]; then
+        echo -e "${BLUE}  -> Setting $var_name in .env${NC}"
+        [ -n "$var_comment" ] && ! grep -q "# $var_comment" "$env_file"  && echo "# $var_comment" >> "$env_file"
+        env_set_value "$env_file" "$var_name" "$var_value"
+        echo -e "${GREEN}  OK $var_name set${NC}"
+    fi
+}
+# --- end lib/env.sh ---
 # --- lib/validation.sh ---
 is_valid_ipv4() {
     local ip="$1"
@@ -28093,7 +31577,13 @@ configure_docker_mirror() {
         local new
         new="$(cat /etc/docker/daemon.json  || echo '')"
         if [ "$prev" != "$new" ]; then
-            systemctl restart docker || true
+            local _smsly_ctrs=0
+            _smsly_ctrs="$(docker ps -q --filter "name=smsly-" 2>/dev/null | wc -l || echo 0)"
+            if [ "${_smsly_ctrs:-0}" -eq 0 ]; then
+                timeout 120 systemctl restart docker || true
+            else
+                echo -e "${YELLOW}  ⚠ Docker daemon config changed but $_smsly_ctrs SMSLY containers are running — deferring restart${NC}"
+            fi
         fi
     fi
 
@@ -28394,13 +31884,29 @@ ensure_infrastructure_permissions() {
     [ -f "$coredns_config_dir/mesh.hosts" ] && chmod 664 "$coredns_config_dir/mesh.hosts" || true
 
     if command -v docker ; then
-        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(backups_data|caddy_data|caddy_logs)$')"
+        local _vol_pattern='(^|_)(backups_data|caddy_data|caddy_logs)$'
+        if is_node_mode; then
+            _vol_pattern='(^|_)(backups_data|caddy_data|caddy_logs|caddy_config)$'
+        fi
+        _vol_names="$(docker volume ls -q 2>/dev/null | grep -E "$_vol_pattern" || true)"
         for vol in ${_vol_names:-backups_data}; do
             if docker volume inspect "$vol" >/dev/null 2>&1; then
                 echo -e "${BLUE}     ↳ Setting permissions for volume: $vol...${NC}"
                 timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             else
                 echo -e "${YELLOW}     ⚠ $vol volume not found — skipping chown${NC}"
+            fi
+        done
+        for vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)postgres-archive$' || true); do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
+                echo -e "${BLUE}     ↳ Setting permissions for volume: $vol (70:70)...${NC}"
+                timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 70:70 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
+            fi
+        done
+        for vol in $(docker volume ls -q 2>/dev/null | grep -E '(^|_)verdaccio_data$' || true); do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
+                echo -e "${BLUE}     ↳ Setting permissions for volume: $vol (10001:65533)...${NC}"
+                timeout 90 docker run --rm -v "${vol}:/data" alpine chown -R 10001:65533 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             fi
         done
     fi
@@ -28856,11 +32362,18 @@ refresh_runtime_services() {
         reload_container_caddy  || true
     fi
 
-    if [ "$MODE_AGENT_LITE" != "true" ]; then
+    local _refresh_tier="${STACK_TIER:-}"
+    if [ -z "$_refresh_tier" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        _refresh_tier="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "STACK_TIER" || true)"
+    fi
+    [ -n "$_refresh_tier" ] || _refresh_tier="full"
+    if [ "$MODE_AGENT_LITE" != "true" ] && [ "$_refresh_tier" != "lite" ]; then
         echo -e "${BLUE}  → Refreshing Observability Stack...${NC}"
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
-            docker compose -f infrastructure/docker/docker-compose.observability.yml pull || echo -e "${YELLOW}    ⚠ Observability pull failed${NC}"
-            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d || echo -e "${YELLOW}    ⚠ Observability up failed${NC}"
+            local _obs_env_args=()
+            [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && _obs_env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
+            timeout 300 docker compose "${_obs_env_args[@]}" -f infrastructure/docker/docker-compose.observability.yml pull || echo -e "${YELLOW}    ⚠ Observability pull failed${NC}"
+            timeout 300 docker compose "${_obs_env_args[@]}" -f infrastructure/docker/docker-compose.observability.yml up -d || echo -e "${YELLOW}    ⚠ Observability up failed${NC}"
             for obs_ctr in smsly-loki smsly-promtail smsly-prometheus smsly-cadvisor smsly-node-exporter smsly-grafana; do
                 i=0
                 while [ $i -lt 30 ]; do
@@ -29377,7 +32890,27 @@ ensure_compose_profiles() {
             return 0
         fi
     fi
-    export COMPOSE_PROFILES="local-ha,medium,full"
+    local tier="${STACK_TIER:-}"
+    if [ -z "$tier" ] && [ -f "$env_file" ]; then
+        tier="$(grep -E '^STACK_TIER=' "$env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]')"
+    fi
+    if [ -z "$tier" ]; then
+        local ram_mb=""
+        ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+        [ -n "$ram_mb" ] || ram_mb=8192
+        if [ "$ram_mb" -lt 6144 ]; then
+            tier="lite"
+        elif [ "$ram_mb" -lt 12288 ]; then
+            tier="medium"
+        else
+            tier="full"
+        fi
+    fi
+    case "$tier" in
+        lite)   export COMPOSE_PROFILES="local-ha" ;;
+        medium) export COMPOSE_PROFILES="local-ha,local-ha-replica,redis-ha,medium" ;;
+        *)      export COMPOSE_PROFILES="local-ha,local-ha-replica,redis-ha,medium,full,appsec" ;;
+    esac
 }
 
 acquire_install_lock() {
@@ -29442,7 +32975,7 @@ get_migration_database_alias() {
 
 diagnose_migration_locks() {
     local env_file="${INSTALL_DIR:-.}/.env"
-    [ -f "$env_file" ] && source "$env_file"  || true
+    env_load_file_safe "$env_file"
 
     echo -e "${YELLOW}  -> PostgreSQL activity snapshot (lock diagnosis):${NC}"
     timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T \
@@ -29586,9 +33119,8 @@ EOF
 reload_container_caddy() {
     should_manage_caddy || return 0
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    if command -v docker  && docker compose -f "$compose_f" ps -q caddy  | grep -q .; then
+    if command -v docker >/dev/null 2>&1 && docker compose -f "$compose_f" ps -q caddy  | grep -q .; then
         timeout -k 5 20 docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile < /dev/null || \
-            timeout -k 5 20 docker compose -f "$compose_f" restart caddy || \
             echo -e "${YELLOW}    ⚠ Caddy reload failed${NC}"
     fi
 }
@@ -29788,15 +33320,128 @@ sync_agent_lite_rabbitmq_password() {
 
 ensure_security_tools() {
     export PATH="/usr/local/bin:$PATH"
-    if ! command -v trivy  && [ ! -x "/usr/local/bin/trivy" ]; then
-        echo -e "${BLUE}  → Installing Trivy vulnerability scanner...${NC}"
-        curl -sfL --connect-timeout 15 --max-time 120 https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin  || true
+    if ! declare -F _harden_log >/dev/null 2>&1; then
+        _harden_log() {
+            local level="$1"; shift
+            case "$level" in
+                ok)   echo -e "${GREEN:-}  ✓ [harden] $*${NC:-}" ;;
+                warn) echo -e "${YELLOW:-}  ⚠ [harden] $*${NC:-}" ;;
+                err)  echo -e "${RED:-}  ✗ [harden] $*${NC:-}" ;;
+                info) echo -e "${BLUE:-}  → [harden] $*${NC:-}" ;;
+            esac
+        }
     fi
-    if ! command -v cosign  && [ ! -x "/usr/local/bin/cosign" ]; then
-        echo -e "${BLUE}  → Installing Cosign image attestation utility...${NC}"
-        local cosign_arch
-        cosign_arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
-        curl -sfL --connect-timeout 15 --max-time 120 -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${cosign_arch}"  && chmod +x /usr/local/bin/cosign || true
+    if ! declare -F _harden_trivy_bootstrap >/dev/null 2>&1; then
+        if [ -f "${_SCRIPT_DIR:-${INSTALL_DIR:-/opt/smsly-hosting}/lib}/harden_trivy.sh" ]; then
+# --- lib/harden_trivy.sh ---
+#!/bin/bash
+
+_harden_trivy_bootstrap() {
+    if command -v trivy ; then
+        return 0  # already installed
+    fi
+
+    _harden_log info "Installing Trivy vulnerability scanner..."
+    local trivy_version="v0.76.2"
+    local arch="" expected_deb_sha="" expected_tgz_sha=""
+    arch="$(uname -m)"
+    case "$arch" in
+        x86_64)
+            arch="64bit"
+            expected_deb_sha="7edaf64c8a2a0ae02137f776c6e56adf285fc36ec76b045274afdc462f20f092"
+            expected_tgz_sha="bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+            ;;
+        aarch64)
+            arch="ARM64"
+            expected_deb_sha="0c576cd78352a2084435d393ea31565a3637cc129dd052c422f1e72fd678ee76"
+            expected_tgz_sha="ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3"
+            ;;
+        *)       _harden_log warn "Trivy — unsupported architecture: $arch"; return 1 ;;
+    esac
+
+    local deb_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.deb"
+    local tmp_deb=""
+    tmp_deb="$(mktemp /tmp/trivy.XXXXXX.deb)"
+
+    # Attempt 1: Direct DEB download with pinned SHA256 verification
+    if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$deb_url" -o "$tmp_deb" ; then
+        if printf '%s  %s\n' "$expected_deb_sha" "$tmp_deb" | sha256sum -c - >/dev/null 2>&1; then
+            if ! dpkg -i "$tmp_deb" ; then
+                apt-get install -f -y  || true
+                dpkg -i "$tmp_deb"  || true
+            fi
+        else
+            _harden_log warn "Trivy DEB checksum mismatch — rejecting unverified artifact"
+        fi
+        rm -f "$tmp_deb"
+    else
+        rm -f "$tmp_deb"
+        _harden_log info "Direct DEB download failed — trying official verified tarball and APT repo..."
+    fi
+
+    # Attempt 2: Direct tar.gz release download with pinned SHA256 verification
+    if ! command -v trivy >/dev/null 2>&1; then
+        local tgz_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.tar.gz"
+        local tmp_tgz="" tmp_dir=""
+        tmp_tgz="$(mktemp /tmp/trivy.XXXXXX.tar.gz)"
+        tmp_dir="$(mktemp -d /tmp/trivy-extract.XXXXXX)"
+        if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$tgz_url" -o "$tmp_tgz"; then
+            if printf '%s  %s\n' "$expected_tgz_sha" "$tmp_tgz" | sha256sum -c - >/dev/null 2>&1; then
+                tar -xzf "$tmp_tgz" -C "$tmp_dir" trivy >/dev/null 2>&1 && \
+                    install -m 0755 "$tmp_dir/trivy" /usr/local/bin/trivy >/dev/null 2>&1 || true
+            else
+                _harden_log warn "Trivy tarball checksum mismatch — rejecting unverified artifact"
+            fi
+        fi
+        rm -rf "$tmp_tgz" "$tmp_dir"
+    fi
+
+    # Attempt 3: Official GPG-signed APT Repository fallback
+    if ! command -v trivy ; then
+        apt-get update -qq  || true
+        if ! apt-get install -y trivy ; then
+            if command -v gpg ; then
+                curl --retry 2 --connect-timeout 10 -fsSL https://aquasecurity.github.io/trivy-repo/deb/public.key  | gpg --dearmor -o /usr/share/keyrings/trivy.gpg  || true
+                echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc  || echo stable) main" > /etc/apt/sources.list.d/trivy.list  || true
+                apt-get update -qq  || true
+                apt-get install -y trivy  || true
+            fi
+        fi
+    fi
+
+    if command -v trivy ; then
+        _harden_log ok "Trivy installed successfully"
+        return 0
+    fi
+    _harden_log warn "Trivy — download and installation fallbacks failed"
+    return 1
+}
+
+_harden_trivy_verify() {
+    if command -v trivy ; then
+        local ver
+        ver="$(trivy --version  | head -1 || true)"
+        _harden_log ok "Trivy available: ${ver}"
+        return 0
+    fi
+    _harden_log warn "Trivy — not installed (image vulnerability scanning unavailable)"
+    return 1
+}
+# --- end lib/harden_trivy.sh ---
+        fi
+    fi
+    if declare -F _harden_trivy_bootstrap >/dev/null 2>&1; then
+        _harden_trivy_bootstrap || true
+    fi
+    if ! declare -F _cosign_ensure_binary >/dev/null 2>&1; then
+        local _cosign_script="${INSTALL_DIR:-/opt/smsly-hosting}/scripts/cosign-verify.sh"
+        [ -f "$_cosign_script" ] || _cosign_script="${_SCRIPT_DIR:-.}/../scripts/cosign-verify.sh"
+        if [ -f "$_cosign_script" ]; then
+            source "$_cosign_script" || true
+        fi
+    fi
+    if declare -F _cosign_ensure_binary >/dev/null 2>&1; then
+        _cosign_ensure_binary || true
     fi
     return 0
 }
@@ -30319,6 +33964,7 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 64)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
     env_ensure_var "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 64)" "FRP tunnel relay authentication token"
     env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
+    env_ensure_var "$env_file" "EDGE_JWT_SECRET" "$(gen_hex_secret 64)" "Edge JWT signing secret for Traefik forward-auth and Caddy authorize"
     env_ensure_var "$env_file" "PATRONI_SUPERUSER_PASSWORD" "$(gen_hex_secret 32)" "Patroni superuser password for HA cluster"
     env_ensure_var "$env_file" "NODE_SECURITY" "1" "Enable full hardening stack (auditd, kernel, docker, gVisor/Kata)"
     env_ensure_var "$env_file" "NODE_OBSERVABILITY" "1" "Enable node metrics stack (cadvisor, node-exporter, docker-labels)"
@@ -30326,19 +33972,57 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "NODE_FALCO" "1" "Enable Falco runtime security"
     env_ensure_var "$env_file" "NODE_SPIRE" "1" "Enable SPIRE mTLS"
     env_ensure_var "$env_file" "NODE_LOG_SHIPPING" "1" "Ship node access logs to master CrowdSec (security path, independent of observability metrics)"
-    # WAF shadow is default-on at >=8GB RAM, off below (the shadow costs
-    # ~1-2GB real). Fill-if-absent so an explicit operator value survives
-    # updates; mirrors the fresh_config sizing ladder.
+    # Resolve stack tier first (<6GB=lite, 6-12GB=medium, >=12GB=full) so
+    # existing lite/medium installs preserve their tier across --update.
+    local _db_ha_mode="" _prof_cur="" _prof_new="" _stack_tier="" _tier_ram_mb=""
+    _db_ha_mode="$(env_get_value "$env_file" "DB_HA_ENABLED")"
+    [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
+    env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
+
+    _prof_cur="$(env_get_value "$env_file" "COMPOSE_PROFILES")"
+    _stack_tier="$(env_get_value "$env_file" "STACK_TIER")"
+    case "$_stack_tier" in
+        lite|medium|full) ;;
+        *)
+            if [ -n "$_prof_cur" ]; then
+                case ",${_prof_cur}," in
+                    *,full,*) _stack_tier="full" ;;
+                    *,medium,*) _stack_tier="medium" ;;
+                    *) _stack_tier="lite" ;;
+                esac
+            else
+                _tier_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
+                [ -n "$_tier_ram_mb" ] || _tier_ram_mb=8192
+                if [ "$_tier_ram_mb" -lt 6144 ]; then
+                    _stack_tier="lite"
+                elif [ "$_tier_ram_mb" -lt 12288 ]; then
+                    _stack_tier="medium"
+                else
+                    _stack_tier="full"
+                fi
+            fi
+            env_set_value "$env_file" "STACK_TIER" "$_stack_tier"
+            ;;
+    esac
+
+    # WAF shadow is default-on at >=12GB RAM (full tier), off below (costs
+    # ~1.5-2.2GB real). Fill-if-absent so an explicit operator value
+    # survives updates; mirrors the fresh_config sizing ladder.
     if [ -z "$(env_get_value "$env_file" "OPENAPPSEC_ENABLED")" ]; then
         local _waf_ram_mb=""
         _waf_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
         [ -n "$_waf_ram_mb" ] || _waf_ram_mb=8192
-        if [ "$_waf_ram_mb" -ge 8192 ]; then
+        if [ "$_waf_ram_mb" -ge 12288 ]; then
             env_set_value "$env_file" "OPENAPPSEC_ENABLED" "1"
         else
             env_set_value "$env_file" "OPENAPPSEC_ENABLED" "0"
         fi
+        if [ "$_stack_tier" != "full" ]; then
+            env_set_value "$env_file" "OPENAPPSEC_ENABLED" "0"
+        fi
     fi
+    local _waf_enabled=""
+    _waf_enabled="$(env_get_value "$env_file" "OPENAPPSEC_ENABLED")"
     env_ensure_var "$env_file" "OPENAPPSEC_MODE" "prevent" "WAF enforcement mode (prevent enforce vs detect-learn shadow); set from Settings → Security Scanning"
     env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'  || python3 -c 'import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
@@ -30349,84 +34033,94 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "REPLICATION_PASSWORD" "$(gen_hex_secret 32)" "PostgreSQL streaming replication password"
     env_ensure_var "$env_file" "SENTINEL_PASSWORD" "$(gen_hex_secret 32)" "Redis Sentinel authentication password"
     env_ensure_var "$env_file" "SENTINEL_SERVICE_NAME" "mymaster" "Redis Sentinel service name"
-    # Auto-detect sentinel containers and populate SENTINEL_HOSTS if empty.
-    # Sentinel containers are named smsly-redis-sentinel-{1,2,3} and listen
-    # on port 26379.  Without this, the backend falls back to direct
-    # redis-primary connection which breaks after sentinel failover.
-    local current_sentinel_hosts
+    # Populate SENTINEL_HOSTS only when Redis HA is active (medium/full);
+    # lite runs single-node Redis so SENTINEL_HOSTS stays empty.
+    local current_sentinel_hosts=""
     current_sentinel_hosts="$(env_get_value "$env_file" "SENTINEL_HOSTS")"
-    if [ -z "$current_sentinel_hosts" ]; then
-        local detected_sentinels=""
-        local _si
-        for _si in 1 2 3; do
-            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-redis-sentinel-${_si}$"; then
-                if [ -n "$detected_sentinels" ]; then
-                    detected_sentinels="${detected_sentinels},"
-                fi
-                detected_sentinels="${detected_sentinels}smsly-redis-sentinel-${_si}:26379"
-            fi
-        done
-        if [ -n "$detected_sentinels" ]; then
-            echo -e "${BLUE}  -> Auto-detected Redis Sentinels: ${detected_sentinels}${NC}"
-            env_set_value "$env_file" "SENTINEL_HOSTS" "$detected_sentinels"
-            echo -e "${GREEN}  OK SENTINEL_HOSTS set${NC}"
+    if [ "$_stack_tier" = "lite" ]; then
+        if [ "$current_sentinel_hosts" = "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379" ]; then
+            env_set_value "$env_file" "SENTINEL_HOSTS" ""
         fi
+    elif [ -z "$current_sentinel_hosts" ] && [ "$_db_ha_mode" = "local-ha" ] && [ "${MODE_AGENT_LITE:-false}" != "true" ] && [ "${MODE_NODE:-false}" != "true" ]; then
+        env_set_value "$env_file" "SENTINEL_HOSTS" "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379"
+        echo -e "${GREEN}  OK SENTINEL_HOSTS set for local-ha${NC}"
     fi
     env_ensure_var "$env_file" "REGISTRY_HTTP_SECRET" "$(gen_hex_secret 32)" "Docker registry HTTP secret"
-    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false" "SSH host key verification (True=strict, False=accept-first)"
-    # DB HA mode + compose profiles: without COMPOSE_PROFILES the profiled
-    # db/postgres services are never created and every backend crashes with
-    # "could not translate host name db" (2026-09-10 fresh-install incident).
-    # Default is full (run everything): local-ha|patroni|external + medium
-    # (observability) + full (Falco, SPIRE servers, apt-cacher, verdaccio).
-    local _db_ha_mode=""
-    _db_ha_mode="$(env_get_value "$env_file" "DB_HA_ENABLED")"
-    [ -n "$_db_ha_mode" ] || _db_ha_mode="local-ha"
-    env_ensure_var "$env_file" "DB_HA_ENABLED" "$_db_ha_mode" "Database HA mode: local-ha | patroni | external"
-    env_ensure_var "$env_file" "COMPOSE_PROFILES" "${_db_ha_mode},medium,full" "Compose profiles to activate (DB mode + observability + full stack)"
-    # Backfill older installs that predate the full default (local-ha or
-    # local-ha,medium): ensure the current DB mode + medium + full are
-    # present, and drop any STALE db-mode token (local-ha|patroni|external)
-    # so two postgres stacks never start side by side (haproxy :7000
-    # would clash with frps :7000). Idempotent, case-insensitive.
-    local _prof_cur="" _prof_new=""
+    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "true" "SSH host key verification (True=strict, False=accept-first)"
+    # Reconcile COMPOSE_PROFILES for (_db_ha_mode, _stack_tier, _waf_enabled):
+    # preserves STACK_TIER across --update and gates appsec strictly on
+    # OPENAPPSEC_ENABLED=1 while stripping stale DB-mode tokens.
+    local _default_profiles="$_db_ha_mode"
+    case "$_stack_tier" in
+        medium)
+            [ "$_db_ha_mode" = "local-ha" ] && _default_profiles="${_default_profiles},local-ha-replica"
+            _default_profiles="${_default_profiles},redis-ha,medium"
+            ;;
+        full)
+            [ "$_db_ha_mode" = "local-ha" ] && _default_profiles="${_default_profiles},local-ha-replica"
+            _default_profiles="${_default_profiles},redis-ha,medium,full"
+            ;;
+    esac
+    [ "$_waf_enabled" = "1" ] && _default_profiles="${_default_profiles},appsec"
+    env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_default_profiles" "Compose profiles to activate (DB mode + tier + optional appsec)"
     _prof_cur="$(env_get_value "$env_file" "COMPOSE_PROFILES")"
     if command -v python3 >/dev/null 2>&1; then
-        _prof_new="$(DB_MODE="$_db_ha_mode" CUR_PROF="$_prof_cur" python3 -c '
+        _prof_new="$(DB_MODE="$_db_ha_mode" STACK_TIER_VAL="$_stack_tier" WAF_VAL="$_waf_enabled" CUR_PROF="$_prof_cur" python3 -c '
 import os
-mode = os.environ.get("DB_MODE", "local-ha").strip() or "local-ha"
+mode = (os.environ.get("DB_MODE") or "local-ha").strip() or "local-ha"
+tier = (os.environ.get("STACK_TIER_VAL") or "full").strip().lower()
+waf = (os.environ.get("WAF_VAL") or "0").strip()
 cur = os.environ.get("CUR_PROF", "")
 db_modes = {"local-ha", "patroni", "external"}
+managed = {"local-ha-replica", "redis-ha", "medium", "full", "appsec"}
 seen = set()
 out = []
 for tok in [t.strip() for t in cur.split(",")]:
     if not tok:
         continue
     low = tok.lower()
-    if low in db_modes and low != mode.lower():
+    if low in db_modes or low in managed:
         continue
     if low not in seen:
         seen.add(low)
         out.append(tok)
-for want in [mode, "medium", "full"]:
-    if want.lower() not in seen:
-        seen.add(want.lower())
-        out.append(want)
-print(",".join(out))
+desired = [mode]
+if tier in ("medium", "full"):
+    if mode.lower() == "local-ha":
+        desired.append("local-ha-replica")
+    desired.extend(["redis-ha", "medium"])
+if tier == "full":
+    desired.append("full")
+if waf == "1":
+    desired.append("appsec")
+# Keep DB mode + tier profiles ordered deterministically, followed by custom tokens.
+final = []
+final_seen = set()
+for tok in desired + out:
+    low = tok.lower()
+    if low not in final_seen:
+        final_seen.add(low)
+        final.append(tok)
+print(",".join(final))
 ' || true)"
         if [ -n "$_prof_new" ] && [ "$_prof_new" != "$_prof_cur" ]; then
             env_set_value "$env_file" "COMPOSE_PROFILES" "$_prof_new"
         fi
     else
-        env_append_csv_values "$env_file" "COMPOSE_PROFILES" "$_db_ha_mode" "medium" "full" > /dev/null
+        env_set_value "$env_file" "COMPOSE_PROFILES" "$_default_profiles"
     fi
     # Read-replica routing must name the replica the compose stack actually
-    # starts. Empty here + compose-level default used to agree by accident;
-    # make it explicit so .env, pgcat, and the dashboard disagree never.
-    # External mode keeps operator-managed values (never overwrite).
+    # starts. Lite skips same-host postgres-replica; medium/full start it
+    # in local-ha mode. External mode keeps operator-managed values.
     local _replica_hosts=""
     _replica_hosts="$(env_get_value "$env_file" "DB_REPLICA_HOSTS")"
-    if [ -z "$_replica_hosts" ]; then
+    if [ "$_stack_tier" = "lite" ]; then
+        if [ "$_db_ha_mode" = "local-ha" ] && [ "$_replica_hosts" = "postgres-replica:5432" ]; then
+            env_set_value "$env_file" "DB_REPLICA_HOSTS" ""
+        elif [ "$_db_ha_mode" = "patroni" ] && [ -z "$_replica_hosts" ]; then
+            env_set_value "$env_file" "DB_REPLICA_HOSTS" "haproxy:5001"
+        fi
+    elif [ -z "$_replica_hosts" ]; then
         case "$_db_ha_mode" in
             patroni) env_set_value "$env_file" "DB_REPLICA_HOSTS" "haproxy:5001" ;;
             local-ha) env_set_value "$env_file" "DB_REPLICA_HOSTS" "postgres-replica:5432" ;;
@@ -30440,18 +34134,26 @@ print(",".join(out))
     _size_ram_mb="$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')"
     [ -n "$_size_ram_mb" ] || _size_ram_mb=8192
     _size_cpus="$(nproc 2>/dev/null || echo 4)"
-    local _want_workers="" _want_buffers="" _want_cache=""
+    local _want_workers="" _want_buffers="" _want_cache="" _want_celery_autoscale="" _want_wal_keep="" _want_obs_retention=""
     if [ "$_size_cpus" -le 2 ]; then _want_workers=2; else _want_workers=4; fi
-    if [ "$_size_ram_mb" -le 4096 ]; then _want_buffers=256MB; _want_cache=1GB
-    elif [ "$_size_ram_mb" -le 8192 ]; then _want_buffers=512MB; _want_cache=2GB
-    else _want_buffers=1GB; _want_cache=4GB; fi
+    if [ "$_size_ram_mb" -le 4096 ]; then
+        _want_buffers=256MB; _want_cache=1GB; _want_celery_autoscale="2,0"; _want_wal_keep="64MB"
+    elif [ "$_size_ram_mb" -le 8192 ]; then
+        _want_buffers=512MB; _want_cache=2GB; _want_celery_autoscale="4,0"; _want_wal_keep="512MB"
+    else
+        _want_buffers=1GB; _want_cache=4GB; _want_celery_autoscale="4,0"; _want_wal_keep="1GB"
+    fi
+    if [ "$_stack_tier" = "lite" ]; then _want_wal_keep="64MB"; fi
+    if [ "$_size_ram_mb" -lt 12288 ]; then _want_obs_retention="7d"; else _want_obs_retention="30d"; fi
     env_ensure_var "$env_file" "GUNICORN_WORKERS" "$_want_workers" "Gunicorn workers (host-sized; burst via autoscaler)"
     env_ensure_var "$env_file" "DB_SHARED_BUFFERS" "$_want_buffers" "Postgres shared buffers (host-sized; pinned shm)"
     env_ensure_var "$env_file" "DB_EFFECTIVE_CACHE_SIZE" "$_want_cache" "Postgres planner cache hint (no RAM cost)"
     env_ensure_var "$env_file" "CELERY_QUEUES" "celery,fast,deploy" "Main worker drains all queues (burst workers idle-stop safely)"
+    env_ensure_var "$env_file" "CELERY_AUTOSCALE" "$_want_celery_autoscale" "Main Celery worker autoscale max,min"
     env_ensure_var "$env_file" "CELERY_AUTOSCALE_ENABLED" "true" "Idle-stop burst workers on empty queues"
-    env_ensure_var "$env_file" "PROMETHEUS_RETENTION" "30d" "Prometheus TSDB retention (main driver of metrics disk+RAM growth; 7d on small hosts)"
-    env_ensure_var "$env_file" "LOKI_RETENTION" "30d" "Loki log retention (set together with PROMETHEUS_RETENTION)"
+    env_ensure_var "$env_file" "PG_WAL_KEEP_SIZE" "$_want_wal_keep" "Postgres retained WAL floor (64MB lite, 512MB medium, 1GB full)"
+    env_ensure_var "$env_file" "PROMETHEUS_RETENTION" "$_want_obs_retention" "Prometheus TSDB retention (7d <12GB, 30d >=12GB)"
+    env_ensure_var "$env_file" "LOKI_RETENTION" "$_want_obs_retention" "Loki log retention (set together with PROMETHEUS_RETENTION)"
     env_ensure_var "$env_file" "FALCO_MEMORY_LIMIT" "1024M" "Falco runtime-security memory cap (1024M prevents modern_ebpf OOM)"
     # Registry public bind: without an explicit override the compose
     # fallback is a hardcoded IP from another host and the registry port
@@ -31144,98 +34846,186 @@ _smsly_edge_sidecar_warn() {
     echo -e "${YELLOW:-}  ⚠ edge-sidecar: $*${NC:-}" || echo "  ⚠ edge-sidecar: $*"
 }
 
+_EDGE_SIDECAR_BIN_CHANGED=0
+_EDGE_SIDECAR_ENV_CHANGED=0
+
 # Build the static binary. Prefers a pinned prebuilt artifact when the
 # installer sets SMSLY_EDGE_SIDECAR_URL; otherwise builds with the local
 # Go toolchain (installed best-effort).
 smsly_edge_sidecar_build() {
+    _EDGE_SIDECAR_BIN_CHANGED=0
+    local build_dir="" tmp_bin="" build_log=""
+    build_dir="$(mktemp -d /tmp/smsly-edge-sidecar-build.XXXXXX)"
+    tmp_bin="${build_dir}/smsly-edge-sidecar"
+    build_log="${build_dir}/build.log"
+
     if [ -n "${SMSLY_EDGE_SIDECAR_URL:-}" ] && command -v curl >/dev/null 2>&1; then
-        if curl -fsSL "$SMSLY_EDGE_SIDECAR_URL" -o "$EDGE_SIDECAR_BIN.tmp"; then
-            chmod 0755 "$EDGE_SIDECAR_BIN.tmp" || true
-            mv "$EDGE_SIDECAR_BIN.tmp" "$EDGE_SIDECAR_BIN" || {
-                _smsly_edge_sidecar_warn "could not install prebuilt binary"
-                return 0
-            }
-            _smsly_edge_sidecar_log info "installed prebuilt smsly-edge-sidecar"
+        if timeout 120 curl -fsSL --max-time 90 "$SMSLY_EDGE_SIDECAR_URL" -o "$tmp_bin"; then
+            if [ ! -f "$EDGE_SIDECAR_BIN" ] || ! cmp -s "$tmp_bin" "$EDGE_SIDECAR_BIN"; then
+                chmod 0755 "$tmp_bin" || true
+                mv -f "$tmp_bin" "$EDGE_SIDECAR_BIN" || {
+                    rm -rf "$build_dir"
+                    _smsly_edge_sidecar_warn "could not install prebuilt binary"
+                    return 0
+                }
+                _EDGE_SIDECAR_BIN_CHANGED=1
+                _smsly_edge_sidecar_log info "installed prebuilt smsly-edge-sidecar"
+            else
+                _smsly_edge_sidecar_log info "smsly-edge-sidecar binary unchanged"
+            fi
+            rm -rf "$build_dir"
             return 0
         fi
         _smsly_edge_sidecar_warn "prebuilt download failed, falling back to local build"
     fi
-    if ! command -v go >/dev/null 2>&1; then
-        if command -v apt-get >/dev/null 2>&1; then
-            (apt-get install -y golang-go 2>&1 | tail -2) || true
-        fi
-    fi
-    if ! command -v go >/dev/null 2>&1; then
-        _smsly_edge_sidecar_warn "Go toolchain unavailable — skipping build (edge keeps Django-backed ask/auth)"
-        return 0
-    fi
     if [ ! -f "$EDGE_SIDECAR_SRC_DIR/main.go" ]; then
+        rm -rf "$build_dir"
         _smsly_edge_sidecar_warn "source missing at $EDGE_SIDECAR_SRC_DIR — skipping build"
         return 0
     fi
-    if (cd "$EDGE_SIDECAR_SRC_DIR" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$EDGE_SIDECAR_BIN.tmp" .) 2>&1 | tail -3; then
-        chmod 0755 "$EDGE_SIDECAR_BIN.tmp" || true
-        mv "$EDGE_SIDECAR_BIN.tmp" "$EDGE_SIDECAR_BIN" || {
-            _smsly_edge_sidecar_warn "could not install built binary"
-            return 0
-        }
-        _smsly_edge_sidecar_log info "built and installed smsly-edge-sidecar"
+    local go_bin="" go_ok=0 build_rc=1
+    if command -v go >/dev/null 2>&1; then
+        go_bin="$(command -v go)"
+    elif [ -x "/usr/local/go/bin/go" ]; then
+        go_bin="/usr/local/go/bin/go"
+    fi
+    if [ -n "$go_bin" ]; then
+        local _go_ver="" _go_maj="" _go_min=""
+        _go_ver="$("$go_bin" version 2>/dev/null | sed -n 's/.*go\([0-9]*\)\.\([0-9]*\).*/\1.\2/p' | head -n 1)"
+        _go_maj="${_go_ver%%.*}"
+        _go_min="${_go_ver#*.}"
+        if [ -n "$_go_maj" ] && [ -n "$_go_min" ] && { [ "$_go_maj" -gt 1 ] || { [ "$_go_maj" -eq 1 ] && [ "$_go_min" -ge 22 ]; }; }; then
+            go_ok=1
+        fi
+    fi
+    if [ "$go_ok" -eq 1 ]; then
+        build_rc=0
+        (cd "$EDGE_SIDECAR_SRC_DIR" && timeout 180 env CGO_ENABLED=0 "$go_bin" build -trimpath -ldflags="-s -w" -o "$tmp_bin" .) >"$build_log" 2>&1 || build_rc=$?
+    fi
+    if [ "$build_rc" -ne 0 ] && command -v docker >/dev/null 2>&1 && timeout 10 docker info >/dev/null 2>&1; then
+        local go_image="${EDGE_SIDECAR_GO_IMAGE:-golang:1.22}"
+        _smsly_edge_sidecar_log info "Host Go unavailable or < 1.22; building smsly-edge-sidecar via ${go_image} container..."
+        build_rc=0
+        timeout 300 docker run --rm \
+            -v "${EDGE_SIDECAR_SRC_DIR}:/src:ro" \
+            -v "${build_dir}:/out" \
+            -w /src \
+            -e CGO_ENABLED=0 \
+            "$go_image" \
+            go build -trimpath -ldflags="-s -w" -o "/out/smsly-edge-sidecar" . >"$build_log" 2>&1 || build_rc=$?
+    elif [ "$build_rc" -ne 0 ] && [ "$go_ok" -ne 1 ]; then
+        rm -rf "$build_dir"
+        _smsly_edge_sidecar_warn "Go >= 1.22 toolchain and Docker daemon unavailable — skipping build (edge keeps Django-backed ask/auth)"
+        return 0
+    fi
+    if [ "$build_rc" -eq 0 ] && [ -s "$tmp_bin" ]; then
+        if [ ! -f "$EDGE_SIDECAR_BIN" ] || ! cmp -s "$tmp_bin" "$EDGE_SIDECAR_BIN"; then
+            chmod 0755 "$tmp_bin" || true
+            mv -f "$tmp_bin" "$EDGE_SIDECAR_BIN" || {
+                rm -rf "$build_dir"
+                _smsly_edge_sidecar_warn "could not install built binary"
+                return 0
+            }
+            _EDGE_SIDECAR_BIN_CHANGED=1
+            _smsly_edge_sidecar_log info "built and installed smsly-edge-sidecar"
+        else
+            _smsly_edge_sidecar_log info "smsly-edge-sidecar binary unchanged"
+        fi
     else
+        tail -3 "$build_log" 2>/dev/null || true
         _smsly_edge_sidecar_warn "go build failed — edge keeps Django-backed ask/auth"
     fi
+    rm -rf "$build_dir"
     return 0
 }
 
 # Write /etc/smsly/edge-sidecar.env from .env (secrets never on cmdline).
 smsly_edge_sidecar_write_env() {
+    _EDGE_SIDECAR_ENV_CHANGED=0
     local env_file="${INSTALL_DIR:-/opt/smsly-hosting}/.env"
     local edge_secret="" ask_secret=""
     if [ -f "$env_file" ]; then
         edge_secret="$(grep -E '^EDGE_JWT_SECRET=' "$env_file" | tail -1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//')" || true
         ask_secret="$(grep -E '^CADDY_ASK_SECRET=' "$env_file" | tail -1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//' )" || true
     fi
+    if [ -z "$edge_secret" ]; then
+        edge_secret="$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || openssl rand -hex 64 2>/dev/null || true)"
+        if [ -n "$edge_secret" ] && [ -f "$env_file" ]; then
+            if command -v env_set_value >/dev/null 2>&1; then
+                env_set_value "$env_file" "EDGE_JWT_SECRET" "$edge_secret" || true
+            elif ! grep -q '^EDGE_JWT_SECRET=' "$env_file" 2>/dev/null; then
+                printf 'EDGE_JWT_SECRET=%s\n' "$edge_secret" >> "$env_file" || true
+            fi
+        fi
+    fi
+    if [ -z "$ask_secret" ]; then
+        ask_secret="$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || openssl rand -hex 64 2>/dev/null || true)"
+        if [ -n "$ask_secret" ] && [ -f "$env_file" ]; then
+            if command -v env_set_value >/dev/null 2>&1; then
+                env_set_value "$env_file" "CADDY_ASK_SECRET" "$ask_secret" || true
+            elif ! grep -q '^CADDY_ASK_SECRET=' "$env_file" 2>/dev/null; then
+                printf 'CADDY_ASK_SECRET=%s\n' "$ask_secret" >> "$env_file" || true
+            fi
+        fi
+    fi
     mkdir -p /etc/smsly || true
-    umask 027
-    {
-        echo "# Managed by smsly install — smsly-edge-sidecar env"
-        if [ -n "$edge_secret" ]; then
-            echo "EDGE_JWT_SECRET=$edge_secret"
-        fi
-        if [ -n "$ask_secret" ]; then
-            echo "CADDY_ASK_SECRET=$ask_secret"
-        fi
-    } > "$EDGE_SIDECAR_ENV_FILE.tmp" || {
+    (
+        umask 027
+        {
+            echo "# Managed by smsly install — smsly-edge-sidecar env"
+            if [ -n "$edge_secret" ]; then
+                echo "EDGE_JWT_SECRET=$edge_secret"
+            fi
+            if [ -n "$ask_secret" ]; then
+                echo "CADDY_ASK_SECRET=$ask_secret"
+            fi
+        } > "$EDGE_SIDECAR_ENV_FILE.tmp"
+    ) || {
         _smsly_edge_sidecar_warn "could not write $EDGE_SIDECAR_ENV_FILE"
         return 0
     }
     chmod 0640 "$EDGE_SIDECAR_ENV_FILE.tmp" || true
-    mv "$EDGE_SIDECAR_ENV_FILE.tmp" "$EDGE_SIDECAR_ENV_FILE" || {
-        _smsly_edge_sidecar_warn "could not install $EDGE_SIDECAR_ENV_FILE"
-        return 0
-    }
+    if [ ! -f "$EDGE_SIDECAR_ENV_FILE" ] || ! cmp -s "$EDGE_SIDECAR_ENV_FILE.tmp" "$EDGE_SIDECAR_ENV_FILE"; then
+        mv -f "$EDGE_SIDECAR_ENV_FILE.tmp" "$EDGE_SIDECAR_ENV_FILE" || {
+            rm -f "$EDGE_SIDECAR_ENV_FILE.tmp" || true
+            _smsly_edge_sidecar_warn "could not install $EDGE_SIDECAR_ENV_FILE"
+            return 0
+        }
+        _EDGE_SIDECAR_ENV_CHANGED=1
+    else
+        rm -f "$EDGE_SIDECAR_ENV_FILE.tmp" || true
+    fi
     return 0
 }
 
 # Install + enable the systemd unit. Never fails the update.
 smsly_edge_sidecar_install() {
+    local _unit_changed=0
     smsly_edge_sidecar_build || true
     smsly_edge_sidecar_write_env || true
     if [ ! -f "$EDGE_SIDECAR_UNIT_SRC" ]; then
         _smsly_edge_sidecar_warn "unit source missing ($EDGE_SIDECAR_UNIT_SRC) — skipping"
         return 0
     fi
-    cp "$EDGE_SIDECAR_UNIT_SRC" "$EDGE_SIDECAR_UNIT_DST" 2>/dev/null || {
-        _smsly_edge_sidecar_warn "could not install systemd unit"
-        return 0
-    }
-    systemctl daemon-reload 2>/dev/null || true
-    systemctl enable smsly-edge-sidecar.service 2>/dev/null || \
+    if [ ! -f "$EDGE_SIDECAR_UNIT_DST" ] || ! cmp -s "$EDGE_SIDECAR_UNIT_SRC" "$EDGE_SIDECAR_UNIT_DST"; then
+        cp "$EDGE_SIDECAR_UNIT_SRC" "$EDGE_SIDECAR_UNIT_DST" 2>/dev/null || {
+            _smsly_edge_sidecar_warn "could not install systemd unit"
+            return 0
+        }
+        _unit_changed=1
+        timeout 30 systemctl daemon-reload 2>/dev/null || true
+    fi
+    timeout 30 systemctl enable smsly-edge-sidecar.service 2>/dev/null || \
         _smsly_edge_sidecar_warn "enable failed (non-fatal)"
     if [ -x "$EDGE_SIDECAR_BIN" ]; then
-        systemctl restart smsly-edge-sidecar.service 2>/dev/null || \
-            systemctl start smsly-edge-sidecar.service 2>/dev/null || \
-            _smsly_edge_sidecar_warn "start failed (non-fatal)"
-        _smsly_edge_sidecar_log info "smsly-edge-sidecar installed and started"
+        if [ "$_EDGE_SIDECAR_BIN_CHANGED" -eq 1 ] || [ "$_EDGE_SIDECAR_ENV_CHANGED" -eq 1 ] || [ "$_unit_changed" -eq 1 ] || ! systemctl is-active --quiet smsly-edge-sidecar.service 2>/dev/null; then
+            timeout 60 systemctl restart smsly-edge-sidecar.service 2>/dev/null || \
+                timeout 60 systemctl start smsly-edge-sidecar.service 2>/dev/null || \
+                _smsly_edge_sidecar_warn "start failed (non-fatal)"
+            _smsly_edge_sidecar_log info "smsly-edge-sidecar installed and started"
+        else
+            _smsly_edge_sidecar_log info "smsly-edge-sidecar unchanged and already running"
+        fi
     else
         _smsly_edge_sidecar_warn "binary missing — unit installed but not started"
     fi
@@ -31277,45 +35067,96 @@ _smsly_napd_warn() {
     echo -e "${YELLOW:-}  ⚠ napd: $*${NC:-}" || echo "  ⚠ napd: $*"
 }
 
+_NAPD_BIN_CHANGED=0
+_NAPD_ENV_CHANGED=0
+
 # Build the static binary. Prefers a pinned prebuilt artifact when the
 # installer sets SMSLY_NAPD_URL; otherwise builds with the local Go
 # toolchain (installed best-effort).
 smsly_napd_build() {
+    _NAPD_BIN_CHANGED=0
+    local build_dir="" tmp_bin="" build_log=""
+    build_dir="$(mktemp -d /tmp/smsly-napd-build.XXXXXX)"
+    tmp_bin="${build_dir}/smsly-napd"
+    build_log="${build_dir}/build.log"
+
     if [ -n "${SMSLY_NAPD_URL:-}" ] && command -v curl >/dev/null 2>&1; then
-        if curl -fsSL "$SMSLY_NAPD_URL" -o "$NAPD_BIN.tmp"; then
-            chmod 0755 "$NAPD_BIN.tmp" || true
-            mv "$NAPD_BIN.tmp" "$NAPD_BIN" || {
-                _smsly_napd_warn "could not install prebuilt binary"
-                return 0
-            }
-            _smsly_napd_log info "installed prebuilt smsly-napd"
+        if timeout 120 curl -fsSL --max-time 90 "$SMSLY_NAPD_URL" -o "$tmp_bin"; then
+            if [ ! -f "$NAPD_BIN" ] || ! cmp -s "$tmp_bin" "$NAPD_BIN"; then
+                chmod 0755 "$tmp_bin" || true
+                mv -f "$tmp_bin" "$NAPD_BIN" || {
+                    rm -rf "$build_dir"
+                    _smsly_napd_warn "could not install prebuilt binary"
+                    return 0
+                }
+                _NAPD_BIN_CHANGED=1
+                _smsly_napd_log info "installed prebuilt smsly-napd"
+            else
+                _smsly_napd_log info "smsly-napd binary unchanged"
+            fi
+            rm -rf "$build_dir"
             return 0
         fi
         _smsly_napd_warn "prebuilt download failed, falling back to local build"
     fi
-    if ! command -v go >/dev/null 2>&1; then
-        if command -v apt-get >/dev/null 2>&1; then
-            (apt-get install -y golang-go 2>&1 | tail -2) || true
-        fi
-    fi
-    if ! command -v go >/dev/null 2>&1; then
-        _smsly_napd_warn "Go toolchain unavailable — skipping build (tier sleep/wake stays manual)"
-        return 0
-    fi
     if [ ! -f "$NAPD_SRC_DIR/main.go" ]; then
+        rm -rf "$build_dir"
         _smsly_napd_warn "source missing at $NAPD_SRC_DIR — skipping build"
         return 0
     fi
-    if (cd "$NAPD_SRC_DIR" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$NAPD_BIN.tmp" .) 2>&1 | tail -3; then
-        chmod 0755 "$NAPD_BIN.tmp" || true
-        mv "$NAPD_BIN.tmp" "$NAPD_BIN" || {
-            _smsly_napd_warn "could not install built binary"
-            return 0
-        }
-        _smsly_napd_log info "built and installed smsly-napd"
+    local go_bin="" go_ok=0 build_rc=1
+    if command -v go >/dev/null 2>&1; then
+        go_bin="$(command -v go)"
+    elif [ -x "/usr/local/go/bin/go" ]; then
+        go_bin="/usr/local/go/bin/go"
+    fi
+    if [ -n "$go_bin" ]; then
+        local _go_ver="" _go_maj="" _go_min=""
+        _go_ver="$("$go_bin" version 2>/dev/null | sed -n 's/.*go\([0-9]*\)\.\([0-9]*\).*/\1.\2/p' | head -n 1)"
+        _go_maj="${_go_ver%%.*}"
+        _go_min="${_go_ver#*.}"
+        if [ -n "$_go_maj" ] && [ -n "$_go_min" ] && { [ "$_go_maj" -gt 1 ] || { [ "$_go_maj" -eq 1 ] && [ "$_go_min" -ge 22 ]; }; }; then
+            go_ok=1
+        fi
+    fi
+    if [ "$go_ok" -eq 1 ]; then
+        build_rc=0
+        (cd "$NAPD_SRC_DIR" && timeout 180 env CGO_ENABLED=0 "$go_bin" build -trimpath -ldflags="-s -w" -o "$tmp_bin" .) >"$build_log" 2>&1 || build_rc=$?
+    fi
+    if [ "$build_rc" -ne 0 ] && command -v docker >/dev/null 2>&1 && timeout 10 docker info >/dev/null 2>&1; then
+        local go_image="${NAPD_GO_IMAGE:-golang:1.22}"
+        _smsly_napd_log info "Host Go unavailable or < 1.22; building smsly-napd via ${go_image} container..."
+        build_rc=0
+        timeout 300 docker run --rm \
+            -v "${NAPD_SRC_DIR}:/src:ro" \
+            -v "${build_dir}:/out" \
+            -w /src \
+            -e CGO_ENABLED=0 \
+            "$go_image" \
+            go build -trimpath -ldflags="-s -w" -o "/out/smsly-napd" . >"$build_log" 2>&1 || build_rc=$?
+    elif [ "$build_rc" -ne 0 ] && [ "$go_ok" -ne 1 ]; then
+        rm -rf "$build_dir"
+        _smsly_napd_warn "Go >= 1.22 toolchain and Docker daemon unavailable — skipping build (tier sleep/wake stays manual)"
+        return 0
+    fi
+    if [ "$build_rc" -eq 0 ] && [ -s "$tmp_bin" ]; then
+        if [ ! -f "$NAPD_BIN" ] || ! cmp -s "$tmp_bin" "$NAPD_BIN"; then
+            chmod 0755 "$tmp_bin" || true
+            mv -f "$tmp_bin" "$NAPD_BIN" || {
+                rm -rf "$build_dir"
+                _smsly_napd_warn "could not install built binary"
+                return 0
+            }
+            _NAPD_BIN_CHANGED=1
+            _smsly_napd_log info "built and installed smsly-napd"
+        else
+            _smsly_napd_log info "smsly-napd binary unchanged"
+        fi
     else
+        tail -3 "$build_log" 2>/dev/null || true
         _smsly_napd_warn "go build failed — tier sleep/wake stays manual"
     fi
+    rm -rf "$build_dir"
     return 0
 }
 
@@ -31324,6 +35165,7 @@ smsly_napd_build() {
 # same value from .env via env_file — no restart needed here because the
 # update flow recreates backend containers after this runs.
 smsly_napd_write_env() {
+    _NAPD_ENV_CHANGED=0
     local env_file="${INSTALL_DIR:-/opt/smsly-hosting}/.env"
     local napd_secret=""
     if [ -f "$env_file" ]; then
@@ -31344,44 +35186,60 @@ smsly_napd_write_env() {
         fi
     fi
     mkdir -p /etc/smsly || true
-    umask 027
-    {
-        echo "# Managed by smsly install — smsly-napd env"
-        if [ -n "$napd_secret" ]; then
-            echo "NAPD_SHARED_SECRET=$napd_secret"
-        fi
-    } > "$NAPD_ENV_FILE.tmp" || {
+    (
+        umask 027
+        {
+            echo "# Managed by smsly install — smsly-napd env"
+            if [ -n "$napd_secret" ]; then
+                echo "NAPD_SHARED_SECRET=$napd_secret"
+            fi
+        } > "$NAPD_ENV_FILE.tmp"
+    ) || {
         _smsly_napd_warn "could not write $NAPD_ENV_FILE"
         return 0
     }
     chmod 0640 "$NAPD_ENV_FILE.tmp" || true
-    mv "$NAPD_ENV_FILE.tmp" "$NAPD_ENV_FILE" || {
-        _smsly_napd_warn "could not install $NAPD_ENV_FILE"
-        return 0
-    }
+    if [ ! -f "$NAPD_ENV_FILE" ] || ! cmp -s "$NAPD_ENV_FILE.tmp" "$NAPD_ENV_FILE"; then
+        mv -f "$NAPD_ENV_FILE.tmp" "$NAPD_ENV_FILE" || {
+            rm -f "$NAPD_ENV_FILE.tmp" || true
+            _smsly_napd_warn "could not install $NAPD_ENV_FILE"
+            return 0
+        }
+        _NAPD_ENV_CHANGED=1
+    else
+        rm -f "$NAPD_ENV_FILE.tmp" || true
+    fi
     return 0
 }
 
 # Install + enable the systemd unit. Never fails the update.
 smsly_napd_install() {
+    local _unit_changed=0
     smsly_napd_build || true
     smsly_napd_write_env || true
     if [ ! -f "$NAPD_UNIT_SRC" ]; then
         _smsly_napd_warn "unit source missing ($NAPD_UNIT_SRC) — skipping"
         return 0
     fi
-    cp "$NAPD_UNIT_SRC" "$NAPD_UNIT_DST" 2>/dev/null || {
-        _smsly_napd_warn "could not install systemd unit"
-        return 0
-    }
-    systemctl daemon-reload 2>/dev/null || true
-    systemctl enable smsly-napd.service 2>/dev/null || \
+    if [ ! -f "$NAPD_UNIT_DST" ] || ! cmp -s "$NAPD_UNIT_SRC" "$NAPD_UNIT_DST"; then
+        cp "$NAPD_UNIT_SRC" "$NAPD_UNIT_DST" 2>/dev/null || {
+            _smsly_napd_warn "could not install systemd unit"
+            return 0
+        }
+        _unit_changed=1
+        timeout 30 systemctl daemon-reload 2>/dev/null || true
+    fi
+    timeout 30 systemctl enable smsly-napd.service 2>/dev/null || \
         _smsly_napd_warn "enable failed (non-fatal)"
     if [ -x "$NAPD_BIN" ]; then
-        systemctl restart smsly-napd.service 2>/dev/null || \
-            systemctl start smsly-napd.service 2>/dev/null || \
-            _smsly_napd_warn "start failed (non-fatal)"
-        _smsly_napd_log info "smsly-napd installed and started"
+        if [ "$_NAPD_BIN_CHANGED" -eq 1 ] || [ "$_NAPD_ENV_CHANGED" -eq 1 ] || [ "$_unit_changed" -eq 1 ] || ! systemctl is-active --quiet smsly-napd.service 2>/dev/null; then
+            timeout 60 systemctl restart smsly-napd.service 2>/dev/null || \
+                timeout 60 systemctl start smsly-napd.service 2>/dev/null || \
+                _smsly_napd_warn "start failed (non-fatal)"
+            _smsly_napd_log info "smsly-napd installed and started"
+        else
+            _smsly_napd_log info "smsly-napd unchanged and already running"
+        fi
     else
         _smsly_napd_warn "binary missing — unit installed but not started"
     fi
@@ -31422,8 +35280,8 @@ smsly_cryptd_install() {
         go_bin="/usr/local/go/bin/go"
     fi
 
-    mkdir -p "$env_dir" /var/lib/smsly/keystore /var/lib/smsly/encrypted-volumes
-    chmod 0700 /var/lib/smsly/keystore /var/lib/smsly/encrypted-volumes 2>/dev/null || true
+    mkdir -p "$env_dir" /var/lib/smsly/keystore /var/lib/smsly/encrypted-volumes /var/lib/smsly/volume-keys
+    chmod 0700 /var/lib/smsly/keystore /var/lib/smsly/encrypted-volumes /var/lib/smsly/volume-keys 2>/dev/null || true
 
     # Build static binary atomically; replace only when bytes actually change (AGENTS.md #4).
     local build_dir=""
@@ -31435,9 +35293,10 @@ smsly_cryptd_install() {
         if (cd "$src_dir" && timeout 180 env CGO_ENABLED=0 "$go_bin" build -trimpath -ldflags="-s -w" -o "$tmp_bin" ./cmd/grid-cryptd); then
             build_ok=1
         fi
-    elif command -v docker >/dev/null 2>&1 && timeout 10 docker info >/dev/null 2>&1; then
+    fi
+    if [ "$build_ok" -ne 1 ] && command -v docker >/dev/null 2>&1 && timeout 10 docker info >/dev/null 2>&1; then
         local go_image="${CRYPTD_GO_IMAGE:-golang:1.22}"
-        echo "[cryptd] Host Go not found; building grid-cryptd via ${go_image} container..."
+        echo "[cryptd] Host Go unavailable or build failed; building grid-cryptd via ${go_image} container..."
         if timeout 300 docker run --rm \
             -v "${src_dir}:/src:ro" \
             -v "${build_dir}:/out" \
@@ -31447,7 +35306,7 @@ smsly_cryptd_install() {
             go build -trimpath -ldflags="-s -w" -o "/out/grid-cryptd" ./cmd/grid-cryptd; then
             build_ok=1
         fi
-    else
+    elif [ "$build_ok" -ne 1 ] && [ -z "$go_bin" ]; then
         rm -rf "$build_dir"
         echo "[cryptd] Neither Go toolchain nor Docker daemon available; skipping grid-cryptd build." >&2
         return 0
@@ -31472,10 +35331,10 @@ smsly_cryptd_install() {
     local root_env="$install_dir/.env"
     local shared_sec="${CRYPTD_SHARED_SECRET:-}"
     if [ -z "$shared_sec" ] && [ -f "$root_env" ]; then
-        shared_sec="$(grep -E '^CRYPTD_SHARED_SECRET=' "$root_env" | tail -n 1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//' || true)"
+        shared_sec="$(grep -E '^CRYPTD_SHARED_SECRET=' "$root_env" | tail -n 1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^["'\'']//' -e 's/["'\'']$//' || true)"
     fi
     if [ -z "$shared_sec" ] && [ -f "$env_file" ]; then
-        shared_sec="$(grep -E '^CRYPTD_SHARED_SECRET=' "$env_file" | tail -n 1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^"//' -e 's/"$//' || true)"
+        shared_sec="$(grep -E '^CRYPTD_SHARED_SECRET=' "$env_file" | tail -n 1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^["'\'']//' -e 's/["'\'']$//' || true)"
     fi
     if [ -z "$shared_sec" ]; then
         if command -v openssl >/dev/null 2>&1; then
@@ -31488,17 +35347,35 @@ smsly_cryptd_install() {
         printf '\nCRYPTD_SHARED_SECRET=%s\n' "$shared_sec" >> "$root_env" || true
     fi
 
-    # Seed /etc/smsly/cryptd.env once if missing.
+    # Seed /etc/smsly/cryptd.env once if missing, then idempotently reconcile
+    # CRYPTD_ENABLED, CRYPTD_SHARED_SECRET, CRYPTD_VAULT_PROVIDER, and
+    # CRYPTD_VAULT_ENDPOINT from .env into /etc/smsly/cryptd.env.
     # Bind 0.0.0.0:9105 so Docker containers (backend/celery) reach host systemd via host.docker.internal
     # (port stays host-local / blocked in UFW; every endpoint except /health requires X-Cryptd-Secret).
+    local env_changed=0
+    local _desired_enabled="${CRYPTD_ENABLED:-}"
+    local _desired_provider="${CRYPTD_VAULT_PROVIDER:-}"
+    local _desired_endpoint="${CRYPTD_VAULT_ENDPOINT:-}"
+    if [ -f "$root_env" ]; then
+        if [ -z "$_desired_enabled" ]; then
+            _desired_enabled="$(grep -E '^CRYPTD_ENABLED=' "$root_env" | tail -n 1 | cut -d= -f2- | tr -d "\r\"'" | tr '[:upper:]' '[:lower:]' || true)"
+        fi
+        if [ -z "$_desired_provider" ]; then
+            _desired_provider="$(grep -E '^CRYPTD_VAULT_PROVIDER=' "$root_env" | tail -n 1 | cut -d= -f2- | tr -d "\r\"'" || true)"
+        fi
+        if [ -z "$_desired_endpoint" ]; then
+            _desired_endpoint="$(grep -E '^CRYPTD_VAULT_ENDPOINT=' "$root_env" | tail -n 1 | cut -d= -f2- | tr -d "\r\"'" || true)"
+        fi
+    fi
+
     if [ ! -f "$env_file" ]; then
         {
             echo "# Trulay Grid Cryptographic Controller (opt-in: set CRYPTD_ENABLED=true and configure external vault)"
-            echo "CRYPTD_ENABLED=${CRYPTD_ENABLED:-false}"
+            echo "CRYPTD_ENABLED=${_desired_enabled:-false}"
             echo "CRYPTD_LISTEN_ADDR=0.0.0.0:9105"
             echo "CRYPTD_SHARED_SECRET=$shared_sec"
-            echo "CRYPTD_VAULT_PROVIDER=${CRYPTD_VAULT_PROVIDER:-http_vault}"
-            echo "CRYPTD_VAULT_ENDPOINT=${CRYPTD_VAULT_ENDPOINT:-}"
+            echo "CRYPTD_VAULT_PROVIDER=${_desired_provider:-http_vault}"
+            echo "CRYPTD_VAULT_ENDPOINT=${_desired_endpoint:-}"
             echo "CRYPTD_EPOCH_DURATION=168h"
             echo "CRYPTD_GRACE_DURATION=24h"
             echo "CRYPTD_KEYSTORE_DIR=/var/lib/smsly/keystore"
@@ -31511,6 +35388,51 @@ smsly_cryptd_install() {
             echo "# CRYPTD_REDIS_UPSTREAM=127.0.0.1:6379"
         } > "$env_file"
         chmod 0600 "$env_file"
+        env_changed=1
+    else
+        local _reconcile_tmp="${env_file}.tmp.$$"
+        cp "$env_file" "$_reconcile_tmp"
+        python3 - "$_reconcile_tmp" "${_desired_enabled}" "${shared_sec}" "${_desired_provider}" "${_desired_endpoint}" <<'PY'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+updates = {}
+if sys.argv[2]:
+    updates["CRYPTD_ENABLED"] = sys.argv[2].lower()
+if sys.argv[3]:
+    updates["CRYPTD_SHARED_SECRET"] = sys.argv[3]
+if sys.argv[4]:
+    updates["CRYPTD_VAULT_PROVIDER"] = sys.argv[4]
+if sys.argv[5]:
+    updates["CRYPTD_VAULT_ENDPOINT"] = sys.argv[5]
+
+lines = p.read_text().splitlines()
+seen = set()
+out = []
+for line in lines:
+    matched = False
+    for k, v in updates.items():
+        if line.startswith(f"{k}="):
+            if k not in seen:
+                out.append(f"{k}={v}")
+                seen.add(k)
+            matched = True
+            break
+    if not matched:
+        out.append(line)
+for k, v in updates.items():
+    if k not in seen:
+        out.append(f"{k}={v}")
+p.write_text("\n".join(out) + "\n")
+PY
+        chmod 0600 "$_reconcile_tmp"
+        if ! cmp -s "$_reconcile_tmp" "$env_file"; then
+            mv -f "$_reconcile_tmp" "$env_file"
+            env_changed=1
+        else
+            rm -f "$_reconcile_tmp"
+        fi
     fi
 
     local unit_changed=0
@@ -31520,8 +35442,12 @@ smsly_cryptd_install() {
             unit_changed=1
         fi
     fi
+    local vault_systemd_dst="/etc/systemd/system/smsly-root-vault.service"
     if [ -f "$vault_unit_src" ]; then
-        cp "$vault_unit_src" /etc/systemd/system/smsly-root-vault.service 2>/dev/null || true
+        if [ ! -f "$vault_systemd_dst" ] || ! cmp -s "$vault_unit_src" "$vault_systemd_dst"; then
+            cp "$vault_unit_src" "$vault_systemd_dst" 2>/dev/null || true
+            unit_changed=1
+        fi
     fi
 
     if command -v systemctl >/dev/null 2>&1; then
@@ -31532,14 +35458,14 @@ smsly_cryptd_install() {
         # Opt-in guard (user chooses to enable CRYPTD_ENABLED=true or not).
         local enabled_flag="false"
         if [ -f "$env_file" ]; then
-            enabled_flag="$(grep -E '^CRYPTD_ENABLED=' "$env_file" | tail -n 1 | cut -d= -f2- | tr -d '"' | tr '[:upper:]' '[:lower:]' || echo false)"
+            enabled_flag="$(grep -E '^CRYPTD_ENABLED=' "$env_file" | tail -n 1 | cut -d= -f2- | tr -d "\r\"'" | tr '[:upper:]' '[:lower:]' || echo false)"
         fi
         if [ "${CRYPTD_ENABLED:-$enabled_flag}" = "true" ]; then
             if [ -f "$root_env" ] && ! grep -qE '^SMSLY_CRYPTD_URL=' "$root_env"; then
                 printf 'SMSLY_CRYPTD_URL=http://host.docker.internal:9105\n' >> "$root_env" || true
             fi
             timeout 30 systemctl enable smsly-cryptd >/dev/null 2>&1 || true
-            if [ "$bin_changed" -eq 1 ] || [ "$unit_changed" -eq 1 ] || ! systemctl is-active --quiet smsly-cryptd; then
+            if [ "$bin_changed" -eq 1 ] || [ "$unit_changed" -eq 1 ] || [ "$env_changed" -eq 1 ] || ! systemctl is-active --quiet smsly-cryptd; then
                 timeout 60 systemctl restart smsly-cryptd || echo "[cryptd] WARN: smsly-cryptd failed to start (check external vault config)" >&2
             fi
         fi
@@ -31644,83 +35570,105 @@ if ! is_checkpoint_done "memory_hardened"; then
 # ─── Swap: Ensure swap is at least 4x RAM ────────────────────────────────────
 ensure_system_swap
 
-# ─── Auto-Maintenance: Install OOM Swap Adjuster ─────────────────────────────
+# ─── Auto-Maintenance: Install Bounded Emergency Swap Adjuster ───────────────
 OOM_SCRIPT="/opt/smsly/scripts/oom-swap-adjuster.sh"
 mkdir -p /opt/smsly/scripts
 cat << 'EOF' > "$OOM_SCRIPT"
 #!/usr/bin/env bash
 # oom-swap-adjuster.sh
 #
-# Monitors the system for Out Of Memory (OOM) kills. If one is detected within the last
-# X minutes, it automatically increases the swap space by 200MB up to a maximum of 4x RAM.
-# This serves as an auto-maintenance feature to prevent recurring build crashes.
+# Adds bounded emergency swap ONLY when the host itself is under real memory
+# pressure (MemAvailable < 10% of MemTotal) or disk swap is critically low.
+# Ignores isolated container cgroup OOM kills when the host has plenty of
+# MemAvailable. Caps total disk swap at 4096MB (4GB) and max 2 swapfiles,
+# using fixed slot names so /swapfile* can never stack infinitely.
 
 set -euo pipefail
 
 LOG_FILE="/var/log/smsly-oom-adjuster.log"
-MINUTES_BACK=10
 SWAPFILE_PREFIX="/swapfile-smsly-auto"
+MAX_TOTAL_SWAP_MB=4096
+MAX_SWAPFILES=2
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
 }
 
-# Check for OOM events in the last N minutes using journalctl
-OOM_COUNT=$(journalctl -k --since "${MINUTES_BACK} minutes ago" | grep -i "out of memory" | wc -l || true)
-
-if [ "$OOM_COUNT" -eq 0 ]; then
-    # No OOM detected recently, exit quietly.
+MEM_TOTAL_KB=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+MEM_AVAIL_KB=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+if [ "${MEM_TOTAL_KB:-0}" -le 0 ]; then
     exit 0
-
 fi
 
-log "Detected $OOM_COUNT OOM events in the last $MINUTES_BACK minutes. Evaluating swap size."
+MEM_AVAIL_PCT=$((MEM_AVAIL_KB * 100 / MEM_TOTAL_KB))
+SWAP_TOTAL_KB=$(awk '/^SwapTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+SWAP_FREE_KB=$(awk '/^SwapFree:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
 
-# Get RAM size in MB
-RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
+SWAP_CRITICAL=0
+if [ "${SWAP_TOTAL_KB:-0}" -gt 0 ]; then
+    SWAP_FREE_PCT=$((SWAP_FREE_KB * 100 / SWAP_TOTAL_KB))
+    if [ "$SWAP_FREE_PCT" -lt 10 ] && [ "$MEM_AVAIL_PCT" -lt 25 ]; then
+        SWAP_CRITICAL=1
+    fi
+fi
+
+# Only trigger on real host-wide memory pressure (MemAvailable < 10%) or
+# critically low swap while MemAvailable < 25%.
+if [ "$MEM_AVAIL_PCT" -ge 10 ] && [ "$SWAP_CRITICAL" -eq 0 ]; then
+    exit 0
+fi
+
+RAM_MB=$((MEM_TOTAL_KB / 1024))
 CURRENT_SWAP_MB=$(free -m | awk '/^Swap:/{print $2}')
 
-# Maximum allowed swap is 4x RAM
-MAX_SWAP_MB=$((RAM_MB * 4))
+# Hard cap at 4GB (4096MB) total swap (or 2x RAM on <2GB hosts).
+MAX_SWAP_MB=$((RAM_MB * 2))
+[ "$MAX_SWAP_MB" -gt "$MAX_TOTAL_SWAP_MB" ] && MAX_SWAP_MB="$MAX_TOTAL_SWAP_MB"
 
-if [ "$CURRENT_SWAP_MB" -ge "$MAX_SWAP_MB" ]; then
-    log "Swap is already at or above the maximum allowed limit (4x RAM = ${MAX_SWAP_MB}MB). No further auto-adjustment will be made."
+if [ "${CURRENT_SWAP_MB:-0}" -ge "$MAX_SWAP_MB" ]; then
     exit 0
 fi
 
-# Calculate new swap chunk to add (200MB)
-ADD_SWAP_MB=200
-NEW_TOTAL_MB=$((CURRENT_SWAP_MB + ADD_SWAP_MB))
+# Cap at max 2 disk swapfiles total (excluding zram) and never infinitely stack /swapfile*
+ACTIVE_DISK_SWAPS=$(awk 'NR>1 && $1 !~ /^\/dev\/zram/ {c++} END {print c+0}' /proc/swaps 2>/dev/null || echo 0)
+EXISTING_SWAPFILES=$(find / -maxdepth 1 -name 'swapfile*' 2>/dev/null | wc -l || echo 0)
+if [ "${ACTIVE_DISK_SWAPS:-0}" -ge "$MAX_SWAPFILES" ] || [ "${EXISTING_SWAPFILES:-0}" -ge "$MAX_SWAPFILES" ]; then
+    exit 0
+fi
 
-# Cap at max if we would overshoot
+ADD_SWAP_MB=512
+NEW_TOTAL_MB=$((CURRENT_SWAP_MB + ADD_SWAP_MB))
 if [ "$NEW_TOTAL_MB" -gt "$MAX_SWAP_MB" ]; then
     ADD_SWAP_MB=$((MAX_SWAP_MB - CURRENT_SWAP_MB))
     NEW_TOTAL_MB=$MAX_SWAP_MB
 fi
-
-if [ "$ADD_SWAP_MB" -le 0 ]; then
+if [ "$ADD_SWAP_MB" -lt 128 ]; then
     exit 0
 fi
 
-# Skip if root filesystem has less than 2GB headroom beyond the new swapfile.
+# Require at least 4GB disk headroom beyond the new swapfile.
 AVAIL_DISK_MB=$(df -Pm / | awk 'NR==2{print $4}')
-if [ "${AVAIL_DISK_MB:-0}" -lt $((ADD_SWAP_MB + 2048)) ]; then
-    log "Insufficient disk space (${AVAIL_DISK_MB}MB free). Skipping swap adjustment."
+if [ "${AVAIL_DISK_MB:-0}" -lt $((ADD_SWAP_MB + 4096)) ]; then
+    log "Insufficient disk space (${AVAIL_DISK_MB}MB free). Skipping emergency swap."
     exit 0
 fi
 
-# Guard against kernel MAX_SWAPFILES exhaustion (unactivated files would leak disk).
-ACTIVE_SWAPS=$(swapon --noheadings 2>/dev/null | wc -l || echo 0)
-if [ "${ACTIVE_SWAPS:-0}" -ge 24 ]; then
-    log "Active swap area count ($ACTIVE_SWAPS) at safety cap. Skipping swap adjustment."
+# Pick a deterministic bounded slot (never timestamp-stacked)
+NEW_SWAPFILE=""
+for _slot in 1 2; do
+    _cand="${SWAPFILE_PREFIX}-${_slot}"
+    if [ ! -e "$_cand" ]; then
+        NEW_SWAPFILE="$_cand"
+        break
+    fi
+done
+if [ -z "$NEW_SWAPFILE" ]; then
     exit 0
 fi
 
-NEW_SWAPFILE="${SWAPFILE_PREFIX}-$(date '+%s')"
-log "Increasing swap by ${ADD_SWAP_MB}MB. Creating ${NEW_SWAPFILE}..."
+log "Host MemAvailable=${MEM_AVAIL_PCT}% (swap_critical=${SWAP_CRITICAL}). Adding bounded emergency swap ${ADD_SWAP_MB}MB at ${NEW_SWAPFILE}..."
 
 if ! fallocate -l "${ADD_SWAP_MB}M" "$NEW_SWAPFILE" 2>/dev/null; then
-    log "fallocate failed, trying dd..."
     if ! dd if=/dev/zero of="$NEW_SWAPFILE" bs=1M count="$ADD_SWAP_MB" status=none; then
         log "Failed to create swap file."
         rm -f "$NEW_SWAPFILE"
@@ -31737,12 +35685,11 @@ if ! mkswap "$NEW_SWAPFILE" >/dev/null 2>&1 || ! (swapon -p 10 "$NEW_SWAPFILE" 2
     exit 1
 fi
 
-# Make it permanent
 if ! grep -q "$NEW_SWAPFILE" /etc/fstab ; then
     echo "$NEW_SWAPFILE none swap sw,pri=10 0 0" >> /etc/fstab
 fi
 
-log "Successfully added ${ADD_SWAP_MB}MB of swap. Total swap is now approx ${NEW_TOTAL_MB}MB."
+log "Added ${ADD_SWAP_MB}MB emergency swap (${NEW_SWAPFILE}). Total swap is now approx ${NEW_TOTAL_MB}MB."
 EOF
 chmod +x "$OOM_SCRIPT"
 
@@ -31831,18 +35778,19 @@ fi
 
 # ─── OOM Protection for critical containers ──────────────────────────────────
 echo -e "${BLUE}  → Setting OOM protection for critical containers...${NC}"
-if [ "$MODE_AGENT_LITE" = "true" ]; then
-    CRITICAL_CONTAINERS=(smsly-hosting-traefik-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1)
+if [ "${MODE_AGENT_LITE:-false}" = "true" ]; then
+    CRITICAL_CONTAINERS=(smsly-hosting-traefik-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-redis-1 smsly-hosting-rabbitmq-1 smsly-hosting-socket-proxy-1)
 elif is_node_mode; then
-    CRITICAL_CONTAINERS=(smsly-hosting-caddy-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1 smsly-postgres-primary)
+    CRITICAL_CONTAINERS=(smsly-hosting-caddy-1 smsly-hosting-traefik-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-celery-beat-1 smsly-hosting-redis-1 smsly-hosting-rabbitmq-1 smsly-hosting-socket-proxy-1 smsly-postgres-primary)
 else
-    CRITICAL_CONTAINERS=(smsly-hosting-backend-1 smsly-postgres-primary smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1)
+    CRITICAL_CONTAINERS=(smsly-hosting-backend-1 smsly-postgres-primary smsly-patroni-1 smsly-haproxy smsly-redis-primary smsly-hosting-rabbitmq-1 smsly-hosting-caddy-1 smsly-hosting-traefik-1 smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1)
 fi
 for CONTAINER in "${CRITICAL_CONTAINERS[@]}"; do
-    resolved_container="$(resolve_container_target "$CONTAINER")"
-    CPID=$(docker inspect --format '{{.State.Pid}}' "$resolved_container"  || echo "")
+    resolved_container="$(resolve_container_target "$CONTAINER" 2>/dev/null || true)"
+    [ -n "$resolved_container" ] || continue
+    CPID=$(docker inspect --format '{{.State.Pid}}' "$resolved_container" 2>/dev/null || echo "")
     if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
-        echo -500 > "/proc/$CPID/oom_score_adj"  || true
+        echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
     fi
 done
 echo -e "${GREEN}  ✓ OOM protection set (${CRITICAL_CONTAINERS[*]})${NC}"
@@ -31904,6 +35852,11 @@ if command -v ufw ; then
         ufw allow from 172.16.0.0/12 to any port 6379 proto tcp  || true
         ufw allow from 172.16.0.0/12 to any port 5672 proto tcp  || true
     fi
+    # Allow SSH port 22 on master/standalone before enabling UFW; agent-lite/node
+    # restrict SSH to MASTER_IP via the rule above.
+    if [ "$MODE_AGENT_LITE" != "true" ] && [ "$MODE_NODE" != "true" ]; then
+        ufw allow 22/tcp || true
+    fi
     echo "y" | ufw enable  || true
     echo -e "${GREEN}  ✓ Firewall hardened (Inbound blocked, SSH/Web permitted)${NC}"
 fi
@@ -31933,22 +35886,23 @@ if command -v iptables ; then
     done
 
     for _port in $_infra_ports; do
+        # Insert DROP at index 1 first so it sits BEFORE Docker's -j RETURN rule;
+        # ACCEPT rules inserted at index 1 afterward sit above the DROP.
+        iptables -I DOCKER-USER 1 -p tcp --dport "$_port" -j DROP  || true
+
         # Allow localhost (container-to-container on the same host)
-        iptables -I DOCKER-USER -i lo -p tcp --dport "$_port" -j ACCEPT  || true
+        iptables -I DOCKER-USER 1 -i lo -p tcp --dport "$_port" -j ACCEPT  || true
 
         # Allow Docker bridge networks (172.16.0.0/12 covers docker0 + compose nets)
-        iptables -I DOCKER-USER -s 172.16.0.0/12 -p tcp --dport "$_port" -j ACCEPT  || true
+        iptables -I DOCKER-USER 1 -s 172.16.0.0/12 -p tcp --dport "$_port" -j ACCEPT  || true
 
         # Allow WireGuard mesh (10.100.0.0/24 is the assigned mesh range)
-        iptables -I DOCKER-USER -s 10.100.0.0/24 -p tcp --dport "$_port" -j ACCEPT  || true
+        iptables -I DOCKER-USER 1 -s 10.100.0.0/24 -p tcp --dport "$_port" -j ACCEPT  || true
 
         # Allow known node IPs
         if [ -n "${MASTER_MESH_IP:-}" ]; then
-            iptables -I DOCKER-USER -s "${MASTER_MESH_IP}" -p tcp --dport "$_port" -j ACCEPT  || true
+            iptables -I DOCKER-USER 1 -s "${MASTER_MESH_IP}" -p tcp --dport "$_port" -j ACCEPT  || true
         fi
-
-        # Drop everything else to this port
-        iptables -A DOCKER-USER -p tcp --dport "$_port" -j DROP  || true
     done
 
     # Return to the DOCKER chain for all other traffic
@@ -31958,7 +35912,8 @@ if command -v iptables ; then
     echo -e "${GREEN}  ✓ Infrastructure ports hardened (5000, 5432, 6379, 5672) — locked to localhost + mesh + docker networks${NC}"
 
     # Allow remote Promtail → Loki on WireGuard interface (VPN mesh)
-    iptables -A INPUT -i wg+ -p tcp --dport 3100 -j ACCEPT  || true
+    iptables -C INPUT -i wg+ -p tcp --dport 3100 -j ACCEPT 2>/dev/null || \
+        iptables -A INPUT -i wg+ -p tcp --dport 3100 -j ACCEPT  || true
 
     # Persist iptables rules across reboots
     if command -v iptables-save ; then
@@ -32138,39 +36093,51 @@ fi
 # finishing "green" while blind or unprotected otherwise. Warn loudly
 # (non-blocking: tiny hosts may intentionally skip them).
 echo -e "${BLUE}  → [3/4] Checking observability stack...${NC}"
-OBS_MISSING=""
-for _obs in smsly-loki smsly-promtail smsly-grafana smsly-cadvisor smsly-docker-labels smsly-prometheus smsly-alertmanager smsly-node-exporter; do
-    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$_obs"; then
-        OBS_MISSING="${OBS_MISSING} ${_obs}"
-    fi
-done
-if [ -z "$OBS_MISSING" ]; then
-    echo -e "${GREEN}  ✓ Observability stack present (loki/promtail/grafana/cadvisor/docker-labels/prometheus/alertmanager/node-exporter)${NC}"
+_verify_tier="${STACK_TIER:-}"
+[ -n "$_verify_tier" ] || _verify_tier="$(env_get_value "$INSTALL_DIR/.env" "STACK_TIER" || true)"
+[ -n "$_verify_tier" ] || _verify_tier="full"
+if [ "$_verify_tier" = "lite" ]; then
+    echo -e "${GREEN}  ✓ Observability stack skipped by design (STACK_TIER=lite)${NC}"
 else
-    echo -e "${YELLOW}  ⚠ Observability services missing:${OBS_MISSING}${NC}"
-    echo -e "${YELLOW}    Grafana embeds will 502, Loki stays empty, and autoscaler targets stay incomplete.${NC}"
-    echo -e "${YELLOW}    Ensure COMPOSE_PROFILES in $INSTALL_DIR/.env includes 'medium,full', then:${NC}"
-    echo -e "${YELLOW}    docker compose -f $COMPOSE_FILE up -d loki promtail grafana cadvisor docker-labels alertmanager${NC}"
+    OBS_MISSING=""
+    for _obs in smsly-loki smsly-promtail smsly-grafana smsly-cadvisor smsly-docker-labels smsly-prometheus smsly-alertmanager smsly-node-exporter; do
+        if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$_obs"; then
+            OBS_MISSING="${OBS_MISSING} ${_obs}"
+        fi
+    done
+    if [ -z "$OBS_MISSING" ]; then
+        echo -e "${GREEN}  ✓ Observability stack present (loki/promtail/grafana/cadvisor/docker-labels/prometheus/alertmanager/node-exporter)${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Observability services missing:${OBS_MISSING}${NC}"
+        echo -e "${YELLOW}    Grafana embeds will 502, Loki stays empty, and autoscaler targets stay incomplete.${NC}"
+        echo -e "${YELLOW}    Ensure COMPOSE_PROFILES in $INSTALL_DIR/.env includes 'medium', then:${NC}"
+        echo -e "${YELLOW}    docker compose -f $COMPOSE_FILE up -d loki promtail grafana cadvisor docker-labels alertmanager${NC}"
+    fi
 fi
 # Full-stack presence (warn-only): falco + spire servers + build caches.
 # SPIRE agents are intentionally excluded here — they never start via
 # compose profiles (single-use join tokens, AGENTS.md #18); their owner
 # is lib/harden.sh _harden_spire_bootstrap and harden_security_verify.
 echo -e "${BLUE}  → [3/4] Checking full-profile stack...${NC}"
-FULL_MISSING=""
-for _full in smsly-falco smsly-spire-server smsly-spire-server-ecosystem smsly-apt-cacher smsly-verdaccio; do
-    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$_full"; then
-        FULL_MISSING="${FULL_MISSING} ${_full}"
-    fi
-done
-if [ -z "$FULL_MISSING" ]; then
-    echo -e "${GREEN}  ✓ Full-profile stack present (falco/spire-servers/apt-cacher/verdaccio)${NC}"
+if [ "$_verify_tier" != "full" ]; then
+    echo -e "${GREEN}  ✓ Full-profile stack skipped by design (STACK_TIER=${_verify_tier})${NC}"
 else
-    echo -e "${YELLOW}  ⚠ Full-profile services missing:${FULL_MISSING}${NC}"
-    echo -e "${YELLOW}    Ensure COMPOSE_PROFILES in $INSTALL_DIR/.env includes 'full', then:${NC}"
-    echo -e "${YELLOW}    docker compose -f $COMPOSE_FILE up -d falco spire-server spire-server-ecosystem apt-cacher verdaccio${NC}"
-    echo -e "${YELLOW}    (spire agents start via join-token bootstrap, not compose: see lib/harden.sh)${NC}"
+    FULL_MISSING=""
+    for _full in smsly-falco smsly-spire-server smsly-spire-server-ecosystem smsly-apt-cacher smsly-verdaccio; do
+        if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$_full"; then
+            FULL_MISSING="${FULL_MISSING} ${_full}"
+        fi
+    done
+    if [ -z "$FULL_MISSING" ]; then
+        echo -e "${GREEN}  ✓ Full-profile stack present (falco/spire-servers/apt-cacher/verdaccio)${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Full-profile services missing:${FULL_MISSING}${NC}"
+        echo -e "${YELLOW}    Ensure COMPOSE_PROFILES in $INSTALL_DIR/.env includes 'full', then:${NC}"
+        echo -e "${YELLOW}    docker compose -f $COMPOSE_FILE up -d falco spire-server spire-server-ecosystem apt-cacher verdaccio${NC}"
+        echo -e "${YELLOW}    (spire agents start via join-token bootstrap, not compose: see lib/harden.sh)${NC}"
+    fi
 fi
+unset _verify_tier
 
 # ─── Check 4: Swap is sufficient ──────────────────────────────────────────
 echo -e "${BLUE}  → [3/4] Checking swap...${NC}"
@@ -32278,7 +36245,7 @@ fi
 # Install encrypted database backup (daily 02:30, 7-day retention).
 # The unit maps BACKUP_ENCRYPTION_KEY from .env to BACKUP_PASS, so no
 # extra secret handling is needed. Non-fatal on hosts without systemd.
-if [ -f "$INSTALL_DIR/scripts/backup.sh" ] && [ -f "$INSTALL_DIR/scripts/smsly-backup.timer" ]; then
+if [ "$MODE_AGENT_LITE" != "true" ] && [ -f "$INSTALL_DIR/scripts/backup.sh" ] && [ -f "$INSTALL_DIR/scripts/smsly-backup.timer" ]; then
     echo -e "${BLUE}  → Installing encrypted database backup timer...${NC}"
     chmod +x "$INSTALL_DIR/scripts/backup.sh"
     cp "$INSTALL_DIR/scripts/smsly-backup.service" /etc/systemd/system/smsly-backup.service  || true
@@ -32441,31 +36408,6 @@ echo -e "   Install Log: $LOG_FILE"
 echo -e "   Location:    $INSTALL_DIR"
 echo -e "   Memory:      $(free -m | awk '/^Mem:/{print $7}')MB available"
 echo -e "   Swap:        $(free -m | awk '/^Swap:/{print $2}')MB total"
-
-# ─── Custom Domain SSL Integration ───────────────────────────────────────────
-if should_manage_caddy; then  # Only for master mode
-    echo -e "\n${YELLOW}[9/9] Setting up Custom Domain SSL Services...${NC}"
-    
-    # Check if custom domain SSL manager script exists
-    SSL_SCRIPT="install-custom-domain-ssl.sh"
-    [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
-    if [ -f "$SSL_SCRIPT" ]; then
-        echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-        bash "$SSL_SCRIPT" install
-        
-        # Start the services
-        echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-        /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
-        
-        # Enable auto-start on boot
-        echo -e "${BLUE}  → Enabling auto-start on boot...${NC}"
-        /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
-        
-        echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
-    else
-        echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
-    fi
-fi
 
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 if [ "$MODE_AGENT_LITE" != "true" ]; then

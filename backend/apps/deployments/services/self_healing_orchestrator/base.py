@@ -30,7 +30,7 @@ POST_RECOVERY_WAIT = SELF_HEAL_COOLDOWN
 class BaseOrchestratorMixin:
     def __init__(self, server):
         try:
-            from .models.core import ManagedServer
+            from apps.deployments.models.platform import ManagedServer
             fresh = ManagedServer.objects.only(
                 "id", "name", "host", "ssh_key", "ssh_password",
                 "ssh_user", "ssh_port", "is_lite_agent", "status",

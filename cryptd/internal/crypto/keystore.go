@@ -44,6 +44,7 @@ type ServiceKeyRecord struct {
 	RedisPrefixes    []string                   `json:"redis_prefixes,omitempty"`
 	UpstreamPG       string                     `json:"upstream_pg,omitempty"`
 	UpstreamRedis    string                     `json:"upstream_redis,omitempty"`
+	UpstreamRedisTLS bool                       `json:"upstream_redis_tls,omitempty"`
 	EncryptRedisVals bool                       `json:"encrypt_redis_vals"`
 	VolumeNames      []string                   `json:"volume_names,omitempty"`
 	VolumeDEKs       map[string]VolumeDEKRecord `json:"volume_deks,omitempty"`
@@ -193,6 +194,52 @@ func (ks *KeyStore) SaveService(rec *ServiceKeyRecord) error {
 		return err
 	}
 	return writeFileAtomic(p, raw)
+}
+
+// UpdateService atomically reads, mutates via fn, and persists a ServiceKeyRecord under the keystore lock.
+// If no record exists on disk yet, fn receives a fresh ServiceKeyRecord initialized with the validated ServiceID.
+func (ks *KeyStore) UpdateService(serviceID string, fn func(*ServiceKeyRecord) error) error {
+	if fn == nil {
+		return errors.New("nil update callback")
+	}
+	cleanID, err := ValidateIdentifier(serviceID)
+	if err != nil {
+		return err
+	}
+	p := filepath.Join(ks.rootDir, "services", cleanID+".json")
+
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+
+	var rec *ServiceKeyRecord
+	raw, err := os.ReadFile(p)
+	if err == nil {
+		var loaded ServiceKeyRecord
+		if uerr := json.Unmarshal(raw, &loaded); uerr != nil {
+			return uerr
+		}
+		rec = &loaded
+	} else if errors.Is(err, os.ErrNotExist) {
+		rec = &ServiceKeyRecord{ServiceID: cleanID}
+	} else {
+		return err
+	}
+
+	if err := fn(rec); err != nil {
+		return err
+	}
+	if rec.ServiceID == "" {
+		rec.ServiceID = cleanID
+	}
+	outPath, err := ks.servicePath(rec.ServiceID)
+	if err != nil {
+		return err
+	}
+	encoded, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(outPath, encoded)
 }
 
 // DeleteService removes a service record from keystore.

@@ -186,7 +186,12 @@ export async function middleware(request: NextRequest) {
   // Protect dashboard routes. Allow session-only users through so the
   // client can exchange session->token without forcing a hard redirect loop.
   if (protectedPage && !hasApiToken && !hasSession) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    const hasSearch = Boolean(request.nextUrl.search);
+    const loginTarget =
+      pathname !== "/dashboard" || hasSearch
+        ? `/login?next=${encodeURIComponent(`${pathname}${request.nextUrl.search}`)}`
+        : "/login";
+    return NextResponse.redirect(new URL(loginTarget, request.url));
   }
 
   // Redirect auth pages only when API token exists. Session-only state can
@@ -243,7 +248,9 @@ export const config = {
     "/replication/:path*",
     "/restore/:path*",
     "/addons/:path*",
-    "/settings/:path*",
+    "/mcp/:path*",
+    "/cloud/:path*",
+    "/console/:path*",
     "/login",
     "/register",
     "/auth/:path*",

@@ -14,7 +14,6 @@ import {
   isDeploymentFailed,
   isDeploymentInProgress,
   isDeploymentLive,
-  isDeploymentTerminal,
 } from "@/lib/deploymentStatus";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
@@ -27,7 +26,6 @@ export default function DeploymentWatchPage() {
   const { setSpaceOpsState, resetSpaceOpsState } = useSpaceOps();
   const [deployment, setDeployment] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [logs, setLogs] = useState<string>("Initializing deployment watch...\n");
   const [recovering, setRecovering] = useState(false);
   const confirm = useConfirm();
 
@@ -66,15 +64,6 @@ export default function DeploymentWatchPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  useEffect(() => {
-    // Simulate streaming logs if active
-    if (!deployment || isDeploymentTerminal(deployment.status)) return;
-
-    const interval = setInterval(() => {
-        setLogs(prev => prev + `[${new Date().toISOString()}] Waiting for status update...\n`);
-    }, 3000);
-  }, [deployment?.status, deployment]);
-
   if (loading) {
     return (
       <DashboardShell>
@@ -91,7 +80,7 @@ export default function DeploymentWatchPage() {
               <div className="flex-1 p-8 relative z-10">
                   <div className="max-w-4xl mx-auto text-center mt-20">
                       <h2 className="text-2xl font-bold mb-4">Deployment Not Found</h2>
-                      <Link href="/deployments"><Button>Back to Deployments</Button></Link>
+                      <Button asChild><Link href="/deployments">Back to Deployments</Link></Button>
                   </div>
               </div>
           </DashboardShell>
@@ -101,6 +90,18 @@ export default function DeploymentWatchPage() {
   const isFailed = isDeploymentFailed(deployment?.status);
   const isActive = isDeploymentLive(deployment?.status);
   const isDeploying = isDeploymentInProgress(deployment?.status);
+  const status = String(deployment?.status || "");
+  const isBuildingStage = status === "BUILDING";
+  const isDeployingStage = ["DEPLOYING", "BACKUP_RUNNING", "MIGRATION_PLANNING", "MIGRATION_RUNNING"].includes(status);
+  const isHealthCheckStage = status === "HEALTH_CHECK";
+  const hasPassedBuilding = !isBuildingStage && !["QUEUED", "REVIEW", "AWAITING_APPROVAL", "BUILD_FAILED"].includes(status);
+  const hasPassedDeploying = isActive || ["HEALTH_CHECK", "STAGED", "HEALTH_CHECK_FAILED"].includes(status);
+  const combinedLogs = [
+    deployment.build_logs ? `=== Build Logs ===\n${deployment.build_logs}` : null,
+    deployment.runtime_logs ? `=== Runtime Logs ===\n${deployment.runtime_logs}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   // containerd corruption signature (mirrors
   // backend/apps/deployments/tasks/build_recovery.py patterns). The
   // Recover button only shows when the logs match, so a plain failure
@@ -139,11 +140,11 @@ export default function DeploymentWatchPage() {
         <div className="flex-1 p-4 pt-safe sm:p-8 relative z-10 w-full overflow-x-hidden">
             <div className="max-w-6xl mx-auto space-y-6">
                 <div className="flex items-center gap-4 mb-6">
-                    <Link href="/deployments">
-                        <Button variant="ghost" size="icon" className="rounded-full bg-muted/50 hover:bg-muted">
+                    <Button variant="ghost" size="icon" asChild className="rounded-full bg-muted/50 hover:bg-muted">
+                        <Link href="/deployments" aria-label="Back to deployments">
                             <ArrowLeft size={18} />
-                        </Button>
-                    </Link>
+                        </Link>
+                    </Button>
                     <div>
                         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
                             Deployment Watch: {deployment.service_name || deployment.service}
@@ -178,27 +179,31 @@ export default function DeploymentWatchPage() {
                                         <span className="font-medium">Queued</span>
                                     </div>
                                     <div className="flex items-center gap-3 text-sm">
-                                        {isDeploying || isActive || isFailed ? (
-                                            <CheckCircle size={16} className="text-emerald-500" />
-                                        ) : isDeploying ? (
+                                        {isBuildingStage ? (
                                             <Loader2 size={16} className="text-blue-500 animate-spin" />
+                                        ) : status === 'BUILD_FAILED' ? (
+                                            <XCircle size={16} className="text-red-500" />
+                                        ) : hasPassedBuilding ? (
+                                            <CheckCircle size={16} className="text-emerald-500" />
                                         ) : (
                                             <div className="w-4 h-4 rounded-full border-2 border-muted" />
                                         )}
                                         <span className="font-medium text-foreground">Building</span>
                                     </div>
                                     <div className="flex items-center gap-3 text-sm">
-                                        {isActive || isFailed ? (
-                                            <CheckCircle size={16} className="text-emerald-500" />
-                                        ) : deployment.status === 'DEPLOYING' ? (
+                                        {isDeployingStage ? (
                                             <Loader2 size={16} className="text-purple-500 animate-spin" />
+                                        ) : hasPassedDeploying ? (
+                                            <CheckCircle size={16} className="text-emerald-500" />
                                         ) : (
                                             <div className="w-4 h-4 rounded-full border-2 border-muted" />
                                         )}
                                         <span className="font-medium text-foreground">Deploying</span>
                                     </div>
                                     <div className="flex items-center gap-3 text-sm">
-                                        {isActive ? (
+                                        {isHealthCheckStage ? (
+                                            <Loader2 size={16} className="text-amber-500 animate-spin" />
+                                        ) : isActive ? (
                                             <CheckCircle size={16} className="text-emerald-500" />
                                         ) : isFailed ? (
                                             <XCircle size={16} className="text-red-500" />
@@ -302,8 +307,10 @@ export default function DeploymentWatchPage() {
                                 )}
                             </CardHeader>
                             <CardContent className="p-0 flex-1 relative">
-                                <div className="absolute inset-0 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed text-zinc-300">
-                                    <pre className="whitespace-pre-wrap">{logs}</pre>
+                                <div role="region" aria-label="Deployment live logs" className="absolute inset-0 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed text-zinc-300">
+                                    <pre className="whitespace-pre-wrap">
+                                        {combinedLogs || (isDeploying ? "Waiting for deployment logs..." : "No deployment logs recorded.")}
+                                    </pre>
                                 </div>
                             </CardContent>
                         </Card>

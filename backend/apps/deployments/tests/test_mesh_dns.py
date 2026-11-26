@@ -10,6 +10,20 @@ django.setup()
 
 
 class MeshDnsUnitTests(TestCase):
+    def setUp(self):
+        from apps.deployments.models.core import PlatformConfig
+        from django.core.cache import cache
+
+        cache.clear()
+        PlatformConfig.clear_cache()
+
+    def tearDown(self):
+        from apps.deployments.models.core import PlatformConfig
+        from django.core.cache import cache
+
+        PlatformConfig.clear_cache()
+        cache.clear()
+
     def test_sanitize_label(self):
         from apps.deployments.services.mesh_dns import _sanitize_label
 
@@ -159,19 +173,318 @@ class MeshDnsUnitTests(TestCase):
             finally:
                 mesh_dns.COREDNS_CONFIG_DIR = os.environ.get("COREDNS_CONFIG_DIR", "/coredns-config")
 
+    def test_corefile_serves_root_zone_with_short_ttl(self):
+        from apps.deployments.services.mesh_dns import build_corefile
+
+        corefile = build_corefile()
+        self.assertIn("hosts /etc/coredns/mesh.hosts . {", corefile)
+        self.assertIn("ttl 5", corefile)
+
+    def test_live_container_discovery_maps_aliases_and_skips_ephemeral(self):
+        import tempfile
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        import apps.deployments.services.mesh_dns as mesh_dns
+
+        live_backend = SimpleNamespace(
+            id="abcdef1234567890",
+            short_id="abcdef123456",
+            name="smsly-backend",
+            status="running",
+            attrs={
+                "Id": "abcdef1234567890",
+                "Name": "/smsly-backend",
+                "State": {"Status": "running"},
+                "Config": {"Labels": {"smsly.service_id": "svc-1"}},
+                "NetworkSettings": {
+                    "Networks": {
+                        "smsly-platform-net": {"IPAddress": "172.18.0.9", "Aliases": ["smsly-backend"]},
+                        "smsly-net-9063c108": {
+                            "IPAddress": "172.20.0.5",
+                            "Aliases": ["smsly-backend", "smsly-backend.default.internal", "abcdef123456"],
+                        },
+                    }
+                },
+            },
+        )
+        ephemeral_green = SimpleNamespace(
+            id="1111222233334444",
+            short_id="111122223333",
+            name="smsly-backend-green-99",
+            status="running",
+            attrs={
+                "Id": "1111222233334444",
+                "State": {"Status": "running"},
+                "Config": {"Labels": {"smsly.service_id": "svc-1"}},
+                "NetworkSettings": {
+                    "Networks": {
+                        "smsly-net-9063c108": {"IPAddress": "172.20.0.6", "Aliases": ["smsly-backend"]},
+                    }
+                },
+            },
+        )
+        promoting = SimpleNamespace(
+            id="2222333344445555",
+            short_id="222233334444",
+            name="smsly-backend-promoting-1",
+            status="running",
+            attrs={
+                "State": {"Status": "running"},
+                "NetworkSettings": {"Networks": {"smsly-net-9063c108": {"IPAddress": "172.20.0.7"}}},
+            },
+        )
+        old_backup = SimpleNamespace(
+            id="3333444455556666",
+            short_id="333344445555",
+            name="smsly-backend-old-1234",
+            status="running",
+            attrs={
+                "State": {"Status": "running"},
+                "NetworkSettings": {"Networks": {"smsly-net-9063c108": {"IPAddress": "172.20.0.4"}}},
+            },
+        )
+        sidecar = SimpleNamespace(
+            id="4444555566667777",
+            short_id="444455556666",
+            name="smsly-envoy-smsly-backend",
+            status="running",
+            attrs={
+                "State": {"Status": "running"},
+                "Config": {"Labels": {"smsly.sidecar": "true"}},
+                "NetworkSettings": {
+                    "Networks": {"smsly-net-9063c108": {"IPAddress": "172.20.0.8", "Aliases": ["smsly-backend"]}}
+                },
+            },
+        )
+        default_bridge_only = SimpleNamespace(
+            id="5555666677778888",
+            short_id="555566667777",
+            name="unrelated-default",
+            status="running",
+            attrs={
+                "State": {"Status": "running"},
+                "NetworkSettings": {"Networks": {"bridge": {"IPAddress": "172.17.0.5"}}},
+            },
+        )
+
+        mock_client = SimpleNamespace(
+            containers=SimpleNamespace(
+                list=lambda: [
+                    live_backend,
+                    ephemeral_green,
+                    promoting,
+                    old_backup,
+                    sidecar,
+                    default_bridge_only,
+                ]
+            )
+        )
+        records = mesh_dns.get_live_container_dns_records(client=mock_client)
+        self.assertEqual(
+            records,
+            [
+                {"name": "smsly-backend", "ip": "172.20.0.5"},
+                {"name": "smsly-backend.default.internal", "ip": "172.20.0.5"},
+            ],
+        )
+
+        # build_mesh_hosts() keeps DB mesh zone pure when called without include_containers.
+        pure_content, pure_count = mesh_dns.build_mesh_hosts()
+        self.assertEqual(pure_count, 0)
+
+        with tempfile.TemporaryDirectory() as tmp, patch("docker.from_env", return_value=mock_client):
+            mesh_dns.COREDNS_CONFIG_DIR = tmp
+            try:
+                res = mesh_dns.apply_mesh_dns()
+                self.assertTrue(res["ok"])
+                self.assertEqual(res["records"], 2)
+                hosts_text = open(os.path.join(tmp, "mesh.hosts"), encoding="utf-8").read()
+                self.assertIn("172.20.0.5 smsly-backend\n", hosts_text)
+                self.assertIn("172.20.0.5 smsly-backend.default.internal\n", hosts_text)
+                second = mesh_dns.apply_mesh_dns()
+                self.assertIn("unchanged", second["message"])
+            finally:
+                mesh_dns.COREDNS_CONFIG_DIR = os.environ.get("COREDNS_CONFIG_DIR", "/coredns-config")
+
+    def test_colliding_names_across_separate_bridges_excluded(self):
+        from types import SimpleNamespace
+
+        from apps.deployments.services.mesh_dns import get_live_container_dns_records
+
+        c1 = SimpleNamespace(
+            id="aaaa11112222",
+            short_id="aaaa11112222",
+            name="proj1-api",
+            status="running",
+            attrs={
+                "Id": "aaaa11112222",
+                "State": {"Status": "running"},
+                "NetworkSettings": {
+                    "Networks": {"smsly-net-proj1": {"IPAddress": "172.20.0.5", "Aliases": ["api"]}}
+                },
+            },
+        )
+        c2 = SimpleNamespace(
+            id="bbbb11112222",
+            short_id="bbbb11112222",
+            name="proj2-api",
+            status="running",
+            attrs={
+                "Id": "bbbb11112222",
+                "State": {"Status": "running"},
+                "NetworkSettings": {
+                    "Networks": {"smsly-net-proj2": {"IPAddress": "172.21.0.5", "Aliases": ["api"]}}
+                },
+            },
+        )
+        mock_client = SimpleNamespace(containers=SimpleNamespace(list=lambda: [c1, c2]))
+        records = get_live_container_dns_records(client=mock_client)
+        names = {r["name"] for r in records}
+        self.assertNotIn("api", names)
+        self.assertNotIn("api.default.internal", names)
+        self.assertIn("proj1-api", names)
+        self.assertIn("proj2-api", names)
+
+    def test_sync_dns_now_falls_back_to_queue_when_unwritable(self):
+        from unittest.mock import patch
+
+        import apps.deployments.services.mesh_dns as mesh_dns
+
+        with patch.object(mesh_dns, "_coredns_dir_writable", return_value=False), \
+             patch("apps.deployments.tasks.infra.tasks_mesh_dns.queue_mesh_dns_sync") as mock_q:
+            res = mesh_dns.sync_dns_now()
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["queued"])
+        mock_q.assert_called_once_with()
+
+    def test_multi_bridge_shared_and_infra_containers_excluded(self):
+        from types import SimpleNamespace
+
+        from apps.deployments.services.mesh_dns import get_live_container_dns_records
+
+        control_plane_backend = SimpleNamespace(
+            id="cc1122334455",
+            short_id="cc1122334455",
+            name="smsly-hosting-backend-1",
+            status="running",
+            attrs={
+                "Id": "cc1122334455",
+                "State": {"Status": "running"},
+                "Config": {
+                    "Labels": {
+                        "com.docker.compose.project": "smsly-hosting",
+                        "com.docker.compose.service": "backend",
+                    }
+                },
+                "NetworkSettings": {
+                    "Networks": {"smsly-net": {"IPAddress": "172.18.0.21", "Aliases": ["backend"]}}
+                },
+            },
+        )
+        caddy_proxy = SimpleNamespace(
+            id="dd1122334455",
+            short_id="dd1122334455",
+            name="smsly-hosting-caddy-1",
+            status="running",
+            attrs={
+                "Id": "dd1122334455",
+                "State": {"Status": "running"},
+                "Config": {"Labels": {"com.docker.compose.service": "caddy"}},
+                "NetworkSettings": {
+                    "Networks": {"smsly-net-p1": {"IPAddress": "172.30.1.3", "Aliases": ["caddy"]}}
+                },
+            },
+        )
+        shared_pg_multi = SimpleNamespace(
+            id="ee1122334455",
+            short_id="ee1122334455",
+            name="smsly-shared-postgres",
+            status="running",
+            attrs={
+                "Id": "ee1122334455",
+                "State": {"Status": "running"},
+                "NetworkSettings": {
+                    "Networks": {
+                        "smsly-net-p1": {"IPAddress": "172.30.5.4", "Aliases": ["smsly-shared-postgres"]},
+                        "smsly-net-p2": {"IPAddress": "172.30.6.4", "Aliases": ["smsly-shared-postgres"]},
+                    }
+                },
+            },
+        )
+        single_proj_svc = SimpleNamespace(
+            id="ff1122334455",
+            short_id="ff1122334455",
+            name="backend",
+            status="running",
+            attrs={
+                "Id": "ff1122334455",
+                "State": {"Status": "running"},
+                "NetworkSettings": {
+                    "Networks": {
+                        "smsly-net": {"IPAddress": "172.18.0.99", "Aliases": ["backend"]},
+                        "smsly-net-p1": {"IPAddress": "172.30.5.9", "Aliases": ["backend"]},
+                    }
+                },
+            },
+        )
+
+        mock_client = SimpleNamespace(
+            containers=SimpleNamespace(
+                list=lambda: [control_plane_backend, caddy_proxy, shared_pg_multi, single_proj_svc]
+            )
+        )
+        records = get_live_container_dns_records(client=mock_client)
+        names = {r["name"] for r in records}
+        self.assertNotIn("smsly-hosting-backend-1", names)
+        self.assertNotIn("smsly-hosting-caddy-1", names)
+        self.assertNotIn("caddy", names)
+        self.assertNotIn("smsly-shared-postgres", names)
+        self.assertIn({"name": "backend", "ip": "172.30.5.9"}, records)
+        self.assertIn({"name": "backend.default.internal", "ip": "172.30.5.9"}, records)
+
+    def test_sync_dns_now_writes_immediately_when_writable(self):
+        import tempfile
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        import apps.deployments.services.mesh_dns as mesh_dns
+
+        mock_client = SimpleNamespace(containers=SimpleNamespace(list=lambda: []))
+        with tempfile.TemporaryDirectory() as tmp:
+            mesh_dns.COREDNS_CONFIG_DIR = tmp
+            try:
+                res = mesh_dns.sync_dns_now(client=mock_client)
+                self.assertTrue(res["ok"])
+                self.assertTrue(os.path.exists(os.path.join(tmp, "Corefile")))
+                self.assertTrue(os.path.exists(os.path.join(tmp, "mesh.hosts")))
+            finally:
+                mesh_dns.COREDNS_CONFIG_DIR = os.environ.get("COREDNS_CONFIG_DIR", "/coredns-config")
+
 
 class MeshDnsApiTests(TestCase):
     """HTTP surface: PATCH /system/config/ domain + mesh dns-zone/sync-dns."""
 
     def setUp(self):
+        from apps.deployments.models.core import PlatformConfig
         from django.contrib.auth import get_user_model
+        from django.core.cache import cache
         from rest_framework.test import APIClient
 
+        cache.clear()
+        PlatformConfig.clear_cache()
         self.client = APIClient()
         self.admin = get_user_model().objects.create_superuser(
             "meshdns-admin", "m@t.com", "pass"
         )
         self.client.force_authenticate(user=self.admin)
+
+    def tearDown(self):
+        from apps.deployments.models.core import PlatformConfig
+        from django.core.cache import cache
+
+        PlatformConfig.clear_cache()
+        cache.clear()
 
     def test_patch_domain_valid_persists_and_serves(self):
         from apps.deployments.models.core import PlatformConfig

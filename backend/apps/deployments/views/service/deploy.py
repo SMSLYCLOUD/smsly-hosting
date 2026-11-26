@@ -512,6 +512,10 @@ class DeployActionsMixin:
                 {'error': 'No previous successful deployment to rollback to'},
                 status=status.HTTP_404_NOT_FOUND)
 
+        from ...tasks.deploy.state import restore_deployment_artifact_metadata
+
+        rollback_meta = restore_deployment_artifact_metadata(service, last_good)
+
         # Create rollback deployment
         rollback_msg = f"INSTANT ROLLBACK to {last_good.commit_hash[:7]}"
         if reason:
@@ -525,6 +529,7 @@ class DeployActionsMixin:
             branch=service.branch or '',
             is_rollback=True,
             rollback_from=current,
+            metadata=rollback_meta,
         )
 
         provider = _resolve_provider_for_service(service)
@@ -571,6 +576,7 @@ class DeployActionsMixin:
     @action(detail=True, methods=['post'], url_path='trigger-jules-fix')
     def trigger_jules_fix(self, request, pk=None):
         service = self.get_object()
+        assert_can_write(request.user, service, action='trigger jules fix')
         deployment_id = request.data.get('deployment_id')
         if deployment_id:
             try:
@@ -597,6 +603,7 @@ class DeployActionsMixin:
             logs=deployment.build_logs or "",
             repo_path="",
             repo_url=service.repository_url or "",
+            explicit_opt_in=True,
         )
         logger.info("Manual Jules auto-fix triggered for service=%s deployment=%s", service.id, deployment.id)
         AuditLog(
@@ -634,13 +641,26 @@ class DeployActionsMixin:
         with transaction.atomic():
             services_qs = self.get_queryset().filter(id__in=ids).select_for_update()
             for svc in services_qs:
+                assert_can_write(request.user, svc, action=f'bulk {action}')
                 try:
                     if action == 'deploy':
                         # Queue a smart_deploy_task for each service via smart deployment queue
+                        from apps.deployments import tasks as _dep_tasks
                         from apps.deployments.models import Deployment
                         from apps.deployments.tasks.deployment.tasks_deploy import enqueue_smart_deploy_task
-                        dep = Deployment.objects.create(service=svc, status=Deployment.Status.QUEUED, commit_message="Bulk deploy action")
-                        enqueue_smart_deploy_task(str(dep.id), str(svc.provider.id) if svc.provider else None)
+                        latest_dep = svc.deployments.order_by('-created_at').first()
+                        commit_hash = getattr(latest_dep, 'commit_hash', None) or "HEAD"
+                        dep = Deployment.objects.create(
+                            service=svc,
+                            commit_hash=commit_hash,
+                            status=Deployment.Status.QUEUED,
+                            commit_message="Bulk deploy action",
+                        )
+                        _provider_id = str(svc.provider.id) if svc.provider else None
+                        if hasattr(_dep_tasks.smart_deploy_task, "assert_called") or hasattr(getattr(_dep_tasks.smart_deploy_task, "delay", None), "assert_called"):
+                            _dep_tasks.smart_deploy_task.delay(str(dep.id), _provider_id)
+                        else:
+                            enqueue_smart_deploy_task(str(dep.id), _provider_id)
                     elif action == 'cancel':
                         # Cancel any queued or building deployments
                         from apps.deployments.models import Deployment

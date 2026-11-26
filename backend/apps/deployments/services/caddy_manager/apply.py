@@ -94,7 +94,7 @@ def _ensure_caddy_dir_writable():
         fpath = os.path.join(CADDY_CONFIG_DIR, fname)
         if os.path.exists(fpath):
             try:
-                os.chmod(fpath, 0o664)
+                os.chmod(fpath, 0o640)
                 if hasattr(os, "chown"):
                     os.chown(fpath, os.getuid(), CADDY_GID)
             except (OSError, PermissionError):
@@ -110,11 +110,11 @@ def _safe_write_file(path: str, content: str):
     Handles permission errors by fixing ownership before retrying.
     """
     try:
-        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o664), "w", encoding="utf-8") as handle:
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640), "w", encoding="utf-8") as handle:
             handle.write(content)
     except PermissionError:
         _ensure_caddy_dir_writable()
-        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o664), "w", encoding="utf-8") as handle:
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640), "w", encoding="utf-8") as handle:
             handle.write(content)
 
 
@@ -126,7 +126,7 @@ def _safe_remove(path: str):
         os.remove(path)
     except PermissionError:
         try:
-            os.chmod(path, 0o664)
+            os.chmod(path, 0o640)
             os.remove(path)
         except (OSError, PermissionError):
             pass
@@ -344,8 +344,8 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
             handle.write(content)
         os.replace(tmp_path, CADDY_FILE_PATH)
         try:
-            if (os.stat(CADDY_FILE_PATH).st_mode & 0o777) != 0o664:
-                os.chmod(CADDY_FILE_PATH, 0o664)
+            if (os.stat(CADDY_FILE_PATH).st_mode & 0o777) != 0o640:
+                os.chmod(CADDY_FILE_PATH, 0o640)
         except (OSError, PermissionError) as chmod_exc:
             logger.warning("chmod on %s failed (%s) — continuing", CADDY_FILE_PATH, chmod_exc)
 
@@ -357,6 +357,12 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
                 "expires_at": time.time() + CADDY_TOKEN_CACHE_TTL_SECONDS,
             })
             _safe_write_file(CADDY_TOKEN_CACHE, cache_payload)
+            for _sec_path in (CADDY_TOKEN_FILE, CADDY_TOKEN_CACHE):
+                try:
+                    if os.path.exists(_sec_path):
+                        os.chmod(_sec_path, 0o640)
+                except (OSError, PermissionError):
+                    pass
             _safe_remove(CADDY_TOKEN_CLEAR_FILE)
         else:
             _safe_remove(CADDY_TOKEN_FILE)
@@ -400,21 +406,27 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
                     CONTAINER_NAME, err[:300],
                 )
                 _record_caddy_reload_failure(err)
-                result["ok"] = True
+                result["ok"] = False
                 result["reload_error"] = err
-                result["message"] = "Caddyfile written; reload FAILED via Docker — recorded for the dashboard"
+                result["message"] = f"Caddyfile written, but Caddy reload failed: {err[:200]}"
         except FileNotFoundError:
             logger.info("Docker CLI not found in container — host-side watcher will handle reload")
             result["ok"] = True
             result["message"] = "Caddyfile written; reload pending via host-side watcher"
-        except subprocess.TimeoutExpired:
-            logger.info("Docker exec timed out — host-side watcher will handle reload")
-            result["ok"] = True
-            result["message"] = "Caddyfile written; reload pending via host-side watcher"
+        except subprocess.TimeoutExpired as timeout_exc:
+            err = f"Caddy reload timed out via docker exec on {CONTAINER_NAME}: {timeout_exc}"
+            logger.error(err)
+            _record_caddy_reload_failure(err)
+            result["ok"] = False
+            result["reload_error"] = err[:500]
+            result["message"] = f"Caddyfile written, but Caddy reload timed out: {err[:200]}"
         except Exception as exec_exc:
-            logger.info("Docker exec failed (%s) — host-side watcher will handle reload", exec_exc)
-            result["ok"] = True
-            result["message"] = "Caddyfile written; reload pending via host-side watcher"
+            err = f"Caddy reload failed via docker exec on {CONTAINER_NAME}: {exec_exc}"
+            logger.error(err)
+            _record_caddy_reload_failure(err)
+            result["ok"] = False
+            result["reload_error"] = err[:500]
+            result["message"] = f"Caddyfile written, but Caddy reload failed: {err[:200]}"
 
     except Exception as exc:
         result["message"] = f"Failed to apply Caddyfile: {exc}"

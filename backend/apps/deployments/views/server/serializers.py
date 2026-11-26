@@ -157,16 +157,18 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
         }
 
     def validate(self, data):
-        is_lite = data.get("is_lite_agent", False)
+        is_lite = bool(data.get("is_lite_agent", False))
         node_type = (data.get("node_type") or "").strip()
         # Normalize: flag is the driver for install mode; node_type must agree.
         # Connect-existing cannot set arbitrary types — derive when absent.
         if not node_type:
-            data["node_type"] = (
+            node_type = (
                 ManagedServer.NodeType.AGENT_LITE if is_lite
                 else ManagedServer.NodeType.NODE
             )
+            data["node_type"] = node_type
         elif node_type == ManagedServer.NodeType.AGENT_LITE and not is_lite:
+            is_lite = True
             data["is_lite_agent"] = True
         elif node_type in (ManagedServer.NodeType.NODE, ManagedServer.NodeType.MEDIA) and is_lite:
             raise serializers.ValidationError(
@@ -178,6 +180,16 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"node_certificate": "node_certificate is required when is_lite_agent=True."}
                 )
+        if (req := self.context.get("request")) is not None:
+            user = getattr(req, "user", None)
+            if data.get("is_primary") and not getattr(user, "is_superuser", False):
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied("Only superusers can register a primary server.")
+            if (is_lite or node_type in (ManagedServer.NodeType.AGENT_LITE, ManagedServer.NodeType.MEDIA)) and not (
+                getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)
+            ):
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied("Only staff or superusers can register lite-agent or media nodes.")
         return data
 
     def create(self, validated_data):
@@ -219,7 +231,14 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
         value = re.sub(r':\d+$', '', value)
         if not value:
             raise serializers.ValidationError("Host is required.")
-        is_primary = self.initial_data.get("is_primary", False)
+        req = self.context.get("request")
+        req_user = getattr(req, "user", None) if req is not None else None
+        raw_primary = self.initial_data.get("is_primary", False)
+        if isinstance(raw_primary, str):
+            wants_primary = raw_primary.strip().lower() in ("true", "1", "yes", "t", "on")
+        else:
+            wants_primary = bool(raw_primary)
+        is_primary = bool(wants_primary and req is not None and getattr(req_user, "is_superuser", False))
         if not is_primary:
             try:
                 import ipaddress as _ip
@@ -381,6 +400,18 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"is_lite_agent": "Contradictory flags: media nodes are bare-metal installs and cannot be lite agents."}
             )
+        if (req := self.context.get("request")) is not None:
+            user = getattr(req, "user", None)
+            if data.get("is_primary") and not getattr(user, "is_superuser", False):
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied("Only superusers can provision a primary server.")
+            is_lite = bool(data.get("is_lite_agent", False))
+            node_type = (data.get("node_type") or "").strip()
+            if (is_lite or node_type in ("agent-lite", "media")) and not (
+                getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)
+            ):
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied("Only staff or superusers can provision lite-agent or media nodes.")
         return data
 
 

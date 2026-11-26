@@ -40,6 +40,7 @@ export default function ServicesPage() {
   const [viewMode, setViewMode] = useState<'GRID' | 'RADAR' | 'ADDONS'>('GRID');
   const [services, setServices] = useState<Service[]>([]);
   const [addons, setAddons] = useState<Addon[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [pollIntervalMs, setPollIntervalMs] = useState(5000);
   const [resourceData, setResourceData] = useState<any>(null);
@@ -89,6 +90,8 @@ export default function ServicesPage() {
       if (nextFailures === 1 || nextFailures % 6 === 0) {
         console.error('Failed to fetch services:', error);
       }
+    } finally {
+      setIsLoading(false);
     }
   }, []);
 
@@ -131,7 +134,7 @@ export default function ServicesPage() {
   const primaryServices = services.filter(s => !(s as any).isAddon);
 
   return (
-    <main className="h-screen min-h-0 flex flex-col premium-bg transition-colors duration-500">
+    <div className="min-h-[calc(100vh-3.5rem)] flex-1 min-h-0 flex flex-col premium-bg transition-colors duration-500">
 
       {/* View Toggle Bar */}
       <div className="z-20 border-b border-zinc-800/60 bg-[#070a12]/85 backdrop-blur-xl">
@@ -224,7 +227,15 @@ export default function ServicesPage() {
 
         {viewMode === 'GRID' && (
             <div className="h-full overflow-y-auto">
-                <ServicesGrid services={primaryServices} addons={addons} />
+                {isLoading ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-6">
+                    {[...Array(8)].map((_, idx) => (
+                      <div key={idx} className="h-44 rounded-xl border border-border bg-card/50 animate-pulse" />
+                    ))}
+                  </div>
+                ) : (
+                  <ServicesGrid services={primaryServices} addons={addons} />
+                )}
             </div>
         )}
         {viewMode === 'RADAR' && (
@@ -238,6 +249,6 @@ export default function ServicesPage() {
             </div>
         )}
       </motion.div>
-    </main>
+    </div>
   );
 }

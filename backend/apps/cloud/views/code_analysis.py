@@ -235,7 +235,7 @@ def analyze_codebase(repo_path: str) -> dict:
     total_bytes = 0
     lang_stats: dict = {}
 
-    for root, dirs, filenames in os.walk(repo_path, topdown=True):
+    for root, dirs, filenames in os.walk(repo_path, topdown=True, followlinks=False):
         # Filter out skipped directories
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith('.')]
 
@@ -448,6 +448,18 @@ def _generate_ai_summary(analysis: dict) -> str:
         tech = ', '.join(analysis['tech_stack']) or 'Unknown'
         stats = analysis['stats']
 
+        sorted_files = sorted(
+            file_nodes,
+            key=lambda n: n.get('data', {}).get('size', 0),
+            reverse=True,
+        )
+        top_files = sorted_files[:50]
+        file_meta = {
+            'included_files': len(top_files),
+            'truncated_count': max(0, len(sorted_files) - len(top_files)),
+            'files': [n['data']['path'] for n in top_files],
+        }
+
         # Build a concise prompt
         prompt = _AI_CODE_DISCLAIMER + (
             f"Analyze this codebase structure and provide a brief architecture summary.\n\n"
@@ -455,7 +467,7 @@ def _generate_ai_summary(analysis: dict) -> str:
             f"Stats: {stats['files']} files, {stats['lines']} lines, "
             f"{stats['directories']} directories\n"
             f"Languages: {', '.join(f'{k}: {v} lines' for k, v in sorted(stats['languages'].items(), key=lambda x: -x[1])[:5])}\n\n"
-            f"Top files: {', '.join(n['data']['path'] for n in file_nodes[:15])}\n"
+            f"Files Metadata: {file_meta!r}\n"
             f"API Routes: {', '.join(n['data']['label'] for n in route_nodes[:10]) or 'None detected'}\n"
             f"DB Models: {', '.join(n['data']['name'] for n in model_nodes[:10]) or 'None detected'}\n\n"
             f"Provide a 3-5 sentence architecture overview. What does this app do? "
@@ -567,7 +579,9 @@ class CodeAnalysisViewSet(viewsets.GenericViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        from django.core.cache import cache
         task = analyze_service_code_task.delay(service_id, str(request.user.id))
+        cache.set(f"code_analysis_owner:{task.id}", request.user.id, timeout=3600)
 
         return Response({
             'task_id': task.id,
@@ -581,6 +595,14 @@ class CodeAnalysisViewSet(viewsets.GenericViewSet):
         Poll for analysis results by task_id.
         """
         from celery.result import AsyncResult
+        from django.core.cache import cache
+
+        owner_id = cache.get(f"code_analysis_owner:{task_id}")
+        if owner_id is None or str(owner_id) != str(request.user.id):
+            return Response(
+                {'error': 'Analysis task not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         result = AsyncResult(task_id)
 

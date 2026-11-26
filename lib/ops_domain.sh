@@ -2,29 +2,26 @@ fix_domain_sync() {
     local target_domain="${1:-}"
     local env_file="$INSTALL_DIR/.env"
 
+    if [ -z "$target_domain" ] && [ -f "$env_file" ]; then
+        target_domain="$(env_get_value "$env_file" "DOMAIN" || true)"
+    fi
+    if [ -z "$target_domain" ]; then
+        echo -e "${RED}  ✗ ERROR: No target domain provided and DOMAIN is empty in $env_file.${NC}" >&2
+        return 1
+    fi
+    # Strict RFC-1123 hostname validation (prevents sed/python/Caddy injection)
+    if ! printf '%s' "$target_domain" | grep -qE '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$' || [ "${#target_domain}" -gt 253 ]; then
+        echo -e "${RED}  ✗ ERROR: Invalid target domain '$target_domain' (must be RFC-1123 hostname).${NC}" >&2
+        return 1
+    fi
+
     echo -e "${BLUE}  → Fixing domain sync for: $target_domain${NC}"
 
-    # 1. Fix .env
-    if grep -q '^DOMAIN=' "$env_file" ; then
-        sed -i "s|^DOMAIN=.*|DOMAIN=$target_domain|" "$env_file"
-    else
-        echo "DOMAIN=$target_domain" >> "$env_file"
-    fi
-    if grep -q '^USE_SSL=' "$env_file" ; then
-        sed -i 's/^USE_SSL=.*/USE_SSL=true/' "$env_file"
-    else
-        echo "USE_SSL=true" >> "$env_file"
-    fi
-    # Keep the frontend's baked canonical origin in sync: the middleware
-    # hostname check reads NEXT_PUBLIC_APP_URL from the image build, so a
-    # domain change without a rebuild would 404 the real dashboard.
-    # fix-domain forces USE_SSL=true above, hence https here.
+    # 1. Fix .env (use safe env_set_value / env-var passing; never interpolate into sed/python)
     _prev_frontend_url="$(grep -m1 '^FRONTEND_APP_URL=' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
-    if grep -q '^FRONTEND_APP_URL=' "$env_file" ; then
-        sed -i "s|^FRONTEND_APP_URL=.*|FRONTEND_APP_URL=https://$target_domain|" "$env_file"
-    else
-        echo "FRONTEND_APP_URL=https://$target_domain" >> "$env_file"
-    fi
+    env_set_value "$env_file" "DOMAIN" "$target_domain"
+    env_set_value "$env_file" "USE_SSL" "true"
+    env_set_value "$env_file" "FRONTEND_APP_URL" "https://$target_domain"
     if [ "${_prev_frontend_url:-}" != "https://$target_domain" ]; then
         _FRONTEND_URL_CHANGED="true"
     else
@@ -50,10 +47,11 @@ fix_domain_sync() {
 
     # 2. Sync DB PlatformConfig
     if docker compose -f "$COMPOSE_FILE" ps -q backend  | grep -q .; then
-        timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+        timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T -e TARGET_DOMAIN="$target_domain" backend python manage.py shell -c "
+import os
 from apps.deployments.models import PlatformConfig
 cfg = PlatformConfig.load()
-cfg.domain = '$target_domain'
+cfg.domain = os.environ['TARGET_DOMAIN']
 cfg.use_ssl = True
 cfg.save()
 print(f'PlatformConfig domain set to: {cfg.domain}')
@@ -144,8 +142,7 @@ CADDYFIX
 
     # 4. Reload Caddy
     if docker compose -f "$COMPOSE_FILE" ps -q caddy  | grep -q .; then
-        timeout -k 5 20 docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile || \
-            timeout -k 5 20 docker compose -f "$COMPOSE_FILE" restart caddy || \
+        timeout -k 5 20 docker compose -f "$COMPOSE_FILE" exec -T caddy caddy reload --config /etc/caddy/Caddyfile || \
             echo -e "${YELLOW}    ⚠ Caddy reload failed${NC}"
     fi
 

@@ -21,6 +21,7 @@ function GitHubAppCallbackContent() {
   useEffect(() => {
     const installationId = searchParams.get("installation_id");
     const setupAction = searchParams.get("setup_action");
+    const state = searchParams.get("state");
 
     if (setupAction === "update") {
       setStatus("success");
@@ -46,6 +47,7 @@ function GitHubAppCallbackContent() {
       try {
         const res = await api.post("/integrations/github/app/callback/", {
           installation_id: numId,
+          ...(state ? { state } : {}),
         });
         setStatus("success");
         setMessage(

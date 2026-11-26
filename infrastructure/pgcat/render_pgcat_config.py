@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import os
 import sys
 
@@ -57,6 +58,17 @@ def _fetch_node_agent_users():
                 if prefix:
                     node_user = f"node_agent_{prefix}"
             if node_user and node_pass:
+                if str(node_pass).startswith("gAAAAAB"):
+                    fernet_key = os.environ.get("FIELD_ENCRYPTION_KEY", "").strip()
+                    if not fernet_key:
+                        print(f"WARNING: Skipping {node_user}: encrypted node_db_password but FIELD_ENCRYPTION_KEY is not set", file=sys.stderr)
+                        continue
+                    try:
+                        from cryptography.fernet import Fernet
+                        node_pass = Fernet(fernet_key.encode()).decrypt(str(node_pass).encode()).decode()
+                    except Exception as dec_exc:
+                        print(f"WARNING: Skipping {node_user}: failed to decrypt node_db_password ({dec_exc})", file=sys.stderr)
+                        continue
                 user_map[node_user] = node_pass
         # SECURITY: Do NOT fall back to smsly_admin password for orphaned
         # roles. A stale node_agent_* role with the admin password is a
@@ -131,15 +143,15 @@ def main():
         sys.exit(1)
 
     # Build the server list: primary + replicas
-    primary_server = f'["{db_host}", {db_port}, "primary"]'
-    replica_entries = [f'["{rh}", {rp}, "replica"]' for rh, rp in replica_servers]
+    primary_server = f'[{json.dumps(str(db_host))}, {int(db_port)}, "primary"]'
+    replica_entries = [f'[{json.dumps(str(rh))}, {int(rp)}, "replica"]' for rh, rp in replica_servers]
     all_servers = [primary_server, *replica_entries]
     servers_str = ",\n        ".join(all_servers)
 
     lines = [
         '[general]',
-        f'admin_username = "{admin_user}"',
-        f'admin_password = "{admin_pass}"',
+        f'admin_username = {json.dumps(str(admin_user))}',
+        f'admin_password = {json.dumps(str(admin_pass))}',
         'server_lifetime = 86400000',
         'idle_timeout = 60000',
         'dns_cache_enabled = true',
@@ -171,20 +183,20 @@ def main():
         '',
         '[pools.smsly_hosting.shards.0]',
         f'servers = [{servers_str}]',
-        f'database = "{db_name}"',
+        f'database = {json.dumps(str(db_name))}',
     ]
 
     # PgCat expects users as a map keyed by username under the pool section
     lines.append(f'[pools.smsly_hosting.users.{db_user}]')
-    lines.append(f'username = "{db_user}"')
+    lines.append(f'username = {json.dumps(str(db_user))}')
     lines.append(f'pool_size = {app_pool_size}')
-    lines.append(f'password = "{db_password}"')
+    lines.append(f'password = {json.dumps(str(db_password))}')
 
     for node_user, node_pass in node_users:
         lines.append(f'[pools.smsly_hosting.users.{node_user}]')
-        lines.append(f'username = "{node_user}"')
+        lines.append(f'username = {json.dumps(str(node_user))}')
         lines.append('pool_size = 5')
-        lines.append(f'password = "{node_pass}"')
+        lines.append(f'password = {json.dumps(str(node_pass))}')
 
     lines += [
         '',
@@ -193,24 +205,25 @@ def main():
         '',
         '[pools.smsly_hosting_session.shards.0]',
         f'servers = [{servers_str}]',
-        f'database = "{db_name}"',
+        f'database = {json.dumps(str(db_name))}',
         f'[pools.smsly_hosting_session.users.{db_user}]',
-        f'username = "{db_user}"',
+        f'username = {json.dumps(str(db_user))}',
         f'pool_size = {worker_pool_size}',
-        f'password = "{db_password}"',
+        f'password = {json.dumps(str(db_password))}',
     ]
 
     for node_user, node_pass in node_users:
         lines.append(f'[pools.smsly_hosting_session.users.{node_user}]')
-        lines.append(f'username = "{node_user}"')
+        lines.append(f'username = {json.dumps(str(node_user))}')
         lines.append('pool_size = 3')
-        lines.append(f'password = "{node_pass}"')
+        lines.append(f'password = {json.dumps(str(node_pass))}')
 
     toml_content = "\n".join(lines) + "\n"
 
     out_path = sys.argv[1] if len(sys.argv) > 1 else "/etc/pgcat/pgcat.toml"
     with open(out_path, "w") as f:
         f.write(toml_content)
+    os.chmod(out_path, 0o600)
 
     print(f"Successfully rendered PgCat config to {out_path} with app pool={app_pool_size}, worker pool={worker_pool_size}, node agents={len(node_users)}, replicas={len(replica_servers)}")
 

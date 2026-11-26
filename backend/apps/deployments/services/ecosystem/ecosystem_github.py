@@ -183,7 +183,7 @@ def _clone_repo(repo_full: str, target_dir: str, token: str | None = None) -> bo
             clone_url = f"https://x-access-token:{token}@{provider}/{repo_full}.git"
 
         result = subprocess.run(
-            ["git", "clone", "--depth", "1", clone_url, target_dir],
+            ["git", "clone", "--depth", "1", "--", clone_url, target_dir],
             capture_output=True,
             text=True,
             timeout=60

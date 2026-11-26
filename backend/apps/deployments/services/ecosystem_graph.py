@@ -42,14 +42,40 @@ def build_ecosystem_graph(service) -> dict[str, Any]:
     # manifest graph builder instead of treating the string as a Service row.
     if isinstance(service, str):
         import yaml
-        from types import SimpleNamespace
 
         manifest = yaml.safe_load(service) or {}
-        return SimpleNamespace(
-            manifest=manifest,
-            shared_env=manifest.get("shared_env", {}).get("groups", {}),
-            services=manifest.get("services", {}),
-        )
+        services_map = manifest.get("services") or {}
+
+        class _ManifestGraph:
+            def __init__(self, raw_manifest, raw_services):
+                self.manifest = raw_manifest
+                self.shared_env = raw_manifest.get("shared_env", {}).get("groups", {})
+                self.services = raw_services
+
+            def get_topological_order(self) -> list[str]:
+                order: list[str] = []
+                state: dict[str, int] = {}
+
+                def _visit(node: str) -> None:
+                    st = state.get(node, 0)
+                    if st == 1:
+                        raise ValueError(f"Circular dependency detected involving '{node}'")
+                    if st == 2:
+                        return
+                    state[node] = 1
+                    deps = (self.services.get(node) or {}).get("dependencies") or []
+                    for dep in deps:
+                        if dep in self.services:
+                            _visit(dep)
+                    state[node] = 2
+                    order.append(node)
+
+                for name in self.services:
+                    if state.get(name, 0) == 0:
+                        _visit(name)
+                return order
+
+        return _ManifestGraph(manifest, services_map)  # type: ignore[return-value]
 
     from apps.deployments.models import Service  # type: ignore[attr-defined]
 

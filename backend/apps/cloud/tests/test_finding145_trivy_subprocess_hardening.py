@@ -29,8 +29,9 @@ class TrivySubprocessHardeningTests(SimpleTestCase):
         proc.stderr = stderr
         return proc
 
+    @patch("apps.deployments.utils.find_binary", return_value="trivy")
     @patch("apps.cloud.services.builder.subprocess.run")
-    def test_trivy_called_with_list_argv(self, mock_run):
+    def test_trivy_called_with_list_argv(self, mock_run, _mock_find):
         mock_run.return_value = self._completed_process(
             stdout=json.dumps({"Results": []}),
         )
@@ -43,8 +44,9 @@ class TrivySubprocessHardeningTests(SimpleTestCase):
         self.assertIn("image", argv)
         self.assertEqual(argv[-1], "example/image:tag")
 
+    @patch("apps.deployments.utils.find_binary", return_value="trivy")
     @patch("apps.cloud.services.builder.subprocess.run")
-    def test_trivy_called_with_timeout_300(self, mock_run):
+    def test_trivy_called_with_timeout_300(self, mock_run, _mock_find):
         mock_run.return_value = self._completed_process(
             stdout=json.dumps({"Results": []}),
         )
@@ -52,8 +54,9 @@ class TrivySubprocessHardeningTests(SimpleTestCase):
         _, kwargs = mock_run.call_args
         self.assertEqual(kwargs.get("timeout"), 300)
 
+    @patch("apps.deployments.utils.find_binary", return_value="trivy")
     @patch("apps.cloud.services.builder.subprocess.run")
-    def test_trivy_captures_stderr(self, mock_run):
+    def test_trivy_captures_stderr(self, mock_run, _mock_find):
         mock_run.return_value = self._completed_process(
             stdout=json.dumps({"Results": []}),
         )
@@ -61,8 +64,9 @@ class TrivySubprocessHardeningTests(SimpleTestCase):
         _, kwargs = mock_run.call_args
         self.assertTrue(kwargs.get("capture_output"))
 
+    @patch("apps.deployments.utils.find_binary", return_value="trivy")
     @patch("apps.cloud.services.builder.subprocess.run")
-    def test_trivy_nonzero_return_raises_runtime_error(self, mock_run):
+    def test_trivy_nonzero_return_raises_runtime_error(self, mock_run, _mock_find):
         mock_run.return_value = self._completed_process(
             returncode=1,
             stdout="",
@@ -72,8 +76,9 @@ class TrivySubprocessHardeningTests(SimpleTestCase):
             NixpacksBuilder.scan_image("example/image:tag")
         self.assertIn("trivy", str(ctx.exception).lower())
 
+    @patch("apps.deployments.utils.find_binary", return_value="trivy")
     @patch("apps.cloud.services.builder.subprocess.run")
-    def test_trivy_binary_missing_returns_unscanned(self, mock_run):
+    def test_trivy_binary_missing_returns_unscanned(self, mock_run, _mock_find):
         mock_run.side_effect = FileNotFoundError("trivy")
         result = NixpacksBuilder.scan_image("example/image:tag")
         self.assertEqual(result.get("status"), "unscanned")

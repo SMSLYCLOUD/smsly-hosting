@@ -68,9 +68,9 @@ export function ProfileTab() {
           <Button onClick={handleSave} disabled={saving}>
             {saving ? "Saving..." : "Save Changes"}
           </Button>
-          <Link href="/dashboard">
-            <Button variant="outline">Cancel</Button>
-          </Link>
+          <Button variant="outline" asChild>
+            <Link href="/dashboard">Cancel</Link>
+          </Button>
         </div>
       </CardContent>
     </Card>

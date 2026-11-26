@@ -2,6 +2,14 @@
 
 _harden_falco_bootstrap() {
     [ "${NODE_FALCO:-1}" = "1" ] || { _harden_log info "falco skipped (NODE_FALCO=0)"; return 0; }
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _falco_tier=""
+        _falco_tier="$(_harden_stack_tier)"
+        if [ "$_falco_tier" != "full" ]; then
+            _harden_log info "falco skipped (STACK_TIER=${_falco_tier})"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
     local compose_file="$INSTALL_DIR/infrastructure/docker/docker-compose.falco.yml"
     [ -f "$compose_file" ] || return 1
@@ -21,7 +29,7 @@ _harden_falco_bootstrap() {
     # class). smsly-hosting matches docker-compose.prod.yml `name:` and
     # the full-profile falco service (same container_name, no named
     # volumes, so the two definitions converge on one container).
-    docker compose \
+    timeout 180 docker compose \
         -p smsly-hosting \
         "${env_args[@]}" \
         -f "$compose_file" \
@@ -36,7 +44,19 @@ _harden_falco_bootstrap() {
 
 _harden_falco_verify() {
     [ "${NODE_FALCO:-1}" = "1" ] || return 0
+    if ! (command -v is_node_mode >/dev/null 2>&1 && is_node_mode) && command -v _harden_stack_tier >/dev/null 2>&1; then
+        local _falco_tier=""
+        _falco_tier="$(_harden_stack_tier)"
+        if [ "$_falco_tier" != "full" ]; then
+            _harden_log info "falco skipped (STACK_TIER=${_falco_tier})"
+            return 0
+        fi
+    fi
     command -v docker >/dev/null 2>&1 || return 0
+    if [ -e "${SMSLY_TIER_STATE_DIR:-/var/lib/smsly/tiers}/runtime-security.asleep" ]; then
+        _harden_log info "falco asleep (runtime-security tier sleeping) — skipping"
+        return 0
+    fi
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         # One self-heal attempt: resume runs can skip the bootstrap step
         # (checkpointed), and first-boot probe load can outlast the

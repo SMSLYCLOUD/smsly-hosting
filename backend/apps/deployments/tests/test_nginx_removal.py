@@ -28,6 +28,8 @@ class NginxRemovalFromComposeTests(TestCase):
 
     def test_dev_compose_no_nginx_service(self):
         content = self._read_file('docker-compose.yml')
+        if content is None:
+            content = self._read_file('docker-compose.yml.archive')
         self.assertIsNotNone(content)
         self.assertNotRegex(content, r'^\s+nginx:\s*$', msg="docker-compose.yml still defines nginx service")
 

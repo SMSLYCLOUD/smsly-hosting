@@ -43,19 +43,17 @@ class MasterToNodeSecretSyncTests(unittest.TestCase):
 
     @classmethod
     def _load_script(cls):
-        for path in (cls.install_sh, cls.backend_install_sh):
+        agent_lite_sh = os.path.join(cls.repo_root, 'lib', 'agent-lite.sh')
+        for path in (agent_lite_sh, cls.install_sh, cls.backend_install_sh):
             if os.path.exists(path):
                 with open(path, 'rb') as f:
                     raw = f.read()
-                # install.sh is written in a mix of UTF-8 and
-                # Windows-1252 (the emoji-heavy banner section is
-                # CP-1252-encoded). Decode permissively.
+                # Shell scripts may include UTF-8 emoji/banner text. Decode permissively.
                 cls.content = raw.decode('utf-8', errors='replace')
                 cls.path = path
                 return
         raise unittest.SkipTest(
-            f'install.sh not found at {cls.install_sh} or '
-            f'{cls.backend_install_sh}'
+            f'agent-lite.sh / install.sh not found under {cls.repo_root}'
         )
 
     def test_seed_file_references_eight_critical_secrets(self):

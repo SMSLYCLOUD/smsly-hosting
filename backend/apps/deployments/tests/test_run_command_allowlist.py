@@ -77,9 +77,21 @@ class RunCommandAllowlistTests(TestCase):
         )
 
     def test_docker_logs_is_allowed(self):
-        _assert_helper_or_endpoint(
-            "docker logs my-container", True, self._post
+        from apps.deployments.models.service import Service
+        from apps.deployments.views.server.helpers import _bind_request_user
+        svc = Service.objects.create(
+            name="my-container",
+            owner=self.user,
+            repository_url="https://github.com/example/my-container",
         )
+        _bind_request_user(self.user)
+        try:
+            _assert_helper_or_endpoint(
+                "docker logs my-container", True, self._post
+            )
+        finally:
+            _bind_request_user(None)
+            svc.delete()
 
     def test_docker_inspect_is_allowed(self):
         _assert_helper_or_endpoint(

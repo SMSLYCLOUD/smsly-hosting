@@ -7,7 +7,35 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-BASH = shutil.which("bash")
+
+
+def _resolve_bash():
+    candidates = []
+    if os.name == "nt":
+        candidates.extend([
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+        ])
+    found = shutil.which("bash")
+    if found:
+        candidates.append(found)
+    for cand in candidates:
+        if not cand or not os.path.isfile(cand):
+            continue
+        # Avoid Windows System32 WSL shim if no working distro is configured
+        if os.name == "nt" and cand.lower().endswith(r"\system32\bash.exe"):
+            continue
+        try:
+            probe = subprocess.run([cand, "-c", ":"], capture_output=True, timeout=5)
+            if probe.returncode == 0:
+                return cand
+        except Exception:
+            continue
+    return None
+
+
+BASH = _resolve_bash()
 
 
 @unittest.skipUnless(BASH, "bash not available")

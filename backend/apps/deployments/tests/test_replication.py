@@ -48,7 +48,7 @@ def test_replication_configs_bind_to_wireguard_addresses(mesh):
         "repl-pass",
     )
     local_config = patroni_configs["10.100.0.1"]
-    haproxy_config = ReplicationService.generate_haproxy_config(mesh)
+    haproxy_config, _admin_pass = ReplicationService.generate_haproxy_config(mesh)
 
     assert "--listen-client-urls http://10.100.0.1:2379" in local_config
     assert 'ETCD3_HOSTS: "10.100.0.1:2379,10.100.0.2:2379"' in local_config
@@ -110,15 +110,15 @@ def test_preflight_check_success(mock_cache_add, mock_cache_set, mock_cache_get,
 
 
 @pytest.mark.django_db
-@patch("apps.deployments.services.replication_service.ReplicationService.deploy_replication")
+@patch("apps.deployments.services.replication_service.ReplicationService.connect_replica")
 @patch("django.core.cache.cache.get")
 @patch("django.core.cache.cache.set")
 @patch("django.core.cache.cache.add")
-def test_connect_replica_success(mock_cache_add, mock_cache_set, mock_cache_get, mock_deploy, auth_client, mesh):
+def test_connect_replica_success(mock_cache_add, mock_cache_set, mock_cache_get, mock_connect, auth_client, mesh):
     # Mock cache for ratelimit bypass
     mock_cache_add.return_value = True
     mock_cache_get.return_value = None
-    mock_deploy.return_value = {"patroni": [], "haproxy": "OK"}
+    mock_connect.return_value = {"status": "Replica started", "wg_address": "10.100.0.2"}
 
     url = reverse("replication-connect-replica")
     payload = {
@@ -134,7 +134,7 @@ def test_connect_replica_success(mock_cache_add, mock_cache_set, mock_cache_get,
 
     assert response.status_code == 200
     assert response.data["status"] == "Replica connected successfully"
-    mock_deploy.assert_called_once()
+    mock_connect.assert_called_once()
 
 @pytest.mark.django_db
 @patch("apps.cloud.docker_client.get_docker_client")

@@ -202,6 +202,37 @@ def ensure_sandbox_resolv_conf(dns_servers: list[str] | None = None) -> str | No
 
 
 
+def _service_has_active_sidecar(service_name: str) -> bool:
+    """Return True if *service_name* has an active mTLS/Envoy sidecar."""
+    if not service_name:
+        return False
+    try:
+        from apps.mtls.models import EnvoySidecar
+        return EnvoySidecar.objects.filter(
+            service__name=service_name,
+            status__in=("RUNNING", "ACTIVE", "HEALTHY", "PROVISIONING"),
+        ).exists()
+    except Exception:
+        return False
+
+
+def _service_has_mtls_enabled(service_name: str) -> bool:
+    """Return True if *service_name* opts into mTLS/mesh sidecar networking."""
+    if not service_name:
+        return False
+    try:
+        from apps.mtls.models import MtlsConfig
+        if MtlsConfig.objects.filter(service__name=service_name, enabled=True).exists():
+            return True
+    except Exception:
+        pass
+    try:
+        from apps.deployments.models import Service
+        return Service.objects.filter(name=service_name, use_internal_network=True).exists()
+    except Exception:
+        return False
+
+
 def get_runtime_for_container(
     service_name: str = "",
     runtime_preference: str | None = None,
@@ -213,11 +244,19 @@ def get_runtime_for_container(
     """
     if runtime_preference:
         runtime_preference = runtime_preference.strip().lower()
+        if runtime_preference in ("runc", "default", "none", "false", "0", "no"):
+            return None
 
     if runtime_preference in ("kata", "kata-runtime") and _kata_available():
         return "kata-runtime"
     if runtime_preference in ("runsc", "gvisor") and _runsc_available():
         return "runsc"
+
+    # gVisor (runsc) traps local loopback/AF_UNIX traffic needed by Envoy/SPIRE
+    # mTLS sidecars; fall back to default runc (None) when active sidecar or
+    # mTLS is enabled on the service.
+    if _service_has_active_sidecar(service_name) or _service_has_mtls_enabled(service_name):
+        return None
 
     runtime = detect_best_runtime()
     if runtime == "runc":
@@ -236,6 +275,11 @@ class ContainerRuntime:
         """Restart a container by ID. Returns the container object."""
         container = self.client.containers.get(container_id)
         container.restart(timeout=timeout)
+        try:
+            from apps.deployments.services.mesh_dns import sync_dns_now
+            sync_dns_now(client=self.client)
+        except Exception:
+            pass
         return container
 
     def stop_container(self, container_id: str, timeout: int = 30):
@@ -244,6 +288,11 @@ class ContainerRuntime:
         container.reload()
         if str((container.attrs.get('State', {}) or {}).get('Status') or '').lower() not in ('exited', 'dead', 'removing'):
             container.stop(timeout=timeout)
+            try:
+                from apps.deployments.services.mesh_dns import sync_dns_now
+                sync_dns_now(client=self.client)
+            except Exception:
+                pass
         return container
 
     def start_container(self, container_id: str):
@@ -252,6 +301,11 @@ class ContainerRuntime:
         container.reload()
         if str((container.attrs.get('State', {}) or {}).get('Status') or '').lower() != 'running':
             container.start()
+            try:
+                from apps.deployments.services.mesh_dns import sync_dns_now
+                sync_dns_now(client=self.client)
+            except Exception:
+                pass
         return container
 
     def get_container(self, container_id: str):

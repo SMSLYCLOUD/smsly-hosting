@@ -7,6 +7,7 @@ import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription }
 import { Badge } from '@/components/ui/badge';
 import { Check, CreditCard, Download, ExternalLink, Loader2, Receipt, ShieldCheck } from 'lucide-react';
 import api, { licensingApi } from '@/lib/api';
+import { getSafeRedirectUrl, safeAssignUrl } from '@/lib/paths';
 import { useToast } from '@/components/ui/use-toast';
 import { useTier } from '@/context/TierContext';
 import { Input } from '@/components/ui/input';
@@ -202,8 +203,7 @@ export default function BillingPage() {
     try {
       const res = await api.post('/billing/checkout/', { plan, provider });
       const url = res?.data?.url;
-      if (!url) throw new Error('Missing checkout URL');
-      window.location.assign(url);
+      if (!url || !safeAssignUrl(url)) throw new Error('Invalid or missing checkout URL');
     } catch (err: any) {
       const msg =
         err?.response?.data?.error ||
@@ -230,8 +230,7 @@ export default function BillingPage() {
         return_url: typeof window !== 'undefined' ? `${window.location.origin}/billing` : '',
       });
       const url = res?.data?.url;
-      if (!url) throw new Error('Missing portal URL');
-      window.location.assign(url);
+      if (!url || !safeAssignUrl(url)) throw new Error('Invalid or missing portal URL');
     } catch (err: any) {
       const msg =
         err?.response?.data?.error ||
@@ -513,7 +512,12 @@ export default function BillingPage() {
                               variant="ghost"
                               size="sm"
                               className="gap-2"
-                              onClick={() => window.open(inv.invoice_pdf || inv.hosted_invoice_url || '#', '_blank')}
+                              onClick={() => {
+                                const safeUrl = getSafeRedirectUrl(inv.invoice_pdf || inv.hosted_invoice_url);
+                                if (safeUrl) {
+                                  window.open(safeUrl, '_blank', 'noopener,noreferrer');
+                                }
+                              }}
                             >
                               <Download size={14} /> PDF
                             </Button>

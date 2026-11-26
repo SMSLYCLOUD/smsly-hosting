@@ -19,10 +19,12 @@ from rest_framework.decorators import action, throttle_classes
 from rest_framework.response import Response
 
 from ...models.servers import ManagedServer
+from .helpers import _assert_server_write_access
 from .serializers import (
     ManagedServerProvisionSerializer,
     ManagedServerSerializer,
     ServerProvisionThrottle,
+    _assert_public_node_target,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,8 +44,12 @@ class ProvisioningMixin:
             status=status.HTTP_200_OK,
         )
 
-    @action(detail=False, methods=["post"], url_path="provision-token")
-    @throttle_classes([ServerProvisionThrottle])
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="provision-token",
+        throttle_classes=[ServerProvisionThrottle],
+    )
     def provision_token(self, request):
         """Create a ManagedServer, pre-provision VPN + DNS, and return a
         bootstrap command the user runs on the target server.
@@ -56,6 +62,10 @@ class ProvisioningMixin:
         4. User runs bootstrap on target → node installs Grid, registers
         5. If no heartbeat within 12 hours, master purges the record
         """
+        denied = _assert_server_write_access(request, require_staff=True)
+        if denied is not None:
+            return denied
+
         name = request.data.get("name", "").strip()
         host = request.data.get("host", "").strip()
         node_type = (request.data.get("node_type") or "").strip() or "node"
@@ -80,6 +90,12 @@ class ProvisioningMixin:
                 {"error": "name and host are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        _assert_public_node_target(
+            type("_ProvisionTargetCtx", (), {"context": {"request": request}})(),
+            "host",
+            host,
+        )
 
         is_primary_raw = request.data.get("is_primary", False)
         if isinstance(is_primary_raw, str):
@@ -341,8 +357,12 @@ class ProvisioningMixin:
         })
         return Response(data, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=["post"], url_path="reissue-token")
-    @throttle_classes([ServerProvisionThrottle])
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="reissue-token",
+        throttle_classes=[ServerProvisionThrottle],
+    )
     def reissue_token(self, request, pk=None):
         """Mint a fresh 1h bootstrap token for a PENDING/FAILED node.
 
@@ -352,6 +372,9 @@ class ProvisioningMixin:
         WG address, and DNS).
         """
         server = self.get_object()
+        denied = _assert_server_write_access(request, server)
+        if denied is not None:
+            return denied
         if server.provision_status not in {
             ManagedServer.ProvisionStatus.PENDING,
             ManagedServer.ProvisionStatus.FAILED,
@@ -410,9 +433,17 @@ class ProvisioningMixin:
             status=status.HTTP_200_OK,
         )
 
-    @action(detail=False, methods=["post"], url_path="provision")
-    @throttle_classes([ServerProvisionThrottle])
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="provision",
+        throttle_classes=[ServerProvisionThrottle],
+    )
     def provision_new(self, request):
+        denied = _assert_server_write_access(request)
+        if denied is not None:
+            return denied
+
         is_primary_raw = request.data.get("is_primary", False)
         if isinstance(is_primary_raw, str):
             is_primary_requested = is_primary_raw.strip().lower() in (
@@ -426,7 +457,10 @@ class ProvisioningMixin:
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        serializer = ManagedServerProvisionSerializer(data=request.data)
+        serializer = ManagedServerProvisionSerializer(
+            data=request.data,
+            context={"request": request},
+        )
         serializer.is_valid(raise_exception=True)
 
         validated = serializer.validated_data.copy()
@@ -477,9 +511,17 @@ class ProvisioningMixin:
             status=status.HTTP_202_ACCEPTED,
         )
 
-    @action(detail=False, methods=["post"], url_path="provision-batch")
-    @throttle_classes([ServerProvisionThrottle])
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="provision-batch",
+        throttle_classes=[ServerProvisionThrottle],
+    )
     def provision_batch(self, request):
+        denied = _assert_server_write_access(request, require_staff=True)
+        if denied is not None:
+            return denied
+
         servers_data = request.data.get("servers")
         if not servers_data or not isinstance(servers_data, list):
             return Response(
@@ -498,7 +540,13 @@ class ProvisioningMixin:
         from apps.deployments.services.provisioner.helpers.ssh import _generate_ed25519_keypair
 
         for idx, item in enumerate(servers_data):
-            serializer = ManagedServerProvisionSerializer(data=item)
+            if not isinstance(item, dict):
+                errors.append({"index": idx, "host": "", "errors": "Each entry must be a JSON object."})
+                continue
+            serializer = ManagedServerProvisionSerializer(
+                data=item,
+                context={"request": request},
+            )
             if not serializer.is_valid():
                 errors.append({"index": idx, "host": item.get("host", ""), "errors": serializer.errors})
                 continue
@@ -558,10 +606,17 @@ class ProvisioningMixin:
             "provision_logs": server.provision_logs,
         })
 
-    @action(detail=True, methods=["post"], url_path="retry-provision")
-    @throttle_classes([ServerProvisionThrottle])
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="retry-provision",
+        throttle_classes=[ServerProvisionThrottle],
+    )
     def retry_provision(self, request, pk=None):
         server = self.get_object()
+        denied = _assert_server_write_access(request, server)
+        if denied is not None:
+            return denied
 
         _inflight = {
             ManagedServer.ProvisionStatus.PENDING,
@@ -593,10 +648,17 @@ class ProvisioningMixin:
             status=status.HTTP_202_ACCEPTED,
         )
 
-    @action(detail=True, methods=["post"], url_path="update-server")
-    @throttle_classes([ServerProvisionThrottle])
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="update-server",
+        throttle_classes=[ServerProvisionThrottle],
+    )
     def update_server(self, request, pk=None):
         server = self.get_object()
+        denied = _assert_server_write_access(request, server)
+        if denied is not None:
+            return denied
 
         if not (server.ssh_key or server.ssh_password):
              return Response(
@@ -626,7 +688,7 @@ class ProvisioningMixin:
                 and provision_started_by != request.user.id
             ):
                 import logging
-                logger = logging.getLogger(__name__)
+                logger = logging.getLogger("apps.deployments.views_servers")
                 logger.warning(
                     "update_server: refusing to auto-clear provision_status=%s "
                     "for server %s — user %s is not the initiator (%s) and not "
@@ -642,7 +704,7 @@ class ProvisioningMixin:
                     status=status.HTTP_409_CONFLICT,
                 )
             import logging
-            logger = logging.getLogger(__name__)
+            logger = logging.getLogger("apps.deployments.views_servers")
             logger.warning(
                 "update_server: auto-clearing in-flight provision_status=%s for server %s (user=%s)",
                 server.provision_status, server.id, request.user.id,

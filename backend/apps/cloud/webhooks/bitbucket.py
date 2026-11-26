@@ -100,6 +100,20 @@ class BitbucketWebhookHandler:
         if not all([repo_full_name, pr_number, source_branch, target_branch]):
             return False
 
+        # Reject fork PR preview deployments (source repository != destination repository)
+        source_repo = (pr.get('source', {}) or {}).get('repository') or {}
+        dest_repo = (pr.get('destination', {}) or {}).get('repository') or repo or {}
+        source_full = (source_repo.get('full_name') or '').strip().lower()
+        dest_full = (dest_repo.get('full_name') or repo_full_name or '').strip().lower()
+        if source_full and dest_full and source_full != dest_full:
+            logger.warning("Rejecting fork Bitbucket PR #%s: %s != %s", pr_number, source_full, dest_full)
+            return False
+        source_uuid = source_repo.get('uuid')
+        dest_uuid = dest_repo.get('uuid') or repo.get('uuid')
+        if source_uuid and dest_uuid and source_uuid != dest_uuid:
+            logger.warning("Rejecting fork Bitbucket PR #%s (repo UUID mismatch)", pr_number)
+            return False
+
         # Map event_type to action
         # pullrequest:created, pullrequest:updated, pullrequest:approved → create/update
         # pullrequest:fulfilled, pullrequest:rejected → destroy
@@ -151,6 +165,8 @@ class BitbucketWebhookHandler:
                 'pr_number': pr_number,
                 'repository_url': parent.repository_url,
                 'provider': parent.provider,
+                'project': parent.project,
+                'server': parent.server,
                 'deploy_type': 'GIT',
                 'owner': parent.owner,
                 'build_command': parent.build_command,
@@ -162,6 +178,12 @@ class BitbucketWebhookHandler:
                 'public_domain': f"{preview_slug}.{base_domain}",
             },
         )
+        if not created and preview_service.parent_service_id != parent.id:
+            logger.warning(
+                "Aborting Bitbucket preview update for %s: belongs to parent %s, not %s",
+                preview_name, preview_service.parent_service_id, parent.id,
+            )
+            return 0
 
         if preview_service.branch != branch:
             preview_service.branch = branch

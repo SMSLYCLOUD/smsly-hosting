@@ -35,5 +35,12 @@ class RemoteVerificationTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
         webhook_url = f"/api/v1/services/{self.service.id}/health/webhook/"
-        response = self.client.post(webhook_url, {"token": self.service.health_webhook_token, "status": "healthy"})
+        response = self.client.post(
+            webhook_url,
+            {
+                "token": self.service.health_webhook_token,
+                "status": "healthy",
+                "nonce": "verify-nonce-12345",
+            },
+        )
         self.assertIn(response.status_code, [200, 202])

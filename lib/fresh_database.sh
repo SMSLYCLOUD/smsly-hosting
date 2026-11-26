@@ -91,9 +91,13 @@ fi
 # ─── Sync DB password to match .env (handles volume from previous install) ──
 # The DB volume persists with the password from FIRST init.
 # Always reset the password inside PostgreSQL to match the current .env.
-set -a
-source "$INSTALL_DIR/.env"  || true
-set +a
+if command -v env_load_file_safe >/dev/null 2>&1; then
+    env_load_file_safe "$INSTALL_DIR/.env" || true
+elif [ -f "$INSTALL_DIR/lib/env.sh" ]; then
+    # shellcheck source=lib/env.sh
+    source "$INSTALL_DIR/lib/env.sh"
+    env_load_file_safe "$INSTALL_DIR/.env" || true
+fi
 # SQL-escape the password (single quotes doubled) — custom .env passwords
 # may contain quotes that would otherwise break the ALTER USER statement.
 _db_pw_escaped="${POSTGRES_PASSWORD//\'/\'\'}"

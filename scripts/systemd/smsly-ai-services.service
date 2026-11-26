@@ -19,7 +19,7 @@ LimitNOFILE=65536
 
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/log/smsly /run/smsly /opt/smsly-ai
+ReadWritePaths=-/var/log/smsly -/run/smsly -/opt/smsly-ai
 NoNewPrivileges=true
 
 [Install]

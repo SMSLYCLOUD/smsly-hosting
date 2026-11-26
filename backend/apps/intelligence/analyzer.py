@@ -116,9 +116,11 @@ class LogAnalyzer:
         # For unknown issues, use real AI analysis
         if len(logs) > 200:  # Only call AI if there's substantial log content
             try:
+                from apps.deployments.utils.log_scrub import mask_secrets_in_text
+                safe_logs = mask_secrets_in_text(logs[-5000:])
                 prompt = (
                     f"Analyze these deployment logs and diagnose the issue. "
-                    f"Be concise (max 3 sentences):\n\n{logs[-5000:]}"
+                    f"Be concise (max 3 sentences):\n\n{safe_logs}"
                 )
                 response, provider = _cached_ask(prompt, mode="code_review")
                 return f"[{provider}] {response}"

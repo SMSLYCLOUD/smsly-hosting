@@ -51,6 +51,41 @@ DEFAULT_MESH_DNS_DOMAIN = "mesh.internal"
 MASTER_SERVICE_ALIASES = ("registry", "postgres", "redis", "rabbitmq")
 
 _LABEL_SANITIZE_RE = re.compile(r"[^a-z0-9-]+")
+_EPHEMERAL_CONTAINER_RE = re.compile(
+    r"(?:^(?:smsly-)?envoy-|-(?:green|promoting|old|promote-conflict)(?:-|$)|-(?:prev|envoy)$)",
+    re.IGNORECASE,
+)
+_DNS_HOSTNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
+_HEX_SHORT_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+_SERVICE_BRIDGE_PREFIXES = ("smsly-net", "paas-svc-")
+_INFRA_PROXY_SERVICES = frozenset(
+    {"traefik", "caddy", "coredns", "route-fallback", "socket-proxy", "cloudflared", "tunnel"}
+)
+_INFRA_COMPOSE_PROJECTS = frozenset({"smsly-hosting"})
+_EPHEMERAL_ROLES = frozenset({"sidecar", "envoy-sidecar", "green", "promoting", "backup"})
+
+
+def _ip_sort_key(ip: str) -> tuple[int, ...]:
+    """Numeric sort key for IPv4 addresses."""
+    try:
+        return tuple(int(part) for part in str(ip).split("."))
+    except ValueError:
+        return (255, 255, 255, 255)
+
+
+def _normalize_dns_host(raw: str) -> str:
+    """Normalize a hostname candidate or return '' if invalid for hosts."""
+    host = (raw or "").strip().rstrip(".").lower()
+    if not host or len(host) > 253 or not _DNS_HOSTNAME_RE.match(host):
+        return ""
+    return host
+
+
+def _is_service_bridge(net_name: str) -> bool:
+    """True for project/service bridge networks served via CoreDNS."""
+    return isinstance(net_name, str) and (
+        net_name == "smsly-net" or net_name.startswith(_SERVICE_BRIDGE_PREFIXES)
+    )
 
 
 def mesh_dns_domain() -> str:
@@ -156,45 +191,181 @@ def get_mesh_zone_records() -> tuple[str, list[dict]]:
                     entries.append((ip, fqdn))
 
     # Deterministic order: by IP octets, then name.
-    def _ip_key(item):
-        try:
-            return tuple(int(part) for part in item[0].split("."))
-        except ValueError:
-            return (255, 255, 255, 255)
-
-    entries.sort(key=lambda item: (_ip_key(item), item[1]))
+    entries.sort(key=lambda item: (_ip_sort_key(item[0]), item[1]))
     return domain, [{"name": fqdn, "ip": ip} for ip, fqdn in entries]
 
 
-def build_mesh_hosts() -> tuple[str, int]:
+def get_live_container_dns_records(client=None) -> list[dict]:
+    """Enumerate running Docker bridge containers for CoreDNS discovery.
+
+    Maps each active service container name and service alias on ``smsly-net*``
+    or ``paas-svc-*`` bridges (both ``<name>`` and ``<name>.default.internal``)
+    to its live primary project-bridge IP. Skips ephemeral deployment
+    candidates (``*-green-*``, ``*-promoting-*``, ``*-old-*``, sidecars) and
+    suppresses un-scoped names that collide across separate tenant bridges.
+
+    Best-effort and non-fatal: returns [] when Docker is unavailable.
+    """
+    if client is None:
+        try:
+            import docker
+
+            try:
+                client = docker.from_env(timeout=10)
+            except TypeError:
+                client = docker.from_env()
+        except Exception as exc:
+            logger.debug("mesh_dns: Docker unavailable for container DNS discovery: %s", exc)
+            return []
+
+    try:
+        containers = client.containers.list()
+    except Exception as exc:
+        logger.debug("mesh_dns: container enumeration failed: %s", exc)
+        return []
+
+    # Map normalized hostname -> {(primary_net, primary_ip), ...} across containers.
+    records_by_host: dict[str, set[tuple[str, str]]] = {}
+
+    for container in containers:
+        try:
+            attrs = getattr(container, "attrs", None) or {}
+            state = str(
+                ((attrs.get("State") or {}).get("Status"))
+                or getattr(container, "status", "")
+                or ""
+            ).strip().lower()
+            if state and state != "running":
+                continue
+
+            cname = str(getattr(container, "name", None) or attrs.get("Name") or "").lstrip("/").strip()
+            if not cname or _EPHEMERAL_CONTAINER_RE.search(cname):
+                continue
+
+            labels = ((attrs.get("Config") or {}).get("Labels")) or {}
+            compose_proj = str(labels.get("com.docker.compose.project") or "").strip().lower()
+            compose_svc = str(labels.get("com.docker.compose.service") or "").strip().lower()
+            if (
+                compose_proj in _INFRA_COMPOSE_PROJECTS
+                or str(labels.get("smsly.sidecar") or "").strip().lower() == "true"
+                or str(labels.get("smsly.role") or "").strip().lower() in _EPHEMERAL_ROLES
+                or str(labels.get("smsly.ephemeral") or "").strip().lower() == "true"
+                or compose_svc in _INFRA_PROXY_SERVICES
+            ):
+                continue
+
+            networks = ((attrs.get("NetworkSettings") or {}).get("Networks")) or {}
+            qualifying: list[tuple[str, dict, str]] = []
+            for net_name, net_cfg in networks.items():
+                if not _is_service_bridge(net_name):
+                    continue
+                ip = str((net_cfg or {}).get("IPAddress") or "").strip()
+                if ip and not any(ch.isspace() for ch in ip):
+                    qualifying.append((net_name, net_cfg or {}, ip))
+
+            if not qualifying:
+                continue
+
+            # Prefer scoped project/service bridges over shared legacy `smsly-net`.
+            # When a container attaches to multiple distinct scoped tenant bridges
+            # (e.g. shared Postgres across projects), record each scoped bridge so
+            # cross-bridge IP collisions are filtered out rather than emitting one
+            # bridge's unreachable IP globally.
+            scoped_qualifying = [item for item in qualifying if item[0] != "smsly-net"]
+            active_attachments = scoped_qualifying if scoped_qualifying else qualifying
+
+            full_id = str(attrs.get("Id") or getattr(container, "id", "") or "").lower()
+            short_id = str(getattr(container, "short_id", None) or full_id[:12]).lower()
+            norm_cname = _normalize_dns_host(cname)
+            svc_label = _normalize_dns_host(str(labels.get("smsly.service_name") or ""))
+
+            for net_name, net_cfg, bridge_ip in active_attachments:
+                base_names: set[str] = set()
+                if norm_cname:
+                    base_names.add(norm_cname)
+                if svc_label:
+                    base_names.add(svc_label)
+                if compose_svc and net_name != "smsly-net":
+                    norm_compose = _normalize_dns_host(compose_svc)
+                    if norm_compose:
+                        base_names.add(norm_compose)
+
+                for raw_alias in (net_cfg.get("Aliases") or []):
+                    alias = _normalize_dns_host(str(raw_alias))
+                    if not alias:
+                        continue
+                    if alias == short_id or (_HEX_SHORT_ID_RE.match(alias) and full_id.startswith(alias)):
+                        continue
+                    base_names.add(alias)
+
+                for host in base_names:
+                    records_by_host.setdefault(host, set()).add((net_name, bridge_ip))
+                    if "." not in host:
+                        records_by_host.setdefault(f"{host}.default.internal", set()).add(
+                            (net_name, bridge_ip)
+                        )
+        except Exception as exc:  # noqa: BLE001 — skip malformed container attrs
+            logger.debug("mesh_dns: skipping container during DNS discovery: %s", exc)
+            continue
+
+    entries: list[tuple[str, str]] = []
+    for hostname, targets in records_by_host.items():
+        distinct_nets = {net for net, _ in targets}
+        distinct_ips = {ip for _, ip in targets}
+        if len(distinct_nets) > 1 and len(distinct_ips) > 1:
+            logger.debug(
+                "mesh_dns: excluding ambiguous un-scoped record %r across bridges %s",
+                hostname,
+                sorted(distinct_nets),
+            )
+            continue
+        for ip in sorted(distinct_ips, key=_ip_sort_key):
+            entries.append((ip, hostname))
+
+    entries.sort(key=lambda item: (_ip_sort_key(item[0]), item[1]))
+    return [{"name": host, "ip": ip} for ip, host in entries]
+
+
+def build_mesh_hosts(
+    include_containers: bool = False,
+    client=None,
+) -> tuple[str, int]:
     """Render the hosts-format zone file. Returns (content, record_count).
 
-    Deterministic ordering (sorted by IP) keeps the write idempotent so
-    unchanged content is skipped.
+    Keeps WireGuard mesh peers pure by default (``include_containers=False``)
+    and optionally appends live Docker container discovery records.
+    Deterministic ordering (sorted by IP, then name) keeps writes idempotent.
     """
-    _, records = get_mesh_zone_records()
+    _, mesh_records = get_mesh_zone_records()
+    combined: list[dict] = list(mesh_records)
+    if include_containers:
+        combined.extend(get_live_container_dns_records(client=client))
+
+    deduped = sorted(
+        {(str(r["ip"]), str(r["name"])) for r in combined if r.get("ip") and r.get("name")},
+        key=lambda item: (_ip_sort_key(item[0]), item[1]),
+    )
 
     lines = [
         "# Generated by apps.deployments.services.mesh_dns — do not edit.",
-        "# Regenerated automatically when mesh peers change "
-        "(sync_mesh_dns_task).",
+        "# Regenerated automatically when mesh peers or containers change "
+        "(sync_mesh_dns_task / sync_dns_now).",
     ]
-    for record in records:
-        lines.append(f"{record['ip']} {record['name']}")
+    for ip, name in deduped:
+        lines.append(f"{ip} {name}")
 
-    return "\n".join(lines) + "\n", len(records)
+    return "\n".join(lines) + "\n", len(deduped)
 
 
 def build_corefile() -> str:
-    """Render the CoreDNS Corefile for the mesh zone."""
-    domain = mesh_dns_domain()
+    """Render the CoreDNS Corefile for mesh peers and local container DNS."""
     return (
         f".:53 {{\n"
         f"    errors\n"
         f"    health :8080\n"
         f"    ready :8181\n"
-        f"    hosts {COREDNS_CONTAINER_HOSTS_PATH} {domain} {{\n"
-        f"        ttl 30\n"
+        f"    hosts {COREDNS_CONTAINER_HOSTS_PATH} . {{\n"
+        f"        ttl 5\n"
         f"        reload 5s\n"
         f"        fallthrough\n"
         f"    }}\n"
@@ -216,8 +387,8 @@ def _write_atomic(path: str, content: str) -> None:
     os.replace(tmp_path, path)
 
 
-def apply_mesh_dns() -> dict:
-    """Regenerate and write the Corefile + mesh hosts zone.
+def apply_mesh_dns(client=None) -> dict:
+    """Regenerate and write the Corefile + mesh/container hosts zone.
 
     Idempotent: unchanged content is skipped (no write, no reload —
     the CoreDNS `hosts` plugin re-reads the file on change anyway).
@@ -225,7 +396,10 @@ def apply_mesh_dns() -> dict:
     """
     try:
         os.makedirs(COREDNS_CONFIG_DIR, exist_ok=True)
-        hosts_content, record_count = build_mesh_hosts()
+        hosts_content, record_count = build_mesh_hosts(
+            include_containers=True,
+            client=client,
+        )
         corefile_content = build_corefile()
 
         written: list[str] = []
@@ -260,3 +434,70 @@ def apply_mesh_dns() -> dict:
     except Exception as exc:  # noqa: BLE001 — never crash callers
         logger.warning("mesh_dns: failed to apply mesh DNS zone: %s", exc)
         return {"ok": False, "message": str(exc), "records": 0}
+
+
+def _coredns_dir_writable(config_dir: str) -> bool:
+    """True when COREDNS_CONFIG_DIR exists or can be created and written."""
+    if os.name == "nt" and config_dir == "/coredns-config" and not os.path.exists(config_dir):
+        return False
+    try:
+        os.makedirs(config_dir, exist_ok=True)
+        return os.access(config_dir, os.W_OK)
+    except OSError:
+        return False
+
+
+def sync_dns_now(client=None) -> dict:
+    """Immediately sync CoreDNS hosts, coalescing concurrent callers.
+
+    Serialized via cache lock with a trailing dirty marker so concurrent
+    deploys or swaps never drop the newest container IP. Falls back to
+    ``queue_mesh_dns_sync()`` when ``COREDNS_CONFIG_DIR`` is not writable or
+    writing fails. Never raises.
+    """
+    from apps.deployments.tasks.infra.tasks_mesh_dns import (
+        MESH_DNS_LOCK_KEY,
+        queue_mesh_dns_sync,
+    )
+
+    if not _coredns_dir_writable(COREDNS_CONFIG_DIR):
+        queue_mesh_dns_sync()
+        return {"ok": True, "queued": True, "message": "queued mesh DNS sync"}
+
+    dirty_key = "mesh-dns-sync-dirty"
+    try:
+        from django.core.cache import cache
+
+        try:
+            cache.set(dirty_key, "1", timeout=60)
+        except Exception:
+            pass
+        if not cache.add(MESH_DNS_LOCK_KEY, "1", timeout=30):
+            return {"ok": True, "coalesced": True, "message": "coalesced into active sync"}
+        try:
+            result = {"ok": False, "message": "not run", "records": 0}
+            for _ in range(3):
+                try:
+                    cache.delete(dirty_key)
+                except Exception:
+                    pass
+                result = apply_mesh_dns(client=client)
+                if not result.get("ok"):
+                    queue_mesh_dns_sync()
+                    return result
+                try:
+                    if not cache.get(dirty_key):
+                        break
+                except Exception:
+                    break
+            return result
+        finally:
+            try:
+                cache.delete(MESH_DNS_LOCK_KEY)
+            except Exception:
+                pass
+    except Exception:
+        result = apply_mesh_dns(client=client)
+        if not result.get("ok"):
+            queue_mesh_dns_sync()
+        return result

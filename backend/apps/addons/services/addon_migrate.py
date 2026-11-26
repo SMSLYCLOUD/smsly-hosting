@@ -291,6 +291,10 @@ def _psql_exec(container_name: str, url: str, sql: str, timeout=60):
     return True, (result.stdout or '')
 
 
+def _quote_pg_ident(ident: str) -> str:
+    return '"' + str(ident).replace('"', '""') + '"'
+
+
 def _table_row_counts(container_name: str, url: str):
     """{table: row_count} for user tables, or (None, error_detail)."""
     ok, out = _psql_exec(container_name, url, _USER_TABLES_SQL)
@@ -300,7 +304,7 @@ def _table_row_counts(container_name: str, url: str):
     counts = {}
     for table in tables:
         ok, out = _psql_exec(
-            container_name, url, f'SELECT count(*) FROM "{table}"')
+            container_name, url, f'SELECT count(*) FROM {_quote_pg_ident(table)}')
         if not ok:
             return None, f"count failed for {table}: {out}"
         try:
@@ -397,93 +401,82 @@ def migrate_addon_mode(addon_id, target_mode, stop_services=True):
     if target_mode not in ('shared', 'container'):
         raise ValueError("target_mode must be 'shared' or 'container'.")
     addon = _claim_for_migration(addon_id)
-    if addon.addon_type != 'POSTGRES':
-        _release_migration_claim(addon)
-        raise ValueError("Migration is only supported for POSTGRES addons.")
-    server = getattr(addon.service, 'server', None)
-    if server is not None and not getattr(server, 'is_primary', False):
-        _release_migration_claim(addon)
-        raise ValueError("Migration is only supported for local (primary-node) addons.")
-    current_shared = str(getattr(addon, 'provision_mode', '') or '') == 'shared'
-    if (target_mode == 'shared') == current_shared:
-        raise ValueError(f"Addon is already on '{target_mode}'.")
-
-    old_mode = str(getattr(addon, 'provision_mode', '') or '')
-    old_url = str(getattr(addon, 'connection_url', '') or '').strip()
-    old_pooled = bool(getattr(addon, 'pooler_routed', False))
-    if not old_url:
-        raise ValueError("Addon has no connection URL — reprovision it first.")
-    old_parts = addon_provisioner._parse_connection_url(old_url)
-    alias = str(old_parts.get('hostname') or '').strip()
-    if not alias:
-        raise ValueError("Could not determine the addon network alias from its URL.")
-    container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
-
-    # Credential preservation: the target backend is created with the
-    # SOURCE's username/password (and alias), so every existing copy of
-    # the credentials keeps working and dump/restore role ownership
-    # lines resolve. The database name is preserved too when it is free
-    # on the shared server; only a taken name forces a deterministic
-    # temp staging name (retry-convergent — leftovers are dropped
-    # before restore). Container targets get a fresh cluster, so the
-    # original db name is reused verbatim and the final URL is
-    # byte-identical to the old one.
-    from urllib.parse import quote as _quote
-    old_user = str(old_parts.get('username') or '')
-    old_password = str(old_parts.get('password') or '')
-    old_db = str(old_parts.get('database') or '')
-    old_port = str(old_parts.get('port') or '5432')
-    if not old_user or not old_password or not old_db:
-        raise ValueError(
-            "Addon connection URL is missing auth details (user/password/"
-            "database) — reprovision it first; migration cannot preserve "
-            "credentials it cannot read.")
-    staging_db = old_db
-    if target_mode == 'shared':
-        temp_db = f"{old_db[:40]}__mig_{str(addon.id).replace('-', '')[:8]}"
-        try:
-            from apps.addons.services.shared_postgres import (
-                database_exists as _shared_db_exists,
-            )
-            if _shared_db_exists(old_db):
-                staging_db = temp_db
-                logger.info(
-                    "Migration %s: database name %r taken on shared — "
-                    "staging under %r", addon.id, old_db, staging_db)
-            else:
-                logger.info(
-                    "Migration %s: database name %r free on shared — "
-                    "preserving it", addon.id, old_db)
-        except Exception as exc:
-            # Shared server unreachable — staging safe; the nested
-            # provision will surface the real error.
-            staging_db = temp_db
-            logger.debug("Migration %s: shared name probe failed (%s) — "
-                         "staging under %r", addon.id, exc, staging_db)
-    from urllib.parse import urlparse as _urlparse_old
-    _old_query = _urlparse_old(old_url).query
-    staging_url = (
-        f"postgresql://{_quote(old_user, safe='')}:{_quote(old_password, safe='')}"
-        f"@{alias}:{old_port}/{staging_db}"
-        + (f"?{_old_query}" if _old_query else "")
-    )
-
-    logger.info("Migrating addon %s (%s -> %s)", addon.id, old_mode or 'default', target_mode)
-
-    # 0. Write quiesce: stop the owning service's containers BEFORE the
-    #    dump, otherwise post-dump writes are silently lost. Stopped
-    #    containers stay stopped — the stored URL changes, so only a
-    #    REDEPLOY (not a restart) picks it up. Restored on failure.
     stopped_containers: list[str] = []
-    if stop_services:
-        stopped_containers = _service_container_names(addon.service)
-        if stopped_containers:
-            logger.info("Migration quiesce: stopping %s", stopped_containers)
-            _stop_service_containers(stopped_containers)
+    try:
+        if addon.addon_type != 'POSTGRES':
+            raise ValueError("Migration is only supported for POSTGRES addons.")
+        server = getattr(addon.service, 'server', None)
+        if server is not None and not getattr(server, 'is_primary', False):
+            raise ValueError("Migration is only supported for local (primary-node) addons.")
+        current_shared = str(getattr(addon, 'provision_mode', '') or '') == 'shared'
+        if (target_mode == 'shared') == current_shared:
+            raise ValueError(f"Addon is already on '{target_mode}'.")
 
-    # 1. Dump the source while the row still points at it.
-    dump_path = addon_provisioner.create_backup(addon)
-    logger.info("Migration dump for addon %s at %s", addon.id, dump_path)
+        old_mode = str(getattr(addon, 'provision_mode', '') or '')
+        old_url = str(getattr(addon, 'connection_url', '') or '').strip()
+        old_pooled = bool(getattr(addon, 'pooler_routed', False))
+        if not old_url:
+            raise ValueError("Addon has no connection URL — reprovision it first.")
+        old_parts = addon_provisioner._parse_connection_url(old_url)
+        alias = str(old_parts.get('hostname') or '').strip()
+        if not alias:
+            raise ValueError("Could not determine the addon network alias from its URL.")
+        container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+
+        from urllib.parse import quote as _quote
+        old_user = str(old_parts.get('username') or '')
+        old_password = str(old_parts.get('password') or '')
+        old_db = str(old_parts.get('database') or '')
+        old_port = str(old_parts.get('port') or '5432')
+        if not old_user or not old_password or not old_db:
+            raise ValueError(
+                "Addon connection URL is missing auth details (user/password/"
+                "database) — reprovision it first; migration cannot preserve "
+                "credentials it cannot read.")
+        staging_db = old_db
+        if target_mode == 'shared':
+            temp_db = f"{old_db[:40]}__mig_{str(addon.id).replace('-', '')[:8]}"
+            try:
+                from apps.addons.services.shared_postgres import (
+                    database_exists as _shared_db_exists,
+                )
+                if _shared_db_exists(old_db):
+                    staging_db = temp_db
+                    logger.info(
+                        "Migration %s: database name %r taken on shared — "
+                        "staging under %r", addon.id, old_db, staging_db)
+                else:
+                    logger.info(
+                        "Migration %s: database name %r free on shared — "
+                        "preserving it", addon.id, old_db)
+            except Exception as exc:
+                staging_db = temp_db
+                logger.debug("Migration %s: shared name probe failed (%s) — "
+                             "staging under %r", addon.id, exc, staging_db)
+        from urllib.parse import urlparse as _urlparse_old
+        _old_query = _urlparse_old(old_url).query
+        staging_url = (
+            f"postgresql://{_quote(old_user, safe='')}:{_quote(old_password, safe='')}"
+            f"@{alias}:{old_port}/{staging_db}"
+            + (f"?{_old_query}" if _old_query else "")
+        )
+
+        logger.info("Migrating addon %s (%s -> %s)", addon.id, old_mode or 'default', target_mode)
+
+        if stop_services:
+            stopped_containers = _service_container_names(addon.service)
+            if stopped_containers:
+                logger.info("Migration quiesce: stopping %s", stopped_containers)
+                _stop_service_containers(stopped_containers)
+
+        # 1. Dump the source while the row still points at it.
+        dump_path = addon_provisioner.create_backup(addon)
+        logger.info("Migration dump for addon %s at %s", addon.id, dump_path)
+    except Exception:
+        if stopped_containers:
+            _start_service_containers(stopped_containers)
+        _release_migration_claim(addon)
+        raise
 
     new_container_created = False
     new_url_set = False

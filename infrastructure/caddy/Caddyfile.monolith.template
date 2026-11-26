@@ -1,12 +1,24 @@
 # NOTE: This is a per-app template for the legacy monolith Caddy instance.
 # It is NOT the canonical SMSLY edge configuration. The active edge proxy for
-# the main docker-compose stack is caddy-config/Caddyfile.
-# Keep this template in sync with the canonical file when routing changes.
+# the main docker-compose stack is caddy-config/Caddyfile (managed by
+# backend/apps/deployments/services/caddy_manager/config_generation.py).
+# Stock Caddy in the monolith Dockerfile does not include Coraza WAF or
+# external edge-sidecar forwardAuth; keep security headers aligned here.
 # See docs/REVERSE_PROXY_DECISION.md.
 
 :${PORT} {
-	# API
-	@api path /api/*
+	# Security headers (mirroring caddy_manager SECURE_HEADERS_SNIPPET; omit HSTS on plain HTTP :PORT)
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Content-Security-Policy "frame-ancestors 'none'"
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	# API & Auth
+	@api path /api/* /dj-rest-auth/*
 	reverse_proxy @api 127.0.0.1:${BACKEND_PORT}
 
 	# WebSockets
@@ -18,19 +30,22 @@
 	reverse_proxy @admin 127.0.0.1:${BACKEND_PORT}
 
 	# Health
-	@health path /health
+	@health path /health /health/*
 	reverse_proxy @health 127.0.0.1:${BACKEND_PORT}
 
 	# OAuth
-	@oauth_github path /accounts/github/*
-	@oauth_google path /accounts/google/*
-	reverse_proxy @oauth_github 127.0.0.1:${BACKEND_PORT}
-	reverse_proxy @oauth_google 127.0.0.1:${BACKEND_PORT}
+	@oauth path /accounts/*
+	reverse_proxy @oauth 127.0.0.1:${BACKEND_PORT}
 
-	# Static files
+	# Static and Media files
 	@static path /static/*
 	handle @static {
 		root * /app/staticfiles
+		file_server
+	}
+	@media path /media/*
+	handle @media {
+		root * /app/media
 		file_server
 	}
 

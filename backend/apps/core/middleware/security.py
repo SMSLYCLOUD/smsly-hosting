@@ -56,9 +56,34 @@ class SecurityMiddleware:
             '/api/v1/integrations/',  # OAuth authorize/callback flows (public — authenticated elsewhere)
             '/api/v1/oauth/',  # OAuth provider credentials status (public read)
             '/api/v1/servers/bootstrap/',  # Self-provisioning bootstrap (HMAC-signed token in URL)
+            '/api/v1/billing/webhook/',  # Stripe billing webhook (verifies Stripe signature)
+            '/api/v1/billing/flutterwave/webhook/',  # Flutterwave webhook (verifies verif-hash)
+            '/api/v1/billing/cryptomus/webhook/',  # Cryptomus webhook (verifies MD5 sign)
+            '/api/v1/billing/plans/',  # Public pricing plans (AllowAny)
+            '/api/v1/internal/attest/',  # Node identity attestation (per-node challenge/verify HMAC)
         ]
 
     def __call__(self, request):
+        if request.headers.get("X-SMSLY-Remote-Sync") == "1":
+            has_hmac_headers = bool(
+                request.headers.get("X-Gateway-Signature-V2")
+                and request.headers.get("X-Request-Timestamp")
+                and request.headers.get("X-Request-Nonce")
+            )
+            if not has_hmac_headers and not self._has_valid_token_auth_header(request):
+                return JsonResponse(
+                    {'error': 'Invalid or missing remote sync authentication'},
+                    status=403,
+                )
+            if has_hmac_headers and any(
+                request.path.startswith(exempt) for exempt in self.exempt_routes
+            ):
+                if not self._verify_signature(request):
+                    return JsonResponse(
+                        {'error': 'Invalid or missing signature'},
+                        status=403,
+                    )
+
         if self._should_verify_signature(request):
             if not self._verify_signature(request):
                 return JsonResponse(
@@ -146,8 +171,18 @@ class SecurityMiddleware:
             return False
 
         # Inter-server sync requests carry their own auth (X-SMSLY-Remote-Sync).
-        # Skip HMAC verification — DRF token auth will validate them in the view.
-        if request.headers.get("X-SMSLY-Remote-Sync") == "1":
+        # Skip gateway HMAC only when all three HMAC headers are present on a
+        # routed /api/ path (DRF RemoteSyncHMACAuthentication verifies them) or
+        # when a valid token auth header is supplied.
+        if request.headers.get("X-SMSLY-Remote-Sync") == "1" and (
+            (
+                path.startswith('/api/')
+                and request.headers.get("X-Gateway-Signature-V2")
+                and request.headers.get("X-Request-Timestamp")
+                and request.headers.get("X-Request-Nonce")
+            )
+            or self._has_valid_token_auth_header(request)
+        ):
             return False
 
         # Skip only when an API token is present and valid.
@@ -210,6 +245,22 @@ class SecurityMiddleware:
                     token_hash=token_hash,
                     is_active=True,
                 ).exists()
+
+            if token_key.startswith("sk_"):
+                from django.contrib.auth.hashers import check_password
+                from django.db.models import Q
+                from django.utils import timezone
+                from apps.core.models import APIKey
+
+                prefix = token_key[:8]
+                candidates = APIKey.objects.filter(
+                    prefix=prefix,
+                    user__is_active=True,
+                ).exclude(
+                    expires_at__isnull=False,
+                    expires_at__lt=timezone.now(),
+                )
+                return any(check_password(token_key, ak.key_hash) for ak in candidates)
 
             from rest_framework.authtoken.models import Token
             return Token.objects.filter(key=token_key).exists()

@@ -324,7 +324,8 @@ class ApprovalScopingTests(APITestCase):
         r = self.client.post(wrong_url, format="json")
         self.assertIn(r.status_code, [http_status.HTTP_403_FORBIDDEN, http_status.HTTP_404_NOT_FOUND])
 
-    def test_approve_succeeds_for_correct_service(self):
+    @patch("apps.deployments.services.safedeploy.deployment_pipeline.ProductionDeploymentPipeline.process_deployment")
+    def test_approve_succeeds_for_correct_service(self, _mock_process):
         dep = Deployment.objects.create(
             service=self.svc_a,
             commit_hash="a" * 7,
@@ -377,7 +378,8 @@ class ApprovalStatusGateTests(APITestCase):
         self.assertEqual(r.status_code, http_status.HTTP_400_BAD_REQUEST)
         self.assertIn("not awaiting approval", r.data["error"])
 
-    def test_approve_succeeds_when_awaiting_approval(self):
+    @patch("apps.deployments.services.safedeploy.deployment_pipeline.ProductionDeploymentPipeline.process_deployment")
+    def test_approve_succeeds_when_awaiting_approval(self, _mock_process):
         dep = Deployment.objects.create(
             service=self.service,
             commit_hash="a" * 7,

@@ -274,25 +274,35 @@ class BuildManager:
                     self._log("Login successful.")
 
             # 1. Clone
-            repo_url = self.service.repository_url or ""
+            repo_url = (self.service.repository_url or "").strip()
+            branch_name = (self.service.branch or "main").strip() or "main"
+            if branch_name.startswith('-') or any(c in branch_name for c in ('\x00', '\r', '\n')):
+                raise ValueError("Invalid git branch name.")
+            if not repo_url or repo_url.startswith('-') or repo_url.lower().startswith(('ext::', 'fd::')):
+                raise ValueError("Invalid or unsafe git repository URL.")
             self._log(f"Cloning repository {self._sanitize_repo_url(repo_url)}...")
             if self.work_dir.exists():
                 shutil.rmtree(self.work_dir)
             self.work_dir.parent.mkdir(parents=True, exist_ok=True)
 
+            _clone_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
             github_token = self._get_github_access_token()
             if github_token and self._is_github_https(repo_url):
                 try:
-                    self._clone_github_repo_with_token(repo_url, self.service.branch, github_token)
+                    self._clone_github_repo_with_token(repo_url, branch_name, github_token)
                 except subprocess.CalledProcessError:
                     # Token might be expired/revoked; retry public clone for public repos.
                     self._log("GitHub-auth clone failed; retrying without token...")
                     self._run_command(
-                        ["git", "clone", "--branch", self.service.branch, repo_url, str(self.work_dir)]
+                        ["git", "clone", "--branch", branch_name, "--", repo_url, str(self.work_dir)],
+                        env=_clone_env,
+                        timeout=300,
                     )
             else:
                 self._run_command(
-                    ["git", "clone", "--branch", self.service.branch, repo_url, str(self.work_dir)]
+                    ["git", "clone", "--branch", branch_name, "--", repo_url, str(self.work_dir)],
+                    env=_clone_env,
+                    timeout=300,
                 )
 
             # 2. Build
@@ -711,7 +721,7 @@ class BuildManager:
             env["GIT_TERMINAL_PROMPT"] = "0"
 
             self._run_command(
-                ["git", "clone", "--branch", branch, clone_url, str(self.work_dir)],
+                ["git", "clone", "--branch", branch, "--", clone_url, str(self.work_dir)],
                 env=env,
             )
         finally:

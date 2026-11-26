@@ -34,8 +34,14 @@ def _parse_bool(val: str | None, default: bool = False) -> bool:
 
 
 def rewrite_gate_url(raw_url: str, gate_host: str) -> str:
-    """Replace scheme netloc host:port while preserving credentials, path, query, and fragment."""
-    from urllib.parse import urlparse, urlunparse
+    """Replace scheme netloc host:port while preserving credentials, path, query, and fragment.
+
+    When the source URL uses ``rediss://`` (upstream TLS Redis), downgrade the
+    app-to-gate hop to plain ``redis://`` and strip ``ssl_cert_reqs`` so the
+    app does not attempt TLS against cryptd's plain RESP listener (cryptd
+    handles upstream TLS via ``upstream_tls``).
+    """
+    from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
     parsed = urlparse(raw_url)
     if parsed.username and parsed.password:
@@ -46,7 +52,20 @@ def rewrite_gate_url(raw_url: str, gate_host: str) -> str:
         auth = f":{parsed.password}@"
     else:
         auth = ""
-    return urlunparse(parsed._replace(netloc=f"{auth}{gate_host}"))
+
+    scheme = parsed.scheme
+    query = parsed.query
+    if scheme.lower() == "rediss":
+        scheme = "redis"
+        if query:
+            filtered = [
+                (k, v)
+                for k, v in parse_qsl(query, keep_blank_values=True)
+                if k.lower() != "ssl_cert_reqs"
+            ]
+            query = urlencode(filtered)
+
+    return urlunparse(parsed._replace(scheme=scheme, netloc=f"{auth}{gate_host}", query=query))
 
 
 def needs_host_gateway(env_vars: dict[str, Any] | None) -> bool:
@@ -81,21 +100,42 @@ def _rewrite_gate_vars_in_env(
         parsed_gate = urlparse(f"//{pg_gate}")
         gate_host = parsed_gate.hostname or pg_gate.split(":", 1)[0]
         gate_port = str(parsed_gate.port) if parsed_gate.port else ""
-        for dk in ("DATABASE_URL", "DB_URL", "SQLALCHEMY_DATABASE_URL", "SQLALCHEMY_DATABASE_URI"):
+        pg_url_keys = [
+            "DATABASE_URL",
+            "DB_URL",
+            "POSTGRESQL_URL",
+            "PG_URL",
+            "POSTGRES_URL",
+            "SQLALCHEMY_DATABASE_URL",
+            "SQLALCHEMY_DATABASE_URI",
+        ]
+        for k in list(env_vars.keys()):
+            if k.endswith("_POSTGRES_URL") and k not in pg_url_keys:
+                pg_url_keys.append(k)
+        has_pg = any(str(env_vars.get(dk, "") or "").startswith("postgres") for dk in pg_url_keys)
+        for dk in pg_url_keys:
             dv = str(env_vars.get(dk, "") or "")
             if dv.startswith("postgres"):
                 env_vars[dk] = rewrite_gate_url(dv, pg_gate)
-        if str(env_vars.get("DATABASE_URL", "")).startswith("postgres") or "DB_HOST" in env_vars or "POSTGRES_HOST" in env_vars:
-            for hk in ("DB_HOST", "POSTGRES_HOST"):
-                if hk in env_vars:
+        if has_pg or "DB_HOST" in env_vars or "POSTGRES_HOST" in env_vars:
+            for hk in list(env_vars.keys()):
+                if hk in ("DB_HOST", "POSTGRES_HOST") or hk.endswith("_POSTGRES_HOST"):
                     env_vars[hk] = gate_host
             if gate_port:
-                for pk in ("DB_PORT", "POSTGRES_PORT"):
-                    if pk in env_vars:
+                for pk in list(env_vars.keys()):
+                    if pk in ("DB_PORT", "POSTGRES_PORT") or pk.endswith("_POSTGRES_PORT"):
                         env_vars[pk] = gate_port
 
     if redis_gate:
-        for rk in ("REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND", "CACHE_URL"):
+        for rk in (
+            "REDIS_URL",
+            "REDIS_URI",
+            "RATE_LIMIT_REDIS_URL",
+            "SESSION_REDIS_URL",
+            "CELERY_BROKER_URL",
+            "CELERY_RESULT_BACKEND",
+            "CACHE_URL",
+        ):
             rv = str(env_vars.get(rk, "") or "")
             if rv.startswith("redis"):
                 env_vars[rk] = rewrite_gate_url(rv, redis_gate)
@@ -225,7 +265,6 @@ class CryptdClient:
         return (
             os.environ.get("CRYPTD_SHARED_SECRET", "").strip()
             or os.environ.get("SMSLY_VOLUME_DAEMON_SECRET", "").strip()
-            or os.environ.get("NAPD_SHARED_SECRET", "").strip()
         )
 
     def _timeout(self) -> float:
@@ -270,7 +309,6 @@ class CryptdClient:
             raise CryptdError("CRYPTD_SHARED_SECRET is not configured")
         if secret:
             headers["X-Cryptd-Secret"] = secret
-            headers["X-Napd-Secret"] = secret
 
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
@@ -317,6 +355,7 @@ class CryptdClient:
         redis_prefixes: list[str] | None = None,
         upstream_pg: str = "",
         upstream_redis: str = "",
+        upstream_tls: bool = False,
         encrypt_redis_vals: bool | None = None,
         unlock_now: bool = False,
         ttl_seconds: int = 7200,
@@ -332,6 +371,7 @@ class CryptdClient:
             "redis_prefixes": redis_prefixes or [],
             "upstream_pg": upstream_pg,
             "upstream_redis": upstream_redis,
+            "upstream_tls": bool(upstream_tls),
             "unlock_now": bool(unlock_now and opted_in),
             "ttl_seconds": int(ttl_seconds),
             "persistent": bool(persistent),
@@ -492,20 +532,27 @@ class CryptdClient:
         key_id: str = "",
         owner_uid: int = 0,
         owner_gid: int = 0,
+        size_mb: int = 0,
+        persistent: bool = False,
     ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "volume_name": volume_name,
+            "service_id": str(service_id),
+            "project_id": str(project_id),
+            "dek_hex": dek_hex,
+            "wrapped_dek": wrapped_dek,
+            "key_id": key_id,
+            "owner_uid": int(owner_uid),
+            "owner_gid": int(owner_gid),
+        }
+        if int(size_mb or 0) > 0:
+            payload["size_mb"] = int(size_mb)
+        if persistent:
+            payload["persistent"] = True
         return self._request(
             "POST",
             "/volumes/provision",
-            {
-                "volume_name": volume_name,
-                "service_id": str(service_id),
-                "project_id": str(project_id),
-                "dek_hex": dek_hex,
-                "wrapped_dek": wrapped_dek,
-                "key_id": key_id,
-                "owner_uid": int(owner_uid),
-                "owner_gid": int(owner_gid),
-            },
+            payload,
             timeout=120.0,
         )
 
@@ -568,8 +615,17 @@ def is_service_encryption_enabled(service: Any) -> bool:
     return bool(getattr(service, "encryption_at_rest_enabled", False))
 
 
-def _resolve_container_upstream(hostname: str, port: int | None) -> str:
-    """Resolve an internal Docker hostname to a host-routable bridge IP:port when possible."""
+def _resolve_container_upstream(
+    hostname: str,
+    port: int | None,
+    preferred_network: str = "",
+) -> str:
+    """Resolve an internal Docker hostname to a host-routable bridge IP:port when possible.
+
+    Scopes lookup to ``preferred_network`` (the target service's project network)
+    first before falling back to the shared bridge (``smsly-net``) or any other
+    attached network.
+    """
     if not hostname or not port:
         return ""
     if hostname in ("127.0.0.1", "localhost", "host.docker.internal"):
@@ -578,22 +634,46 @@ def _resolve_container_upstream(hostname: str, port: int | None) -> str:
         from apps.cloud.docker_client import get_docker_client
         client = get_docker_client()
         if client is not None:
-            for c in client.containers.list():
+            containers = list(client.containers.list())
+            if preferred_network:
+                for c in containers:
+                    nets = (c.attrs.get("NetworkSettings") or {}).get("Networks") or {}
+                    pnet = nets.get(preferred_network)
+                    if not isinstance(pnet, dict):
+                        continue
+                    if c.name == hostname or hostname in (pnet.get("Aliases") or []):
+                        ip = pnet.get("IPAddress")
+                        if ip:
+                            return f"{ip}:{port}"
+            for c in containers:
                 nets = (c.attrs.get("NetworkSettings") or {}).get("Networks") or {}
                 matched = (c.name == hostname)
                 if not matched:
                     for net_data in nets.values():
-                        if hostname in (net_data.get("Aliases") or []):
+                        if isinstance(net_data, dict) and hostname in (net_data.get("Aliases") or []):
                             matched = True
                             break
                 if matched:
+                    shared = nets.get("smsly-net")
+                    if isinstance(shared, dict) and shared.get("IPAddress"):
+                        return f"{shared['IPAddress']}:{port}"
                     for net_data in nets.values():
-                        ip = net_data.get("IPAddress")
-                        if ip:
-                            return f"{ip}:{port}"
+                        if isinstance(net_data, dict):
+                            ip = net_data.get("IPAddress")
+                            if ip:
+                                return f"{ip}:{port}"
     except Exception:
         pass
     return f"{hostname}:{port}"
+
+
+def _resolve_upstream_scoped(hostname: str, port: int | None, preferred_network: str = "") -> str:
+    if preferred_network:
+        try:
+            return _resolve_container_upstream(hostname, port, preferred_network=preferred_network)
+        except TypeError:
+            pass
+    return _resolve_container_upstream(hostname, port)
 
 
 def register_and_unlock_service(service: Any, *, unlock_now: bool = True) -> dict[str, Any] | None:
@@ -608,12 +688,22 @@ def register_and_unlock_service(service: Any, *, unlock_now: bool = True) -> dic
     if not svc_id:
         return None
 
+    preferred_net = ""
+    try:
+        project = getattr(service, "project", None)
+        if project is not None:
+            from apps.deployments.models.network_scope import ScopedNetwork
+            preferred_net = ScopedNetwork.resolve_network_name(project) or ""
+    except Exception:
+        preferred_net = ""
+
     db_roles: list[str] = []
     db_names: list[str] = []
     redis_users: list[str] = []
     redis_prefixes: list[str] = [f"svc:{svc_id}:"]
     upstream_pg = ""
     upstream_redis = ""
+    upstream_redis_tls = False
 
     slug = getattr(service, "slug", "") or getattr(service, "name", "")
     if slug:
@@ -621,7 +711,7 @@ def register_and_unlock_service(service: Any, *, unlock_now: bool = True) -> dic
 
     try:
         from apps.deployments.models.addons import Addon
-        addons = Addon.objects.filter(service=service)
+        addons = list(Addon.objects.filter(service=service))
         for addon in addons:
             conn_url = getattr(addon, "connection_url", "") or ""
             if not conn_url:
@@ -635,12 +725,43 @@ def register_and_unlock_service(service: Any, *, unlock_now: bool = True) -> dic
                 if db_name and db_name not in db_names:
                     db_names.append(db_name)
                 if not upstream_pg and parsed.hostname:
-                    upstream_pg = _resolve_container_upstream(parsed.hostname, parsed.port or 5432)
+                    upstream_pg = _resolve_upstream_scoped(parsed.hostname, parsed.port or 5432, preferred_net)
             elif atype in ("REDIS", "VALKEY", "KEYDB", "DRAGONFLYDB"):
                 if parsed.username and parsed.username not in redis_users:
                     redis_users.append(parsed.username)
                 if not upstream_redis and parsed.hostname:
-                    upstream_redis = _resolve_container_upstream(parsed.hostname, parsed.port or 6379)
+                    upstream_redis = _resolve_upstream_scoped(parsed.hostname, parsed.port or 6379, preferred_net)
+                    if parsed.scheme.lower() == "rediss":
+                        upstream_redis_tls = True
+
+        # Shared project Redis addons (e.g. redis-shared owned by another service in the same project)
+        if not upstream_redis and getattr(service, "project_id", None):
+            proj_redis = list(
+                Addon.objects.filter(
+                    service__project_id=service.project_id,
+                    addon_type__in=("REDIS", "VALKEY", "KEYDB", "DRAGONFLYDB"),
+                )
+            )
+            proj_redis.sort(
+                key=lambda a: (
+                    0 if ("shared" in str(getattr(a, "name", "") or "").lower()
+                          or "redis-shared" in str(getattr(a, "connection_url", "") or "").lower())
+                    else 1
+                )
+            )
+            for addon in proj_redis:
+                conn_url = getattr(addon, "connection_url", "") or ""
+                if not conn_url:
+                    continue
+                parsed = urlparse(conn_url)
+                if parsed.username and parsed.username not in redis_users:
+                    redis_users.append(parsed.username)
+                if parsed.hostname:
+                    upstream_redis = _resolve_upstream_scoped(parsed.hostname, parsed.port or 6379, preferred_net)
+                    if upstream_redis:
+                        if parsed.scheme.lower() == "rediss":
+                            upstream_redis_tls = True
+                        break
     except Exception:
         pass
 
@@ -654,6 +775,7 @@ def register_and_unlock_service(service: Any, *, unlock_now: bool = True) -> dic
         redis_prefixes=redis_prefixes,
         upstream_pg=upstream_pg,
         upstream_redis=upstream_redis,
+        upstream_tls=upstream_redis_tls,
         encrypt_redis_vals=opted,
         unlock_now=opted and unlock_now,
     )

@@ -21,6 +21,16 @@ _DISALLOWED_TOP_LEVEL = {
 }
 _ALLOWED_TOP_LEVEL = {'SELECT', 'WITH', 'EXPLAIN', 'EXPLAIN ANALYZE'}
 
+_READONLY_FORBIDDEN_RE = re.compile(
+    r'\b(?:'
+    + '|'.join(re.escape(kw) for kw in sorted(_DISALLOWED_TOP_LEVEL))
+    + r'|set_config|pg_sleep\w*|pg_terminate_backend|pg_cancel_backend'
+    + r'|pg_reload_conf|pg_rotate_logfile|pg_read_file|pg_read_binary_file'
+    + r'|pg_ls_dir|pg_stat_file|pg_advisory_\w+|lo_import|lo_export|lo_unlink|dblink\w*'
+    + r')\b',
+    re.IGNORECASE,
+)
+
 _REDIS_PATTERN_WILDCARDS = frozenset('*?[]')
 _REDIS_RESPONSE_CAP = 1_048_576
 
@@ -76,15 +86,18 @@ def _validate_readonly_sql(sql: str) -> str:
     if re.search(r'\bSET\s+CONSTRAINTS\b', cleaned, re.IGNORECASE):
         raise ValueError("SET CONSTRAINTS is not allowed")
 
+    scan_sql = re.sub(r"'(?:''|[^'])*'", "''", cleaned)
+    scan_sql = re.sub(r'/\*.*?\*/', ' ', scan_sql, flags=re.DOTALL)
+    scan_sql = re.sub(r'--[^\n]*', ' ', scan_sql)
     scan_sql = re.sub(
         r'\bFOR\s+(NO\s+KEY\s+|KEY\s+)?(UPDATE|SHARE)\b',
         '',
-        cleaned,
+        scan_sql,
         flags=re.IGNORECASE,
     )
-    for kw in _DISALLOWED_TOP_LEVEL:
-        if re.search(r'\b' + re.escape(kw) + r'\b', scan_sql, re.IGNORECASE):
-            raise ValueError(f"Disallowed keyword: {kw}")
+    forbidden = _READONLY_FORBIDDEN_RE.search(scan_sql)
+    if forbidden:
+        raise ValueError(f"Disallowed keyword or function: {forbidden.group(0)}")
 
     statements = [s for s in sqlparse.parse(cleaned) if not _is_empty_stmt(s)]
     if not statements:
@@ -259,14 +272,20 @@ class DatabaseProxy:
         cleaned_sql = _validate_readonly_sql(sql)
 
         if addon is not None and user is not None:
-            addon_owner_id = getattr(getattr(addon, 'service', None), 'owner_id', None)
-            if addon_owner_id is None and hasattr(addon, 'owner_id'):
-                addon_owner_id = addon.owner_id
-            is_owner = (
-                getattr(user, 'is_superuser', False)
-                or (addon_owner_id is not None and addon_owner_id == getattr(user, 'id', None))
-            )
-            if not is_owner:
+            from apps.teams.permissions import user_can_write
+            addon_service = getattr(addon, 'service', None)
+            if addon_service is not None:
+                allowed = bool(
+                    getattr(user, 'is_superuser', False)
+                    or user_can_write(user, addon_service)
+                )
+            else:
+                addon_owner_id = getattr(addon, 'owner_id', None)
+                allowed = bool(
+                    getattr(user, 'is_superuser', False)
+                    or (addon_owner_id is not None and addon_owner_id == getattr(user, 'id', None))
+                )
+            if not allowed:
                 raise PermissionError("You do not own this addon")
 
         lock_key = None
@@ -290,6 +309,7 @@ class DatabaseProxy:
             conn.set_session(readonly=True)
             with conn.cursor() as cur:
                 cur.execute("BEGIN ISOLATION LEVEL SERIALIZABLE READ ONLY")
+                cur.execute("SET LOCAL default_transaction_read_only = on;")
                 cur.execute("SET LOCAL statement_timeout = '5s'")
                 cur.execute(sql)
 

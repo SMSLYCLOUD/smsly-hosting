@@ -16,7 +16,7 @@ LimitNOFILE=65536
 
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/var/log/smsly /run/smsly /etc/smsly /var/lib/freeswitch /var/lib/livekit
+ReadWritePaths=-/var/log/smsly -/run/smsly -/etc/smsly -/var/lib/freeswitch -/var/lib/livekit
 NoNewPrivileges=true
 
 [Install]

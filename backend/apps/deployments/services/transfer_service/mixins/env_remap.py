@@ -101,7 +101,7 @@ if svc:
 print("PRE_TRANSFER_ENV_JSON_BEGIN")
 print(json.dumps(pre_transfer))
 print("PRE_TRANSFER_ENV_JSON_END")
-""".strip().replace("__PAYLOAD_JSON__", json.dumps(payload))
+""".strip().replace("__PAYLOAD_JSON__", json.dumps(json.dumps(payload)))
 
         pre_transfer: dict = {}
         try:
@@ -166,7 +166,7 @@ django.setup()
 
 from apps.deployments.models import Service, EnvironmentVariable
 
-payload = json.loads({json.dumps(payload)})
+payload = json.loads({json.dumps(json.dumps(payload))})
 svc = Service.objects.filter(name=payload['service_name']).first()
 if svc:
     for key, value in payload['pre_transfer'].items():

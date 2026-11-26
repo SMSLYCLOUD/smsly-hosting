@@ -13,6 +13,19 @@ from apps.mcp import tools
 
 logger = logging.getLogger(__name__)
 
+# Explicit opt-in flag enabled ONLY when running `manage.py runmcpserver` in
+# local stdio transport mode. Without it, `_mcp_auth` fails closed whenever
+# HTTP request headers are absent so a broken/missing FastMCP request context
+# can never downgrade into spoofing caller-supplied `user_id`/`user_email`.
+_STDIO_MODE = False
+
+
+def set_stdio_mode(enabled: bool) -> None:
+    """Explicitly enable or disable local stdio identity passthrough."""
+    global _STDIO_MODE
+    _STDIO_MODE = bool(enabled)
+
+
 def _mcp_auth(tool_name, ctx, user_id=None, user_email=None, tool_args=None):
     """Bind MCP-transport calls to a Bearer API token (fail-closed).
 
@@ -21,12 +34,14 @@ def _mcp_auth(tool_name, ctx, user_id=None, user_email=None, tool_args=None):
     caller-supplied user_id/user_email are ignored (they are spoofable).
     The token's scopes are enforced against the tool's required scope.
 
-    Non-HTTP transports (stdio): local-process trust, equivalent to
-    ``manage.py shell`` — the caller's explicit identity passes through.
+    Non-HTTP transports (stdio): only permitted when ``_STDIO_MODE`` (or
+    ``SMSLY_MCP_STDIO=1``) is explicitly enabled by the stdio runner.
 
     Returns (user_id, user_email, scope) where scope is None for
     full access or the allowed project-ID list for bound tokens.
     """
+    import os
+
     request = None
     if ctx is not None:
         try:
@@ -35,6 +50,11 @@ def _mcp_auth(tool_name, ctx, user_id=None, user_email=None, tool_args=None):
             request = None
     headers = getattr(request, "headers", None) if request is not None else None
     if headers is None:
+        stdio_enabled = _STDIO_MODE or os.environ.get("SMSLY_MCP_STDIO") == "1"
+        if not stdio_enabled or request is not None:
+            raise ToolError("MCP authentication required: HTTP request missing headers.")
+        if not (user_id or user_email):
+            raise ToolError("MCP authentication required: caller identity missing.")
         return user_id, user_email, None
     from apps.mcp.views import _required_scope
     raw = ""

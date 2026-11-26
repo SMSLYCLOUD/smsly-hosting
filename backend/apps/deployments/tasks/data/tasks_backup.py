@@ -1,8 +1,7 @@
 import logging
-import threading
+import os
 
 logger = logging.getLogger(__name__)
-import os
 
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
@@ -17,18 +16,14 @@ from apps.deployments.constants import (
     TASK_TIME_LIMIT_DEPLOY,
     TASK_TIME_LIMIT_HEAVY,
     TASK_TIME_LIMIT_MEDIUM,
+    TASK_TIME_LIMIT_QUICK,
     TASK_TIME_LIMIT_STANDARD,
 )
-
-# Serializes backup/restore tasks that carry a per-request encryption key.
-# Without this lock, two concurrent Celery workers can clobber each other's
-# BACKUP_ENCRYPTION_KEY in os.environ (process-wide).  Tasks that use the
-# default key from the environment do NOT acquire the lock.
-_backup_key_lock = threading.Lock()  # NOTE: not cooperative with gevent/eventlet pools; assumes prefork workers
 from django.utils import timezone
 
 from apps.deployments.models.backup import BackupSchedule
 from apps.deployments.services.backup_service import BackupService
+from apps.deployments.services.task_encryption import decrypt_arg
 from apps.deployments.utils import log_event
 
 
@@ -56,21 +51,17 @@ def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id
         except BackupSchedule.DoesNotExist:
             pass
 
+    logger_local = logging.getLogger(__name__)
     try:
+        resolved_key = decrypt_arg(encryption_key, service_id=str(service_id)) if encryption_key else None
         backup_service = BackupService()
-        if encryption_key:
-            with _backup_key_lock:
-                original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
-                os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
-                try:
-                    result = backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type, db_only=db_only)
-                finally:
-                    if original_key:
-                        os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
-                    else:
-                        os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
-        else:
-            result = backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type, db_only=db_only)
+        result = backup_service.backup_service(
+            service_id,
+            backup_id=backup_id,
+            backup_type=backup_type,
+            db_only=db_only,
+            encryption_key=resolved_key,
+        )
 
         try:
             from apps.notifications.tasks import notify_backup_completed
@@ -247,20 +238,13 @@ def create_server_backup_task(self, backup_id=None, schedule_id=None, encryption
             except BackupSchedule.DoesNotExist:
                 pass
 
+        resolved_key = decrypt_arg(encryption_key) if encryption_key else None
         backup_service = BackupService()
-        if encryption_key:
-            with _backup_key_lock:
-                original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
-                os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
-                try:
-                    backup_service.backup_server(backup_id=backup_id, db_only=db_only)
-                finally:
-                    if original_key:
-                        os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
-                    else:
-                        os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
-        else:
-            backup_service.backup_server(backup_id=backup_id, db_only=db_only)
+        backup_service.backup_server(
+            backup_id=backup_id,
+            db_only=db_only,
+            encryption_key=resolved_key,
+        )
     except Exception as exc:
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc, countdown=RETRY_DELAY_BACKUP)
@@ -285,31 +269,23 @@ def restore_service_backup_task(self, backup_id, target_service_id=None, request
             'encryption_key_provided': bool(encryption_key),
         },
     )
+    resolved_svc_id = str(target_service_id) if target_service_id else None
+    if encryption_key and not resolved_svc_id:
+        try:
+            from apps.cloud.models.backup import ServiceBackup
+            sb = ServiceBackup.objects.filter(id=backup_id).only('service_id').first()
+            if sb and sb.service_id:
+                resolved_svc_id = str(sb.service_id)
+        except Exception:
+            pass
+    resolved_key = decrypt_arg(encryption_key, service_id=resolved_svc_id) if encryption_key else None
     backup_service = BackupService()
-    # If a key was provided in the request, use it for this restore only
-    # (don't persist to BACKUP_ENCRYPTION_KEY env var).
-    if encryption_key:
-        with _backup_key_lock:
-            original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
-            os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
-            try:
-                return backup_service.restore_service(
-                    backup_id,
-                    target_service_id=target_service_id,
-                    requesting_user_id=requesting_user_id,
-                    raise_on_snapshot_failure=raise_on_snapshot_failure,
-                )
-            finally:
-                # Restore the original env var (or remove if there was none)
-                if original_key:
-                    os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
-                else:
-                    os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
     return backup_service.restore_service(
         backup_id,
         target_service_id=target_service_id,
         requesting_user_id=requesting_user_id,
         raise_on_snapshot_failure=raise_on_snapshot_failure,
+        encryption_key=resolved_key,
     )
 
 
@@ -328,19 +304,13 @@ def restore_server_backup_task(self, backup_id, requesting_user_id=None, encrypt
             'encryption_key_provided': bool(encryption_key),
         },
     )
+    resolved_key = decrypt_arg(encryption_key) if encryption_key else None
     backup_service = BackupService()
-    if encryption_key:
-        with _backup_key_lock:
-            original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
-            os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
-            try:
-                return backup_service.restore_server(backup_id=backup_id, requesting_user_id=requesting_user_id)
-            finally:
-                if original_key:
-                    os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
-                else:
-                    os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
-    return backup_service.restore_server(backup_id=backup_id, requesting_user_id=requesting_user_id)
+    return backup_service.restore_server(
+        backup_id=backup_id,
+        requesting_user_id=requesting_user_id,
+        encryption_key=resolved_key,
+    )
 
 
 
@@ -413,13 +383,9 @@ def cleanup_old_backups_task():
         try:
             cutoff = timezone.now() - timedelta(days=sched.retention_days)
             if sched.service:
-                all_completed = list(ServiceBackup.objects.filter(
-                    service=sched.service, status='COMPLETED'
-                ).order_by('-created_at'))
-                keep_id = all_completed[0].id if all_completed else None
                 old = ServiceBackup.objects.filter(
                     service=sched.service, created_at__lt=cutoff
-                ).exclude(backup_type='TRANSFER').exclude(id=keep_id) if keep_id else ServiceBackup.objects.none()
+                ).exclude(backup_type='TRANSFER')
                 for b in old:
                     try:
                         bucket, key, endpoint, region, access_key, secret_key = _resolve_cloud_config(b)
@@ -517,7 +483,11 @@ def _make_aware(dt):
     return dt
 
 
-@shared_task(name="apps.deployments.tasks_backup.recover_stalled_backups_task")
+@shared_task(
+    soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
+    time_limit=TASK_TIME_LIMIT_QUICK[1],
+    name="apps.deployments.tasks_backup.recover_stalled_backups_task",
+)
 def recover_stalled_backups_task():
     """Fail backup rows whose worker died without a trace.
 

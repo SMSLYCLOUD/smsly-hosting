@@ -8,14 +8,16 @@
 #   source scripts/cosign-verify.sh
 #   cosign_verify_image "registry:5000/smsly/backend:latest"
 # ============================================================
-set -euo pipefail
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
+    set -euo pipefail
+fi
 
 COSIGN_BINARY=""
 COSIGN_VERSION="v2.4.1"
 # SHA-256 checksums for cosign v2.4.1 binaries (from official releases).
 # Override with COSIGN_SHA256_<arch> env vars if needed.
-COSIGN_SHA256_amd64="${COSIGN_SHA256_AMD64:-a7a4fd7b0ca22bb58e55e6569332c7851c434b4b4a39e00b88999be85a3f6e94}"
-COSIGN_SHA256_arm64="${COSIGN_SHA256_ARM64:-7f29e8289e79a53a5e54c3a17b3a707b48b0a8b60e045f38d1c38f96d0c3e2e5}"
+COSIGN_SHA256_amd64="${COSIGN_SHA256_AMD64:-8b24b946dd5809c6bd93de08033bcf6bc0ed7d336b7785787c080f574b89249b}"
+COSIGN_SHA256_arm64="${COSIGN_SHA256_ARM64:-3b2e2e3854d0356c45fe6607047526ccd04742d20bd44afb5be91fa2a6e7cb4a}"
 
 _cosign_ensure_binary() {
     if command -v cosign ; then
@@ -36,7 +38,7 @@ _cosign_ensure_binary() {
         *)       echo "[cosign] ERROR: unsupported architecture: $arch"; return 1 ;;
     esac
     local url="https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-${arch}"
-    curl -fsSL "$url" -o "$cosign_path" || {
+    curl -fsSL --connect-timeout 15 --max-time 60 "$url" -o "$cosign_path" || {
         echo "[cosign] ERROR: failed to download cosign"
         return 1
     }
@@ -84,13 +86,24 @@ COSIGN_IMAGE=""
 # 1 = genuine verification failure (output already echoed).
 _cosign_try_verify() {
     local _out=""
-    if _out="$("$COSIGN_BINARY" verify "$@" 2>&1)"; then
+    local _rc=0
+    if command -v timeout >/dev/null 2>&1; then
+        _out="$(timeout 60 "$COSIGN_BINARY" verify "$@" 2>&1)" || _rc=$?
+    else
+        _out="$("$COSIGN_BINARY" verify "$@" 2>&1)" || _rc=$?
+    fi
+    if [ "$_rc" -eq 0 ]; then
         echo "$_out"
         return 0
     fi
     if echo "$_out" | grep -qi "UNAUTHORIZED\|authentication required"; then
-        echo "[cosign] SKIP: $COSIGN_IMAGE requires registry auth (private image?) — signature check skipped"
-        return 2
+        if [ "${COSIGN_ALLOW_UNAUTH_SKIP:-false}" = "true" ]; then
+            echo "[cosign] SKIP: $COSIGN_IMAGE requires registry auth and COSIGN_ALLOW_UNAUTH_SKIP=true — signature check skipped"
+            return 2
+        fi
+        echo "[cosign] ERROR: $COSIGN_IMAGE requires registry auth — failing closed (set COSIGN_ALLOW_UNAUTH_SKIP=true to override)"
+        echo "$_out"
+        return 1
     fi
     echo "$_out"
     return 1
@@ -122,30 +135,20 @@ cosign_verify_image() {
     fi
 
     # ── Keyless Sigstore verification (CI-built images) ───────────────
-    local repo_identity=""
+    local repo_identity="" repo_identity_esc=""
     repo_identity="$(_cosign_get_repo)"
+    repo_identity_esc="${repo_identity//./\\.}"
     local issuer="https://token.actions.githubusercontent.com"
-    local identity="https://github.com/${repo_identity}/.github/workflows/deploy.yml@refs/heads/main"
+    local identity_re="^https://github\\.com/${repo_identity_esc}/\\.github/workflows/(deploy|deploy-helm|cosign-sign)\\.yml@refs/heads/master$"
 
     echo "[cosign] Verifying $image (keyless)..."
     local _rc2=""
     _cosign_try_verify \
         --certificate-oidc-issuer "$issuer" \
-        --certificate-identity "$identity" \
+        --certificate-identity-regexp "$identity_re" \
         "$image" && { echo "[cosign] ✓ Signature verified for $image"; return 0; }
     _rc2=$?
     if [ "$_rc2" -eq 2 ]; then
-        return 0
-    fi
-
-    local identity2="https://github.com/${repo_identity}/.github/workflows/cosign-sign.yml@refs/heads/main"
-    local _rc3=""
-    _cosign_try_verify \
-        --certificate-oidc-issuer "$issuer" \
-        --certificate-identity "$identity2" \
-        "$image" && { echo "[cosign] ✓ Signature verified for $image"; return 0; }
-    _rc3=$?
-    if [ "$_rc3" -eq 2 ]; then
         return 0
     fi
 

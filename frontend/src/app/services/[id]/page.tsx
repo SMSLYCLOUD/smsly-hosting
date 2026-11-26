@@ -92,27 +92,43 @@ export default function ServiceDetailPage() {
     );
     const logsEndRef = useRef<HTMLDivElement>(null);
     const [wsToken, setWsToken] = useState<string | null>(null);
+    const [wsTokenError, setWsTokenError] = useState<string | null>(null);
+    const [wsCookieFallback, setWsCookieFallback] = useState(false);
+    const [wsTokenAttempt, setWsTokenAttempt] = useState(0);
 
     useEffect(() => {
-        if (activeTab !== 'console' || wsToken) return;
+        if (activeTab !== 'console' || wsToken || wsCookieFallback) return;
         let cancelled = false;
+        setWsTokenError(null);
         (async () => {
             try {
                 const res = await fetch('/api/v1/auth/session-token/', {
                     method: 'POST',
                     credentials: 'include',
-                    headers: { Accept: 'application/json' },
+                    headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
                 });
-                if (!res.ok) return;
+                if (!res.ok) {
+                    if (!cancelled) {
+                        setWsTokenError(`Console session handshake failed (HTTP ${res.status}).`);
+                    }
+                    return;
+                }
                 const data = await res.json();
-                if (!cancelled && typeof data?.token === 'string') {
-                    setWsToken(data.token);
+                if (!cancelled) {
+                    if (typeof data?.token === 'string' && data.token) {
+                        setWsToken(data.token);
+                    } else {
+                        setWsTokenError('Console session token was not returned by the server.');
+                    }
                 }
             } catch {
+                if (!cancelled) {
+                    setWsTokenError('Unable to reach session-token endpoint.');
+                }
             }
         })();
         return () => { cancelled = true; };
-    }, [activeTab, wsToken]);
+    }, [activeTab, wsToken, wsCookieFallback, wsTokenAttempt]);
 
     const loadWatchConfig = useCallback(async (serviceId: string) => {
         setWatchConfigLoading(true);
@@ -353,6 +369,9 @@ export default function ServiceDetailPage() {
 
     const userPickedNodeRef = useRef(false);
     useEffect(() => {
+        userPickedNodeRef.current = false;
+    }, [id]);
+    useEffect(() => {
         if (!service) return;
         if (userPickedNodeRef.current) return;
         // Prefer latest deployment target, then active node metadata, then service assigned server
@@ -361,8 +380,8 @@ export default function ServiceDetailPage() {
             || service.server_id
             || LOCAL_DEPLOY_TARGET;
         setTargetServerId(deployTarget);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run when specific fields change, not on every poll
-    }, [service, service?.server_id, service?.latest_deployment?.target_server]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- AGENTS.md #21: only re-run when id/server fields change, not on every poll
+    }, [service?.id, service?.server_id, service?.latest_deployment?.target_server]);
 
     useEffect(() => {
         const load = async () => {
@@ -1341,10 +1360,14 @@ export default function ServiceDetailPage() {
                                         try {
                                             await saveEnvPair(service.id, 'JULES_AUTO_FIX_DEPLOY', julesAutoFixDeploy ? 'true' : 'false');
                                             await loadWatchConfig(service.id);
-                                        } catch {
-                                            // session key still saved locally
+                                            toast({ title: 'Jules AI settings saved', description: 'API key stored in your browser and Auto Fix setting persisted.' });
+                                        } catch (err: any) {
+                                            toast({
+                                                title: 'Failed to save Auto Fix setting',
+                                                description: err?.response?.data?.error || err?.message || 'API key stored in your browser, but server update failed.',
+                                                variant: 'destructive',
+                                            });
                                         }
-                                        toast({ title: 'Jules AI settings saved', description: 'API key stored in your browser and Auto Fix setting persisted.' });
                                     }}
                                 >
                                     Save
@@ -1515,7 +1538,36 @@ export default function ServiceDetailPage() {
 
                         const wsUrl = getWsUrl(`/ws/terminal/${deploymentId}/`);
 
-                        if (!wsToken) {
+                        if (!wsToken && !wsCookieFallback) {
+                            if (wsTokenError) {
+                                return (
+                                    <div className="h-full w-full flex flex-col items-center justify-center gap-3 p-6 text-center text-zinc-300 text-sm">
+                                        <p className="text-red-400 font-medium">{wsTokenError}</p>
+                                        <div className="flex flex-wrap items-center justify-center gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setWsTokenError(null);
+                                                    setWsTokenAttempt((n) => n + 1);
+                                                }}
+                                                className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium"
+                                            >
+                                                Retry
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setWsTokenError(null);
+                                                    setWsCookieFallback(true);
+                                                }}
+                                                className="px-3 py-1.5 rounded border border-zinc-700 hover:bg-zinc-800 text-zinc-300 text-xs font-medium"
+                                            >
+                                                Connect with Cookie Auth
+                                            </button>
+                                        </div>
+                                    </div>
+                                );
+                            }
                             return (
                                 <div className="h-full w-full flex items-center justify-center text-zinc-400 text-sm">
                                     Preparing console session…

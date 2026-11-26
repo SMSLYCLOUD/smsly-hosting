@@ -80,8 +80,19 @@ function _isBlockedIpv4(addr) {
 }
 
 function _isBlockedIpv6(addr) {
-  const lower = addr.toLowerCase();
-  if (lower === '::' || lower === '::1' || lower === '0:0:0:0:0:0:0:1' || lower === '0:0:0:0:0:0:0:0') return true;
+  let lower = String(addr || '').toLowerCase().trim();
+  if (lower.startsWith('[') && lower.endsWith(']')) {
+    lower = lower.slice(1, -1);
+  }
+  const zoneIdx = lower.indexOf('%');
+  if (zoneIdx !== -1) {
+    lower = lower.slice(0, zoneIdx);
+  }
+  if (lower === '::' || lower === '::1' || /^(0+:){7}0*[01]$/.test(lower)) return true;
+  if (lower.startsWith('::ffff:') || /^(0+:){5}ffff:/i.test(lower)) return true; // IPv4-mapped IPv6
+  if (lower.startsWith('::') && lower.includes('.')) {
+    return _isBlockedIpv4(lower.slice(2));
+  }
   if (lower.startsWith('fc') || lower.startsWith('fd')) return true;          // unique local
   if (/^fe[89ab][0-9a-f]:/i.test(lower)) return true;                         // link-local
   if (lower.startsWith('ff')) return true;                                     // multicast
@@ -90,7 +101,11 @@ function _isBlockedIpv6(addr) {
 
 function _isBlockedAddr(addr) {
   if (!addr) return true;
-  return addr.includes(':') ? _isBlockedIpv6(addr) : _isBlockedIpv4(addr);
+  let clean = String(addr).trim();
+  if (clean.startsWith('[') && clean.endsWith(']')) {
+    clean = clean.slice(1, -1);
+  }
+  return clean.includes(':') ? _isBlockedIpv6(clean) : _isBlockedIpv4(clean);
 }
 
 const _BLOCKED_HOSTNAMES = new Set([
@@ -104,7 +119,7 @@ async function _validateUrl(target) {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error(`Blocked: protocol ${url.protocol} not allowed`);
   }
-  const host = url.hostname.toLowerCase();
+  const host = url.hostname.toLowerCase().replace(/^\\[|\\]$/g, '');
   if (_BLOCKED_HOSTNAMES.has(host)) {
     throw new Error(`Blocked: hostname ${host} is reserved`);
   }
@@ -174,7 +189,7 @@ function _safeRequest(orig, mod, args) {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error(`Blocked: protocol ${url.protocol} not allowed`);
   }
-  const host = url.hostname.toLowerCase();
+  const host = url.hostname.toLowerCase().replace(/^\\[|\\]$/g, '');
   if (_BLOCKED_HOSTNAMES.has(host) || _isBlockedAddr(host)) {
     throw new Error(`Blocked: ${host} is in the SSRF deny list`);
   }
@@ -371,10 +386,13 @@ CMD ["node", "server.js"]
         # affected because it lives in http.server, not urllib.request.
         wrapper_code = """
 import ipaddress
+import logging
 import socket
 from urllib.parse import urlparse
 import urllib.request
 import urllib.error
+
+logger = logging.getLogger("smsly.function")
 
 BLOCKED_RANGES = [
     ipaddress.ip_network('0.0.0.0/8'),
@@ -389,6 +407,7 @@ BLOCKED_RANGES = [
     ipaddress.ip_network('224.0.0.0/4'),
     ipaddress.ip_network('240.0.0.0/4'),
     ipaddress.ip_network('::1/128'),
+    ipaddress.ip_network('::ffff:0:0/96'),
     ipaddress.ip_network('fc00::/7'),
     ipaddress.ip_network('fe80::/10'),
 ]
@@ -401,14 +420,19 @@ _BLOCKED_HOSTNAMES = {
 
 
 def _is_blocked_addr(addr):
+    cleaned = str(addr or '').strip().strip('[]')
+    if '%' in cleaned:
+        cleaned = cleaned.split('%', 1)[0]
     try:
-        ip = ipaddress.ip_address(addr)
+        ip = ipaddress.ip_address(cleaned)
     except ValueError:
         return False
+    if getattr(ip, 'ipv4_mapped', None) is not None:
+        return True
     for net in BLOCKED_RANGES:
         if ip in net:
             return True
-    if ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+    if ip.is_multicast or ip.is_reserved or ip.is_unspecified or ip.is_private or ip.is_loopback or ip.is_link_local:
         return True
     return False
 
@@ -419,7 +443,7 @@ def safe_url(target: str) -> str:
         raise ValueError(f'Blocked: protocol {url.scheme} not allowed')
     if not url.hostname:
         raise ValueError(f'Blocked: no hostname in {target}')
-    host = url.hostname.lower()
+    host = url.hostname.lower().strip('[]')
     if host in _BLOCKED_HOSTNAMES or _is_blocked_addr(host):
         raise ValueError(f'Blocked: {host} is a private/reserved host')
     try:

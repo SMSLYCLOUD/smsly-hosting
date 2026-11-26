@@ -29,12 +29,17 @@ case "$COMPOSE_FILE" in
 esac
 _MODE_NODE="$(_env_val MODE_NODE false)"
 _MODE_AGENT_LITE="$(_env_val MODE_AGENT_LITE false)"
+STACK_TIER="$(_env_val STACK_TIER "")"
 IS_AGENT_LITE=false
 IS_NODE_MODE=false
 if [ "$_MODE_AGENT_LITE" = "true" ] || [[ "$COMPOSE_FILE" == */docker-compose.agent-lite.yml ]]; then
     IS_AGENT_LITE=true
 elif [ "$_MODE_NODE" = "true" ] || [[ "$COMPOSE_FILE" == */docker-compose.node.yml ]]; then
     IS_NODE_MODE=true
+fi
+COMPOSE_ENV_ARGS=()
+if [ -f "$INSTALL_DIR/.env" ]; then
+    COMPOSE_ENV_ARGS=(--env-file "$INSTALL_DIR/.env")
 fi
 
 log() {
@@ -70,12 +75,23 @@ SYSTEMD_TIMERS=(
 )
 
 # ─── Production stack ──────────────────────────────────────────────────
+_DB_HA_MODE="$(_env_val DB_HA_ENABLED local-ha)"
+_CUR_PROFILES=",$(_env_val COMPOSE_PROFILES ""),"
 PROD_SERVICES=(
-    "db" "pgcat" "redis-primary" "redis-replica" "redis-sentinel-1" "redis-sentinel-2" "redis-sentinel-3"
+    "pgcat" "redis-primary"
     "registry" "rabbitmq"
     "backend" "celery" "celery-beat"
     "frontend" "socket-proxy" "caddy"
 )
+if [ "$_DB_HA_MODE" = "local-ha" ]; then
+    PROD_SERVICES=("db" "${PROD_SERVICES[@]}")
+    if [ "$STACK_TIER" != "lite" ]; then
+        PROD_SERVICES+=("postgres-replica")
+    fi
+fi
+if [ "$STACK_TIER" != "lite" ] || [[ "$_CUR_PROFILES" == *",redis-ha,"* ]]; then
+    PROD_SERVICES+=("redis-replica" "redis-sentinel-1" "redis-sentinel-2" "redis-sentinel-3")
+fi
 if [ "$IS_AGENT_LITE" = "true" ]; then
     # Worker (agent-lite) stack must never start master-only services from docker-compose.prod.yml.
     PROD_SERVICES=("redis" "rabbitmq" "socket-proxy" "traefik" "backend" "celery-worker" "agent-registrar")
@@ -214,15 +230,36 @@ if [ "$DOCKER_OK" != "true" ]; then
     exit 0
 fi
 
+TIER_CONF_DIR="${SMSLY_TIER_DIR:-/etc/smsly/tiers.d}"
+TIER_STATE_DIR="${SMSLY_TIER_STATE_DIR:-/var/lib/smsly/tiers}"
+declare -A ASLEEP_SERVICES=()
+if [ -d "$TIER_STATE_DIR" ]; then
+    shopt -s nullglob
+    for _asleep_marker in "$TIER_STATE_DIR"/*.asleep; do
+        _tier_name="$(basename "$_asleep_marker" .asleep)"
+        _tier_conf="$TIER_CONF_DIR/${_tier_name}.conf"
+        [ -f "$_tier_conf" ] || continue
+        _tier_svcs="$( ( SMSLY_TIER_SERVICES=""; . "$_tier_conf" >/dev/null 2>&1 || true; printf '%s\n' "${SMSLY_TIER_SERVICES:-}" ) )"
+        for _svc in $_tier_svcs; do
+            ASLEEP_SERVICES["$_svc"]=1
+        done
+    done
+    shopt -u nullglob
+fi
+
 check_and_heal() {
     local compose_file=$1
     local service=$2
 
-    container_id=$(timeout 30 docker compose -f "$compose_file" ps -q "$service"  || true)
+    if [ -n "${ASLEEP_SERVICES[$service]:-}" ]; then
+        return 0
+    fi
+
+    container_id=$(timeout 30 docker compose "${COMPOSE_ENV_ARGS[@]}" -f "$compose_file" ps -q "$service"  || true)
 
     if [ -z "$container_id" ]; then
         log "Warning: Container for service '$service' is missing. Attempting to start..."
-        timeout 120 docker compose -f "$compose_file" up -d "$service" || log "Warning: Failed to start service $service"
+        timeout 120 docker compose "${COMPOSE_ENV_ARGS[@]}" -f "$compose_file" up -d "$service" || log "Warning: Failed to start service $service"
         return
     fi
 
@@ -230,7 +267,7 @@ check_and_heal() {
 
     if [ -z "$inspect_data" ]; then
         log "Warning: Failed to inspect container '$container_id' for service '$service'. Attempting restart..."
-        timeout 120 docker compose -f "$compose_file" restart "$service" || log "Warning: Failed to restart service $service"
+        timeout 120 docker compose "${COMPOSE_ENV_ARGS[@]}" -f "$compose_file" restart "$service" || log "Warning: Failed to restart service $service"
         return
     fi
 
@@ -243,16 +280,16 @@ check_and_heal() {
         # cannot be restarted; `up -d` starts Created AND restarts
         # Stopped/Exited uniformly.
         log "Alert: Container for service '$service' is not running (status: $status). Starting..."
-        timeout 120 docker compose -f "$compose_file" up -d "$service" || log "Warning: Failed to start service $service (not running)"
+        timeout 120 docker compose "${COMPOSE_ENV_ARGS[@]}" -f "$compose_file" up -d "$service" || log "Warning: Failed to start service $service (not running)"
     elif [ "$health" = "unhealthy" ]; then
         log "Alert: Container for service '$service' is running but UNHEALTHY. Restarting..."
-        timeout 120 docker compose -f "$compose_file" restart "$service" || log "Warning: Failed to restart service $service (unhealthy)"
+        timeout 120 docker compose "${COMPOSE_ENV_ARGS[@]}" -f "$compose_file" restart "$service" || log "Warning: Failed to restart service $service (unhealthy)"
     fi
 }
 
 _available_services=""
 if [ -f "$COMPOSE_FILE" ]; then
-    _available_services="$(timeout 30 docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null || true)"
+    _available_services="$(timeout 30 docker compose "${COMPOSE_ENV_ARGS[@]}" -f "$COMPOSE_FILE" config --services 2>/dev/null || true)"
 fi
 
 for service in "${PROD_SERVICES[@]}"; do
@@ -273,8 +310,8 @@ if [ "$AUTOSCALE_ON" != "true" ]; then
     done
 fi
 
-if [ "$IS_AGENT_LITE" != "true" ] && [ -f "$OBS_COMPOSE_FILE" ]; then
-    _obs_available="$(timeout 30 docker compose -f "$OBS_COMPOSE_FILE" config --services 2>/dev/null || true)"
+if [ "$IS_AGENT_LITE" != "true" ] && [ "$IS_NODE_MODE" != "true" ] && [ "$STACK_TIER" != "lite" ] && [ -f "$OBS_COMPOSE_FILE" ]; then
+    _obs_available="$(timeout 30 docker compose "${COMPOSE_ENV_ARGS[@]}" -f "$OBS_COMPOSE_FILE" config --services 2>/dev/null || true)"
     for service in "${OBS_SERVICES[@]}"; do
         if [ -n "$_obs_available" ] && ! printf '%s\n' "$_obs_available" | grep -qx "$service"; then
             continue
@@ -307,7 +344,7 @@ check_host_pressure() {
         ''|*[!0-9]*) load1=0 ;;
     esac
     if [ "$load1" -gt $((cpus * 4)) ]; then
-        log "ALERT: host load ${load1} > 4x CPUs (${cpus}) — burn-out risk, check Vultr CPU graphs and `ps` top burners"
+        log "ALERT: host load ${load1} > 4x CPUs (${cpus}) — burn-out risk, check Vultr CPU graphs and \`ps\` top burners"
     fi
     # 2. Steal: ALERT past 25% across the tick interval, measured via a
     # statefile delta (no sleep inside the monitor). Sustained steal

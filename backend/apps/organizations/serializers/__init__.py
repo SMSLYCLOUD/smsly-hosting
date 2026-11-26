@@ -1,8 +1,14 @@
 """Organization serializers."""
 from django.db.models import Count, Q
+from django.utils import timezone
 from rest_framework import serializers
 
 from ..models import Organization, OrganizationMembership, OrganizationSSO
+
+
+def _active_unexpired_membership_q():
+    now = timezone.now()
+    return Q(is_active=True) & (Q(expires_at__isnull=True) | Q(expires_at__gt=now))
 
 
 class OrganizationSerializer(serializers.ModelSerializer):
@@ -18,34 +24,63 @@ class OrganizationSerializer(serializers.ModelSerializer):
         counts = getattr(self, '_member_counts', None)
         if counts is not None:
             return counts.get(obj.id, 0)
-        return obj.memberships.count()
+        return obj.memberships.filter(_active_unexpired_membership_q()).count()
 
     def get_role(self, obj):
         roles = getattr(self, '_user_roles', None)
         if roles is not None:
             return roles.get(obj.id)
-        user = self.context['request'].user
-        membership = OrganizationMembership.objects.filter(user=user, organization=obj).first()
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if not user or not getattr(user, 'is_authenticated', False):
+            return None
+        if getattr(obj, 'owner_id', None) == getattr(user, 'id', None):
+            return OrganizationMembership.Role.OWNER
+        membership = (
+            OrganizationMembership.objects.filter(user=user, organization=obj)
+            .filter(_active_unexpired_membership_q())
+            .first()
+        )
         return membership.role if membership else None
 
     @classmethod
-    def prefetch_for_list(cls, queryset, user):
-        """Attach bulk-fetched data to avoid N+1 in list views."""
-        org_ids = list(queryset.values_list('id', flat=True))
-        member_counts = dict(
-            OrganizationMembership.objects.filter(
-                organization_id__in=org_ids,
-            ).values('organization_id').annotate(cnt=Count('id')).values_list('organization_id', 'cnt')
-        )
-        user_roles = dict(
-            OrganizationMembership.objects.filter(
-                user=user, organization_id__in=org_ids,
-            ).values_list('organization_id', 'role')
-        )
-        instance = cls()
-        instance._member_counts = member_counts
-        instance._user_roles = user_roles
-        return instance
+    def prefetch_for_list(cls, items, user, context=None):
+        """Construct a ``many=True`` serializer with bulk-fetched counts and roles."""
+        items_list = list(items)
+        org_ids = [obj.id for obj in items_list]
+        active_q = _active_unexpired_membership_q()
+        if org_ids:
+            member_counts = dict(
+                OrganizationMembership.objects.filter(
+                    organization_id__in=org_ids,
+                )
+                .filter(active_q)
+                .values('organization_id')
+                .annotate(cnt=Count('id'))
+                .values_list('organization_id', 'cnt')
+            )
+            if user and getattr(user, 'is_authenticated', False):
+                user_roles = dict(
+                    OrganizationMembership.objects.filter(
+                        user=user, organization_id__in=org_ids,
+                    )
+                    .filter(active_q)
+                    .values_list('organization_id', 'role')
+                )
+                user_id = getattr(user, 'id', None)
+                for obj in items_list:
+                    if getattr(obj, 'owner_id', None) == user_id:
+                        user_roles.setdefault(obj.id, OrganizationMembership.Role.OWNER)
+            else:
+                user_roles = {}
+        else:
+            member_counts = {}
+            user_roles = {}
+
+        serializer = cls(items_list, many=True, context=context or {})
+        serializer.child._member_counts = member_counts
+        serializer.child._user_roles = user_roles
+        return serializer
 
     def create(self, validated_data):
         user = self.context['request'].user
@@ -84,8 +119,18 @@ class OrganizationSSOSerializer(serializers.ModelSerializer):
             'auto_provision_domains', 'default_role',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'organization']
+        read_only_fields = ['id', 'created_at', 'updated_at']
         extra_kwargs = {
             'oidc_client_secret': {'write_only': True},
             'saml_x509_cert': {'write_only': True},
         }
+
+    def validate_default_role(self, value):
+        if str(value or '').upper() == 'OWNER':
+            raise serializers.ValidationError("default_role cannot be OWNER.")
+        return value
+
+    def update(self, instance, validated_data):
+        # Prevent moving an existing SSO config across organizations on PATCH/PUT.
+        validated_data.pop('organization', None)
+        return super().update(instance, validated_data)

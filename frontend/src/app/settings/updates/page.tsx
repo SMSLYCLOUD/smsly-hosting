@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -10,7 +10,7 @@ import { toast } from '@/components/ui/use-toast';
 
 interface PlatformUpdate {
     id: string;
-    status: 'PENDING' | 'PULLING' | 'BACKING_UP' | 'MIGRATING' | 'RESTARTING' | 'HEALTH_CHECK' | 'COMPLETED' | 'FAILED' | 'ROLLED_BACK';
+    status: 'PENDING' | 'PULLING' | 'BACKING_UP' | 'MIGRATING' | 'RESTARTING' | 'HEALTH_CHECK' | 'ROLLING_BACK' | 'COMPLETED' | 'FAILED' | 'ROLLED_BACK';
     from_version: string;
     to_version: string;
     from_commit: string;
@@ -41,7 +41,7 @@ export default function UpdatesPage() {
     const [loading, setLoading] = useState(true);
     const [triggering, setTriggering] = useState(false);
     const [isBackendReachable, setIsBackendReachable] = useState(true);
-    const [isPolling, setIsPolling] = useState(false);
+    const isPollingRef = useRef(false);
     const [expandedLogs, setExpandedLogs] = useState<string | null>(null);
 
     const fetchUpdates = async () => {
@@ -53,30 +53,27 @@ export default function UpdatesPage() {
             if (res.ok) {
                 setIsBackendReachable(true);
                 const data = await res.json();
-                setUpdates(data);
+                const list: PlatformUpdate[] = Array.isArray(data) ? data : (data?.results || []);
+                setUpdates(list);
 
                 // Normalize status to uppercase for comparison — backend
                 // returns UPPERCASE (PENDING, PULLING, etc.) but a future
                 // schema change could introduce lowercase. Be defensive.
-                const inProgress = data.find((u: any) =>
+                const inProgress = list.find((u: any) =>
                     ['PENDING', 'PULLING', 'BACKING_UP', 'MIGRATING',
                      'RESTARTING', 'HEALTH_CHECK', 'ROLLING_BACK'].includes(
                         String(u.status).toUpperCase()
                     )
                 );
-                if (inProgress) {
-                    setIsPolling(true);
-                } else {
-                    setIsPolling(false);
-                }
+                isPollingRef.current = Boolean(inProgress);
             } else {
-                if (isPolling && (res.status === 502 || res.status === 503)) {
+                if (isPollingRef.current && (res.status === 502 || res.status === 503)) {
                      setIsBackendReachable(false);
                 }
             }
         } catch (e) {
             console.error("Failed to fetch updates:", e);
-            if (isPolling) {
+            if (isPollingRef.current) {
                 setIsBackendReachable(false);
             }
         } finally {
@@ -110,7 +107,7 @@ export default function UpdatesPage() {
                 toast({ title: 'Update started' });
                 fetchUpdates();
             } else {
-                const data = await res.json();
+                const data = await res.json().catch(() => ({}));
                 toast({ title: 'Failed to start update', description: data.error, variant: 'destructive' });
             }
         } catch (e) {
@@ -138,7 +135,7 @@ export default function UpdatesPage() {
                 toast({ title: 'Rollback started' });
                 fetchUpdates();
             } else {
-                const data = await res.json();
+                const data = await res.json().catch(() => ({}));
                 toast({ title: 'Rollback failed', description: data.error, variant: 'destructive' });
             }
         } catch (e) {
@@ -156,7 +153,9 @@ export default function UpdatesPage() {
     };
 
     const isInProgress = (s: string) =>
-        ['PENDING', 'PULLING', 'BACKING_UP', 'MIGRATING', 'RESTARTING', 'HEALTH_CHECK'].includes(s);
+        ['PENDING', 'PULLING', 'BACKING_UP', 'MIGRATING', 'RESTARTING', 'HEALTH_CHECK', 'ROLLING_BACK'].includes(
+            String(s || '').toUpperCase()
+        );
 
     const activeUpdate = updates.find(u => isInProgress(u.status));
 

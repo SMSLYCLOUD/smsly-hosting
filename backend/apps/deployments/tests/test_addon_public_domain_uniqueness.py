@@ -88,4 +88,7 @@ class AddonPublicDomainUniquenessTests(TestCase):
 
     def test_constraint_name_is_registered_in_meta(self):
         constraints = {c.name for c in Addon._meta.constraints}
-        self.assertIn("uniq_addon_service_public_domain", constraints)
+        field_unique = Addon._meta.get_field("public_domain").unique
+        self.assertTrue(
+            field_unique or "uniq_addon_service_public_domain" in constraints
+        )

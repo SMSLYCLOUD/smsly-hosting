@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import shlex
+import threading
 import time
 
 try:
@@ -15,6 +16,7 @@ except ImportError:  # Windows dev machines have no fcntl
 import paramiko
 
 logger = logging.getLogger(__name__)
+_TOFU_THREAD_LOCK = threading.Lock()
 
 # File-based known_hosts for TOFU (Trust-On-First-Use) SSH host key verification.
 # Stores {hostname: {keytype: fingerprint, ...}} so we can detect key changes.
@@ -78,26 +80,46 @@ class _TOFUPolicy(paramiko.MissingHostKeyPolicy):
         except OSError:
             return {}
 
+    @contextlib.contextmanager
+    def _store_lock(self):
+        """Acquire a shared lock file spanning load -> check -> modify -> replace."""
+        path = self._store_path()
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        lock_path = f"{path}.lock"
+        with _TOFU_THREAD_LOCK:
+            with open(lock_path, "a+", encoding="utf-8") as lock_file:
+                if fcntl is not None and hasattr(fcntl, "LOCK_EX"):
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    if fcntl is not None and hasattr(fcntl, "LOCK_EX"):
+                        with contextlib.suppress(Exception):
+                            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
     def _save_store(self, store: dict):
         path = self._store_path()
+        tmp_path = None
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            tmp_path = f"{path}.{os.getpid()}.tmp"
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            tmp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
             with open(tmp_path, "w", encoding="utf-8") as f:
-                try:
-                    if hasattr(fcntl, "LOCK_EX"):
-                        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                except Exception:
-                    pass
                 json.dump(store, f, indent=2)
                 f.flush()
-                try:
+                with contextlib.suppress(Exception):
                     os.fsync(f.fileno())
-                except Exception:
-                    pass
             os.replace(tmp_path, path)
+            tmp_path = None
         except OSError as exc:
             logger.warning("TOFU: failed to save known_hosts: %s", exc)
+        finally:
+            if tmp_path:
+                with contextlib.suppress(OSError):
+                    os.remove(tmp_path)
 
     def _host_key(self) -> str:
         return f"{self.hostname}:{self.port}"
@@ -107,29 +129,30 @@ class _TOFUPolicy(paramiko.MissingHostKeyPolicy):
         fingerprint = key.get_fingerprint().hex()
         key_type = key.get_name()
 
-        store = self._load_store()
-        stored = store.get(host_entry)
+        with self._store_lock():
+            store = self._load_store()
+            stored = store.get(host_entry)
 
-        if stored is None:
-            # First contact — trust and persist
-            store[host_entry] = {"key_type": key_type, "fingerprint": fingerprint}
-            self._save_store(store)
-            logger.info(
-                "TOFU: trusted host %s (type=%s, fp=%s)",
-                hostname, key_type, fingerprint,
-            )
-            return
+            if stored is None:
+                # First contact — trust and persist
+                store[host_entry] = {"key_type": key_type, "fingerprint": fingerprint}
+                self._save_store(store)
+                logger.info(
+                    "TOFU: trusted host %s (type=%s, fp=%s)",
+                    hostname, key_type, fingerprint,
+                )
+                return
 
-        # Known host — verify key matches
-        if stored.get("fingerprint") != fingerprint:
-            raise paramiko.SSHException(
-                f"TOFU REJECT: host key for {hostname} has changed!\n"
-                f"  Stored: {stored.get('key_type')} {stored.get('fingerprint')}\n"
-                f"  Presented: {key_type} {fingerprint}\n"
-                f"If this is intentional, delete the entry in {_KNOWN_HOSTS_PATH}."
-            )
-        # Key matches — accept silently
-        logger.debug("TOFU: verified host %s key unchanged", hostname)
+            # Known host — verify key matches
+            if stored.get("fingerprint") != fingerprint:
+                raise paramiko.SSHException(
+                    f"TOFU REJECT: host key for {hostname} has changed!\n"
+                    f"  Stored: {stored.get('key_type')} {stored.get('fingerprint')}\n"
+                    f"  Presented: {key_type} {fingerprint}\n"
+                    f"If this is intentional, delete the entry in {self._store_path()}."
+                )
+            # Key matches — accept silently
+            logger.debug("TOFU: verified host %s key unchanged", hostname)
 
     def policy_for_hostname(self):
         """Return a paramiko policy that delegates to this TOFU store."""

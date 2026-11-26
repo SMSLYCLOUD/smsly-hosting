@@ -67,8 +67,9 @@ export function RegistryCredentialsTab() {
       toast({ title: "Success", description: "Registry credential added." });
       setForm({ name: "", provider: "dockerhub", registry_url: "docker.io", username: "", password: "" });
       fetchCredentials();
-    } catch (err) {
-      toast({ title: "Error", description: "Failed to add registry credential", variant: "destructive" });
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || err?.response?.data?.error || err?.response?.data?.message || "Failed to add registry credential";
+      toast({ title: "Error", description: String(msg), variant: "destructive" });
     } finally {
       setAdding(false);
     }
@@ -80,8 +81,9 @@ export function RegistryCredentialsTab() {
       await registryCredentialsApi.delete(id);
       toast({ title: "Deleted", description: "Registry credential removed." });
       fetchCredentials();
-    } catch (err) {
-      toast({ title: "Error", description: "Failed to delete credential", variant: "destructive" });
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || err?.response?.data?.error || err?.response?.data?.message || "Failed to delete credential";
+      toast({ title: "Error", description: String(msg), variant: "destructive" });
     }
   };
 

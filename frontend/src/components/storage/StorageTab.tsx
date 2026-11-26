@@ -191,10 +191,18 @@ export function StorageTab({ serviceId }: { serviceId: string }) {
         }
     };
 
-    const handleFileDownload = (file: any) => {
+    const handleFileDownload = async (file: any) => {
         if (!browsingVolume) return;
         const path = currentPath.endsWith('/') ? `${currentPath}${file.name}` : `${currentPath}/${file.name}`;
-        servicesApi.downloadVolumeFile(serviceId, browsingVolume.id, path);
+        try {
+            await servicesApi.downloadVolumeFile(serviceId, browsingVolume.id, path);
+        } catch (err: any) {
+            toast({
+                title: "Failed to download file",
+                description: err?.response?.data?.error || err?.message || "Could not download file.",
+                variant: "destructive",
+            });
+        }
     };
 
     const handleMkdir = async () => {

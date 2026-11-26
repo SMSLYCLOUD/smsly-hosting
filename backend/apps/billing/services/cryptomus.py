@@ -110,6 +110,8 @@ class CryptomusService:
         if not incoming:
             return False
 
+        import hmac
+
         unsigned = {k: v for k, v in payload.items() if k != "sign"}
         expected = CryptomusService.sign(unsigned)
-        return incoming.lower() == expected.lower()
+        return hmac.compare_digest(incoming.lower(), expected.lower())

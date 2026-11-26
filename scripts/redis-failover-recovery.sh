@@ -27,12 +27,36 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
 
+INSTALL_DIR="${INSTALL_DIR:-/opt/smsly-hosting}"
+ENV_FILE="${ENV_FILE:-$INSTALL_DIR/.env}"
+[ -f "$ENV_FILE" ] || ENV_FILE=".env"
+if [ -f "$ENV_FILE" ]; then
+    while IFS= read -r _env_line || [ -n "$_env_line" ]; do
+        _env_line="${_env_line%$'\r'}"
+        [[ -z "$_env_line" || "$_env_line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$_env_line" == export[[:space:]]* ]] && _env_line="${_env_line#export }"
+        [[ "$_env_line" == *=* ]] || continue
+        _env_key="${_env_line%%=*}"
+        _env_key="${_env_key#"${_env_key%%[![:space:]]*}"}"
+        _env_key="${_env_key%"${_env_key##*[![:space:]]}"}"
+        [[ "$_env_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        _env_val="${_env_line#*=}"
+        if [[ "$_env_val" == \"*\" && "$_env_val" == *\" && ${#_env_val} -ge 2 ]]; then
+            _env_val="${_env_val:1:${#_env_val}-2}"
+        elif [[ "$_env_val" == \'*\' && "$_env_val" == *\' && ${#_env_val} -ge 2 ]]; then
+            _env_val="${_env_val:1:${#_env_val}-2}"
+        fi
+        export "$_env_key=$_env_val"
+    done < "$ENV_FILE"
+    unset _env_line _env_key _env_val
+fi
+
 COMPOSE_FILE="docker-compose.prod.yml"
 PRIMARY_CONTAINER="smsly-redis-primary"
 REPLICA_CONTAINER="smsly-redis-replica"
 SENTINEL_1="smsly-redis-sentinel-1"
 SENTINEL_PORT=26379
-SENTINEL_MASTER="mymaster"
+SENTINEL_MASTER="${SENTINEL_SERVICE_NAME:-mymaster}"
 
 DRY_RUN=false
 for arg in "$@"; do
@@ -53,7 +77,12 @@ echo -e "${BLUE}═════════════════════�
 
 # ── Helper: run redis-cli inside a sentinel container ────────────────────────
 redis_cli_sentinel() {
-    timeout 10 docker exec "$SENTINEL_1" redis-cli -p "$SENTINEL_PORT" "$@"
+    local spass="${SENTINEL_PASSWORD:-}"
+    if [ -n "$spass" ]; then
+        timeout 10 docker exec "$SENTINEL_1" redis-cli -p "$SENTINEL_PORT" -a "$spass" --no-auth-warning "$@"
+    else
+        timeout 10 docker exec "$SENTINEL_1" redis-cli -p "$SENTINEL_PORT" "$@"
+    fi
 }
 
 # ── Helper: run redis-cli inside the primary container ───────────────────────
@@ -61,7 +90,7 @@ redis_cli_primary() {
     # Pass REDIS_PASSWORD from host env or fall back to sentinel config
     local pass="${REDIS_PASSWORD:-}"
     if [ -n "$pass" ]; then
-        timeout 10 docker exec "$PRIMARY_CONTAINER" redis-cli -a "$pass" "$@" 2>/dev/null
+        timeout 10 docker exec "$PRIMARY_CONTAINER" redis-cli -a "$pass" --no-auth-warning "$@" 2>/dev/null
     else
         timeout 10 docker exec "$PRIMARY_CONTAINER" redis-cli "$@"
     fi
@@ -106,8 +135,8 @@ if [ "$PRIMARY_RUNNING" -eq 0 ]; then
     exit 0
 fi
 
-# Get the IP of the redis-primary container
-PRIMARY_IP=$(docker inspect "$PRIMARY_CONTAINER" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null || echo "unknown")
+# Get the IP(s) of the redis-primary container (space-separated across networks)
+PRIMARY_IP=$(docker inspect "$PRIMARY_CONTAINER" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' 2>/dev/null || echo "unknown")
 
 echo -e "${GREEN}  ✅ Container '$PRIMARY_CONTAINER' is running (IP: $PRIMARY_IP).${NC}"
 
@@ -115,11 +144,13 @@ echo -e "${GREEN}  ✅ Container '$PRIMARY_CONTAINER' is running (IP: $PRIMARY_I
 echo ""
 echo -e "${CYAN}[3/5] Comparing container against Sentinel master ...${NC}"
 
-if [ "$PRIMARY_IP" = "$CURRENT_MASTER_HOST" ]; then
-    echo -e "${GREEN}  ✅ Container '$PRIMARY_CONTAINER' ($PRIMARY_IP) IS the Sentinel master.${NC}"
-    echo -e "${GREEN}  → No recovery needed.${NC}"
-    exit 0
-fi
+for _pip in $PRIMARY_IP; do
+    if [ "$_pip" = "$CURRENT_MASTER_HOST" ]; then
+        echo -e "${GREEN}  ✅ Container '$PRIMARY_CONTAINER' ($_pip) IS the Sentinel master.${NC}"
+        echo -e "${GREEN}  → No recovery needed.${NC}"
+        exit 0
+    fi
+done
 
 # The container hostname might differ from IP; also check by resolving
 PRIMARY_HOSTNAME=$(timeout 5 docker exec "$PRIMARY_CONTAINER" hostname 2>/dev/null || echo "")
@@ -127,6 +158,14 @@ if [ -n "$PRIMARY_HOSTNAME" ] && [ "$PRIMARY_HOSTNAME" = "$CURRENT_MASTER_HOST" 
     echo -e "${GREEN}  ✅ Container '$PRIMARY_CONTAINER' (hostname: $PRIMARY_HOSTNAME) IS the Sentinel master.${NC}"
     echo -e "${GREEN}  → No recovery needed.${NC}"
     exit 0
+fi
+
+# Verify ROLE != master before removing redis-primary (prevents deleting a live master on DNS/IP mismatch)
+PRIMARY_ROLE=$(redis_cli_primary ROLE 2>/dev/null | head -n 1 | tr -d '\r' || echo "")
+if [ "$PRIMARY_ROLE" = "master" ]; then
+    echo -e "${YELLOW}  ⚠ Container '$PRIMARY_CONTAINER' still reports ROLE=master (Sentinel reports $CURRENT_MASTER_HOST:$CURRENT_MASTER_PORT).${NC}"
+    echo -e "${YELLOW}  → Refusing to remove a container reporting ROLE=master automatically; verify topology before manual removal.${NC}"
+    exit 1
 fi
 
 # ── Failover detected ───────────────────────────────────────────────────────
@@ -171,11 +210,10 @@ else
     echo -e ""
     echo -e "  ${YELLOW}Next steps:${NC}"
     echo -e "  • The old primary container has been removed."
-    echo -e "  • To bring it back as a replica of the new master, run:"
+    echo -e "  • To bring it back as a replica of the new master ($CURRENT_MASTER_HOST:$CURRENT_MASTER_PORT), run:"
     echo -e "    ${CYAN}  docker compose -f $COMPOSE_FILE up -d --no-deps redis-primary${NC}"
-    echo -e "  • Docker Compose will recreate it with the replicaof config"
-    echo -e "    pointing to 'redis-primary' (which Docker DNS resolves to"
-    echo -e "    the NEW master after the container is recreated)."
+    echo -e "    ${CYAN}  docker exec $PRIMARY_CONTAINER redis-cli -a \"\$REDIS_PASSWORD\" --no-auth-warning REPLICAOF $CURRENT_MASTER_HOST $CURRENT_MASTER_PORT${NC}"
+    echo -e "  • Then promote/reconfigure compose roles or restart Sentinel so it tracks the rejoined replica."
     echo -e ""
     echo -e "  ${YELLOW}Note:${NC} The recreated container performs a full sync"
     echo -e "  from the new master (data is not preserved from the old primary)."

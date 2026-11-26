@@ -34,14 +34,35 @@ import { domainsApi, servicesApi, type Domain, type Service } from '@/lib/api';
 import { FailoverNotice } from '@/components/domains/FailoverNotice';
 import Link from 'next/link';
 
-const STATUSES = ['active', 'pending', 'error'];
+const STATUS_OPTIONS = [
+  { value: 'active', label: 'Active' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'dns_pending', label: 'DNS Pending' },
+  { value: 'dns_verified', label: 'DNS Verified' },
+  { value: 'ssl_provisioning', label: 'SSL Provisioning' },
+  { value: 'ssl_failed', label: 'SSL Failed' },
+] as const;
 
-function getStatusVariant(status: string): 'success' | 'warning' | 'destructive' | 'default' | 'secondary' {
+function formatDomainStatus(status?: string): string {
+  const match = STATUS_OPTIONS.find((s) => s.value === status?.toLowerCase());
+  return match ? match.label : (status || 'unknown');
+}
+
+function getStatusVariant(status: string): 'success' | 'warning' | 'destructive' | 'info' | 'default' | 'secondary' {
   switch (status?.toLowerCase()) {
-    case 'active': return 'success';
-    case 'pending': return 'warning';
-    case 'error': return 'destructive';
-    default: return 'secondary';
+    case 'active':
+      return 'success';
+    case 'dns_verified':
+      return 'info';
+    case 'pending':
+    case 'dns_pending':
+    case 'ssl_provisioning':
+      return 'warning';
+    case 'ssl_failed':
+    case 'error':
+      return 'destructive';
+    default:
+      return 'secondary';
   }
 }
 
@@ -59,11 +80,6 @@ export default function DomainsPage() {
   const [formData, setFormData] = useState({
     name: '',
     service: '',
-    dns_managed: true,
-    ssl_enabled: true,
-    status: 'pending',
-    target: '',
-    record_type: 'CNAME',
   });
 
   const fetchDomains = useCallback(async () => {
@@ -95,14 +111,18 @@ export default function DomainsPage() {
   useEffect(() => { fetchServices(); }, [fetchServices]);
 
   const openCreateModal = () => {
-    setFormData({ name: '', service: '', dns_managed: true, ssl_enabled: true, status: 'pending', target: '', record_type: 'CNAME' });
+    setFormData({ name: '', service: services[0]?.id || '' });
     setShowCreateModal(true);
   };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name) {
+    if (!formData.name.trim()) {
       toast({ title: 'Validation error', description: 'Domain name is required.', variant: 'destructive' });
+      return;
+    }
+    if (!formData.service) {
+      toast({ title: 'Validation error', description: 'Please select a target service.', variant: 'destructive' });
       return;
     }
 
@@ -110,12 +130,7 @@ export default function DomainsPage() {
     try {
       await domainsApi.create({
         name: formData.name.toLowerCase().trim(),
-        service: formData.service || undefined,
-        dns_managed: formData.dns_managed,
-        ssl_enabled: formData.ssl_enabled,
-        status: formData.status,
-        target: formData.target || undefined,
-        record_type: formData.record_type || undefined,
+        service: formData.service,
       });
       toast({ title: 'Domain created', description: `Successfully created ${formData.name}.` });
       setShowCreateModal(false);
@@ -123,7 +138,7 @@ export default function DomainsPage() {
     } catch (err: any) {
       toast({
         title: 'Creation failed',
-        description: err?.response?.data?.error || err.message || 'An error occurred.',
+        description: err?.response?.data?.error || err?.response?.data?.detail || err.message || 'An error occurred.',
         variant: 'destructive',
       });
     } finally { setActionLoading(false); }
@@ -159,8 +174,8 @@ export default function DomainsPage() {
   });
 
   const activeCount = domains.filter(d => d.status?.toLowerCase() === 'active').length;
-  const pendingCount = domains.filter(d => d.status?.toLowerCase() === 'pending').length;
-  const errorCount = domains.filter(d => d.status?.toLowerCase() === 'error').length;
+  const pendingCount = domains.filter(d => ['pending', 'dns_pending', 'dns_verified', 'ssl_provisioning'].includes(d.status?.toLowerCase())).length;
+  const errorCount = domains.filter(d => ['ssl_failed', 'error'].includes(d.status?.toLowerCase())).length;
 
   if (loading) {
     return (
@@ -278,8 +293,8 @@ export default function DomainsPage() {
                 className="px-3 py-2 bg-black/20 border border-white/10 rounded-lg text-xs text-white outline-none focus:border-indigo-500"
               >
                 <option value="all">All Statuses</option>
-                {STATUSES.map(s => (
-                  <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+                {STATUS_OPTIONS.map(s => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
                 ))}
               </select>
             </div>
@@ -359,7 +374,7 @@ export default function DomainsPage() {
                           </td>
                           <td className="p-4">
                             <Badge variant={getStatusVariant(domain.status)} className="text-[10px] px-2 py-0.5">
-                              {domain.status || 'unknown'}
+                              {formatDomainStatus(domain.status)}
                             </Badge>
                           </td>
                           <td className="p-4">
@@ -418,92 +433,28 @@ export default function DomainsPage() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label className="text-zinc-300">Service (optional)</Label>
+                  <Label className="text-zinc-300">Service *</Label>
                   <Select
                     value={formData.service}
                     onValueChange={v => setFormData({ ...formData, service: v })}
                   >
                     <SelectTrigger className="bg-black/30 border-white/10 text-white focus:border-indigo-500">
-                      <SelectValue placeholder="No service" />
+                      <SelectValue placeholder="Select a service" />
                     </SelectTrigger>
                     <SelectContent className="bg-[#0d1117] border-white/10 text-white">
-                      <SelectItem value="no-service">No service</SelectItem>
                       {services.map(s => (
                         <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-zinc-300">Record Type</Label>
-                    <Select
-                      value={formData.record_type}
-                      onValueChange={v => setFormData({ ...formData, record_type: v })}
-                    >
-                      <SelectTrigger className="bg-black/30 border-white/10 text-white focus:border-indigo-500">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="bg-[#0d1117] border-white/10 text-white">
-                        {['CNAME', 'A', 'AAAA', 'TXT'].map(t => (
-                          <SelectItem key={t} value={t}>{t}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-zinc-300">Status</Label>
-                    <Select
-                      value={formData.status}
-                      onValueChange={v => setFormData({ ...formData, status: v })}
-                    >
-                      <SelectTrigger className="bg-black/30 border-white/10 text-white focus:border-indigo-500">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="bg-[#0d1117] border-white/10 text-white">
-                        {STATUSES.map(s => (
-                          <SelectItem key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label className="text-zinc-300">Target (optional)</Label>
-                  <Input
-                    value={formData.target}
-                    onChange={e => setFormData({ ...formData, target: e.target.value })}
-                    placeholder="e.g. myapp.cloud.Trulay.co"
-                    className="bg-black/30 border-white/10 text-white focus:border-indigo-500"
-                  />
-                </div>
-
-                <div className="flex items-center gap-6">
-                  <label className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={formData.dns_managed}
-                      onChange={e => setFormData({ ...formData, dns_managed: e.target.checked })}
-                      className="rounded border-white/20 bg-black/30"
-                    />
-                    DNS Managed
-                  </label>
-                  <label className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={formData.ssl_enabled}
-                      onChange={e => setFormData({ ...formData, ssl_enabled: e.target.checked })}
-                      className="rounded border-white/20 bg-black/30"
-                    />
-                    SSL Enabled
-                  </label>
+                  {services.length === 0 && (
+                    <p className="text-xs text-amber-400">Create a service first before adding a custom domain.</p>
+                  )}
                 </div>
 
                 <DialogFooter className="pt-2 gap-2">
                   <Button type="button" variant="outline" onClick={() => setShowCreateModal(false)} className="border-white/10 text-gray-300 hover:bg-white/5">Cancel</Button>
-                  <Button type="submit" disabled={actionLoading} className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
+                  <Button type="submit" disabled={actionLoading || !formData.service} className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
                     {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
                     Create Domain
                   </Button>

@@ -4,12 +4,14 @@ import os
 import uuid
 
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.teams.permissions import assert_can_write
 from ...models import AuditLog, Deployment, Service
 from ...serializers import DeploymentSerializer, DeploymentTriggerSerializer
 from ...services.server_guard import ServerGuard
@@ -21,6 +23,131 @@ from .._helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_deployment_cleanup_server(deployment):
+    """Return remote ManagedServer for deployment container cleanup, or None if local."""
+    if getattr(deployment, 'target_is_local', False):
+        return None
+    target_server = getattr(deployment, 'target_server', None)
+    if target_server is not None:
+        return None if getattr(target_server, 'is_primary', False) else target_server
+    svc = getattr(deployment, 'service', None)
+    svc_server = getattr(svc, 'server', None) if svc is not None else None
+    if svc_server is not None and not getattr(svc_server, 'is_primary', False):
+        return svc_server
+    return None
+
+
+def _cleanup_cancelled_containers(deployments) -> list[str]:
+    """Remove green/staging containers for cancelled deployments locally or over SSH.
+
+    Never touches any container ID currently referenced by an ACTIVE deployment.
+    Returns the list of container IDs removed.
+    """
+    import shlex
+
+    dep_list = [d for d in deployments if d is not None]
+    if not dep_list:
+        return []
+
+    service_ids = {d.service_id for d in dep_list if getattr(d, 'service_id', None)}
+    live_ids: set[str] = set()
+    if service_ids:
+        live_ids.update(
+            cid for cid in Deployment.objects.filter(
+                service_id__in=service_ids,
+                status=Deployment.Status.ACTIVE,
+            ).values_list('container_id', flat=True)
+            if cid
+        )
+        live_ids.update(
+            cid for cid in Deployment.objects.filter(
+                service_id__in=service_ids,
+                status=Deployment.Status.ACTIVE,
+            ).values_list('green_container_id', flat=True)
+            if cid
+        )
+
+    local_cids: list[str] = []
+    remote_by_server: dict[str, tuple[object, list[str]]] = {}
+    for dep in dep_list:
+        candidates = [
+            cid for cid in (
+                getattr(dep, 'green_container_id', None),
+                getattr(dep, 'container_id', None),
+            )
+            if cid and cid not in live_ids
+        ]
+        if not candidates:
+            continue
+        server = _resolve_deployment_cleanup_server(dep)
+        if server is None:
+            for cid in candidates:
+                if cid not in local_cids:
+                    local_cids.append(cid)
+        else:
+            key = str(server.id)
+            if key not in remote_by_server:
+                remote_by_server[key] = (server, [])
+            for cid in candidates:
+                if cid not in remote_by_server[key][1]:
+                    remote_by_server[key][1].append(cid)
+
+    cleaned: list[str] = []
+    if local_cids:
+        try:
+            import docker
+            client = docker.from_env()
+            for c_id in local_cids:
+                try:
+                    container = client.containers.get(c_id)
+                    container.remove(force=True)
+                    cleaned.append(c_id)
+                    logger.info("Cleaned up cancelled local container %s", c_id)
+                except docker.errors.NotFound:
+                    pass
+                except Exception as exc:
+                    logger.error("Failed to cleanup local container %s: %s", c_id, exc)
+        except Exception as exc:
+            logger.error("Docker client error during cancel cleanup: %s", exc)
+
+    if remote_by_server:
+        from ...services.ssh_client import SSHClient
+        for server, cids in remote_by_server.values():
+            if not (getattr(server, 'ssh_key', None) or getattr(server, 'ssh_password', None)):
+                logger.warning(
+                    "Skipping remote container cleanup on %s: no SSH credentials",
+                    getattr(server, 'name', '?'),
+                )
+                continue
+            ssh = SSHClient(
+                ip=server.host,
+                key_content=server.ssh_key,
+                password=server.ssh_password,
+                user=getattr(server, 'ssh_user', 'root') or 'root',
+                port=getattr(server, 'ssh_port', 22) or 22,
+                key_passphrase=getattr(server, 'ssh_key_passphrase', '') or '',
+                wg_address=getattr(server, 'wg_address', '') or '',
+            )
+            try:
+                quoted = " ".join(shlex.quote(c) for c in cids)
+                _, err, code = ssh.exec_command(
+                    f"docker rm -f {quoted} 2>/dev/null || true",
+                    raise_on_error=False,
+                    timeout=30,
+                )
+                if code == 0:
+                    cleaned.extend(cids)
+                    logger.info("Cleaned up %d cancelled remote container(s) on %s", len(cids), server.name)
+                else:
+                    logger.warning("Remote container cleanup warning on %s: %s", server.name, err)
+            except Exception as exc:
+                logger.warning("Remote container cleanup failed on %s: %s", getattr(server, 'name', '?'), exc)
+            finally:
+                ssh.close()
+
+    return cleaned
 
 
 class LifecycleActionsMixin:
@@ -155,6 +282,7 @@ class LifecycleActionsMixin:
         from django.core.cache import cache
 
         deployment = self.get_object()
+        assert_can_write(request.user, deployment.service, action='retry deployment')
         if deployment.status not in (
             Deployment.Status.FAILED,
             Deployment.Status.CANCELLED,
@@ -166,6 +294,11 @@ class LifecycleActionsMixin:
             )
         recovery_result = None
         if bool(request.data.get('docker_recovery', False)):
+            if not (getattr(request.user, 'is_staff', False) or getattr(request.user, 'is_superuser', False)):
+                return Response(
+                    {'error': 'docker_recovery requires staff/superuser privileges.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             from ...tasks.build_recovery import (
                 _PRUNE_CACHE_KEY,
                 is_build_corruption_error,
@@ -226,6 +359,7 @@ class LifecycleActionsMixin:
         POST /api/v1/deployments/{id}/cancel/
         """
         deployment = self.get_object()
+        assert_can_write(request.user, deployment.service, action='cancel deployment')
 
         if deployment.status not in (
             Deployment.Status.QUEUED,
@@ -257,27 +391,10 @@ class LifecycleActionsMixin:
         except Exception as exc:
             logger.warning("Celery revoke failed for deployment %s: %s", deployment.id, exc)
 
-        # Clean up any running containers associated with this deployment
-        try:
-            if deployment.green_container_id or deployment.container_id:
-                import docker
-                client = docker.from_env()
-                c_ids_to_remove = [id for id in [deployment.green_container_id, deployment.container_id] if id]
-                cleaned_any = False
-                for c_id in set(c_ids_to_remove):
-                    try:
-                        container = client.containers.get(c_id)
-                        container.remove(force=True)
-                        logger.info(f"Cleaned up cancelled container {c_id} for deployment {deployment.id}")
-                        cleaned_any = True
-                    except docker.errors.NotFound:
-                        pass
-                    except Exception as e:
-                        logger.error(f"Failed to cleanup container {c_id}: {e}")
-                if cleaned_any:
-                    deployment.build_logs += "\n🧹 Cleaned up container resources."
-        except Exception as e:
-            logger.error(f"Docker client error during cancel cleanup: {e}")
+        # Clean up any running containers associated with this deployment (local or remote)
+        cleaned = _cleanup_cancelled_containers([deployment])
+        if cleaned:
+            deployment.build_logs += "\n🧹 Cleaned up container resources."
 
         # A cancelled green must never keep receiving canary traffic: drop
         # the Traefik split file (no-op when no split is active).
@@ -326,62 +443,70 @@ class LifecycleActionsMixin:
                 {'error': 'deployment_ids must be a non-empty list'},
                 status=status.HTTP_400_BAD_REQUEST)
 
-        # Only allow cancelling deployments the user owns
-        qs = self.get_queryset().filter(
-            id__in=deployment_ids,
-            status__in=[
-                Deployment.Status.QUEUED,
-                Deployment.Status.REVIEW,
-                Deployment.Status.BUILDING,
-                Deployment.Status.FAILED,
-                Deployment.Status.STAGED,
-            ]
-        )
-        # Capture owners BEFORE the bulk update (the queryset would
-        # otherwise re-evaluate to the already-cancelled rows = empty).
-        affected_service_ids = list(qs.values_list("service_id", flat=True).distinct())
-        # Capture worker task ids BEFORE the update for the same reason —
-        # a DB flag alone leaves delivered tasks running (2026-09-26).
-        task_ids = [
-            tid for tid in qs.exclude(
-                celery_task_id__isnull=True).exclude(
-                celery_task_id='').values_list("celery_task_id", flat=True)
-        ]
-        count = qs.update(
-            status=Deployment.Status.CANCELLED,
-            finished_at=timezone.now(),
-        )
+        with transaction.atomic():
+            # Only allow cancelling deployments the user owns; lock matching rows
+            # so concurrent status transitions and audit writes commit atomically.
+            locked_qs = self.get_queryset().select_for_update().filter(
+                id__in=deployment_ids,
+                status__in=[
+                    Deployment.Status.QUEUED,
+                    Deployment.Status.REVIEW,
+                    Deployment.Status.BUILDING,
+                    Deployment.Status.AWAITING_APPROVAL,
+                    Deployment.Status.STAGED,
+                ],
+            )
+            cancelled_deps = list(
+                locked_qs.select_related('service', 'service__server', 'target_server')
+            )
+            checked_service_ids = set()
+            for dep in cancelled_deps:
+                if dep.service_id and dep.service_id not in checked_service_ids:
+                    checked_service_ids.add(dep.service_id)
+                    assert_can_write(request.user, dep.service, action='cancel deployment')
+            locked_ids = [d.id for d in cancelled_deps]
+            affected_service_ids = list({d.service_id for d in cancelled_deps})
+            task_ids = [d.celery_task_id for d in cancelled_deps if d.celery_task_id]
+            if locked_ids:
+                count = Deployment.objects.filter(id__in=locked_ids).update(
+                    status=Deployment.Status.CANCELLED,
+                    finished_at=timezone.now(),
+                )
+                if count:
+                    AuditLog(
+                        actor=request.user.get_username(),
+                        action="DEPLOYMENT_BULK_CANCEL",
+                        target="Deployment: multiple",
+                        metadata={
+                            "count": count,
+                            "deployment_ids": [str(d) for d in deployment_ids],
+                        },
+                    ).save()
+            else:
+                count = 0
+
         try:
             if task_ids:
                 from celery import current_app as _celery_app
+
                 for tid in set(task_ids):
                     try:
-                        _celery_app.control.revoke(tid, terminate=True, signal='SIGTERM')
+                        _celery_app.control.revoke(tid, terminate=True, signal="SIGTERM")
                     except Exception:
                         pass
                 logger.info("Revoked %d worker task(s) on bulk-cancel", len(set(task_ids)))
         except Exception as exc:
             logger.warning("Celery bulk-revoke failed: %s", exc)
 
-        # Bulk-cancelled greens keep running (no per-row container cleanup
-        # here), but they must stop receiving canary traffic immediately.
+        # Clean up green/staging containers (local and remote) and stop canary traffic.
+        _cleanup_cancelled_containers(cancelled_deps)
         try:
             from ...services.traefik_manager.canary_file import remove_canary_file
+
             for service_id in affected_service_ids:
                 remove_canary_file(str(service_id))
         except Exception as exc:
             logger.debug("Canary file cleanup on bulk-cancel failed: %s", exc)
-
-        if count:
-            AuditLog(
-                actor=request.user.get_username(),
-                action='DEPLOYMENT_BULK_CANCEL',
-                target='Deployment: multiple',
-                metadata={
-                    'count': count,
-                    'deployment_ids': [str(d) for d in deployment_ids],
-                },
-            ).save()
 
         return Response({
             'cancelled': count,
@@ -428,7 +553,7 @@ class LifecycleActionsMixin:
         is_safe, err_msg = validate_zip_entries(uploaded_file)
         if not is_safe:
             return Response(
-                {'error': f'Unsafe archive: {err_msg}'},
+                {'error': f'Unsafe archive (unsafe entries): {err_msg}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -438,13 +563,15 @@ class LifecycleActionsMixin:
             return bomb_err
 
         try:
-            # ZH-011 FIX: Verify ownership at query level (fail-closed)
-            service = Service.objects.get(id=service_id, owner=request.user)
+            from apps.teams.permissions import assert_can_write, get_team_q_filter
+            service = Service.objects.filter(
+                get_team_q_filter(request.user)
+            ).distinct().get(id=service_id)
+            assert_can_write(request.user, service, action='upload deployment source')
 
-            # Security: Use secure upload directory
+            # Security: Use per-tenant isolated upload directory
             import secrets
-            base_dir = getattr(settings, 'MEDIA_ROOT', '/app/media')
-            upload_dir = os.path.join(base_dir, 'uploads')
+            upload_dir = os.path.join('/app/var/uploads', str(request.user.id))
             os.makedirs(upload_dir, mode=0o700, exist_ok=True)
 
             # Generate unpredictable filename
@@ -500,6 +627,7 @@ class LifecycleActionsMixin:
         POST /api/v1/deployments/{id}/promote/
         """
         deployment = self.get_object()
+        assert_can_write(request.user, deployment.service, action='promote deployment')
 
         if deployment.status != Deployment.Status.STAGED:
             return Response(

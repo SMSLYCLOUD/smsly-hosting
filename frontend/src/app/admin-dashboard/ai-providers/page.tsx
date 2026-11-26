@@ -51,6 +51,12 @@ export default function AIProvidersPage() {
 
   if (loading) return <div className="flex justify-center p-8"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>;
 
+  const providerList = Array.isArray(providers?.providers) ? providers.providers : [];
+  const openaiProvider = providerList.find((p: any) => p.id === 'openai');
+  const claudeProvider = providerList.find((p: any) => p.id === 'claude');
+  const openaiConfigured = Boolean(openaiProvider?.configured ?? providers?.openai?.is_configured);
+  const claudeConfigured = Boolean(claudeProvider?.configured ?? providers?.anthropic?.is_configured);
+
   return (
     <div className="space-y-6 max-w-4xl mx-auto p-6">
       <div>
@@ -71,7 +77,7 @@ export default function AIProvidersPage() {
           <CardContent className="space-y-4">
             <div className="flex items-center gap-2 text-sm">
               Status: 
-              {providers?.openai?.is_configured ? (
+              {openaiConfigured ? (
                 <span className="flex items-center text-emerald-500 font-medium"><CheckCircle2 className="h-4 w-4 mr-1" /> Configured</span>
               ) : (
                 <span className="flex items-center text-zinc-500 font-medium"><XCircle className="h-4 w-4 mr-1" /> Missing Key</span>
@@ -106,7 +112,7 @@ export default function AIProvidersPage() {
           <CardContent className="space-y-4">
             <div className="flex items-center gap-2 text-sm">
               Status: 
-              {providers?.anthropic?.is_configured ? (
+              {claudeConfigured ? (
                 <span className="flex items-center text-emerald-500 font-medium"><CheckCircle2 className="h-4 w-4 mr-1" /> Configured</span>
               ) : (
                 <span className="flex items-center text-zinc-500 font-medium"><XCircle className="h-4 w-4 mr-1" /> Missing Key</span>

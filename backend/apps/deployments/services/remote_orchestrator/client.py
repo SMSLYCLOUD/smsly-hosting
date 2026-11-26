@@ -88,6 +88,19 @@ class RemoteClientMixin:
                 headers["Authorization"] = f"Bearer {token}"
             else:
                 headers["Authorization"] = f"Token {token}"
+            if gateway_secret:
+                timestamp = str(int(time.time()))
+                nonce = secrets.token_urlsafe(16)
+                body_hash = hashlib.sha256(body).hexdigest()
+                payload = f"{method}|{path}|{timestamp}|{nonce}|{body_hash}"
+                signature = hmac_mod.new(
+                    gateway_secret.encode(),
+                    payload.encode(),
+                    hashlib.sha256,
+                ).hexdigest()
+                headers["X-Gateway-Signature-V2"] = signature
+                headers["X-Request-Timestamp"] = timestamp
+                headers["X-Request-Nonce"] = nonce
             return headers
 
         if auth_mode in (None, "hmac") and gateway_secret:
@@ -322,7 +335,8 @@ class RemoteClientMixin:
                         # node Caddy :80 308s IP hosts into the https/IP-
                         # cert dead end). 3xx surfaces below as an explicit
                         # configuration error instead.
-                        response = requests.request(
+                        from .. import remote_orchestrator as _ro_pkg
+                        response = _ro_pkg.requests.request(
                             method_upper,
                             url,
                             data=body if payload is not None else None,
@@ -331,7 +345,7 @@ class RemoteClientMixin:
                             allow_redirects=False,
                             verify=verify_ssl,
                         )
-                    except requests.RequestException as exc:
+                    except (requests.RequestException, _ro_pkg.requests.RequestException) as exc:
                         message = (
                             f"Remote request failed for {method_upper} {request_path} "
                             f"at {base_url} via {mode} auth: {exc}"

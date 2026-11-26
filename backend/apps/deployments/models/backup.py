@@ -5,4 +5,5 @@ from apps.cloud.models.backup import (  # noqa: F401
     ServiceBackup,
     ServiceSnapshot,
     SnapshotSchedule,
+    validate_endpoint_url,
 )

@@ -105,10 +105,10 @@ class ResolveTLSVerifyForURLTests(TestCase):
             self.assertTrue(verify)
         self.assertIsNone(fingerprint)
 
-    @patch.dict("os.environ", {"SMSLY_MASTER_TLS_CERT SHA256": "a" * 64})
+    @patch.dict("os.environ", {"SMSLY_MASTER_TLS_CERT_SHA256": "a" * 64})
     def test_https_url_with_env_pin_returns_pin(self):
         verify, fingerprint = resolve_tls_verify_for_url("https://master.example.com")
-        self.assertTrue(verify)
+        self.assertFalse(verify)
         self.assertEqual(fingerprint, "a" * 64)
 
     @patch.dict("os.environ", {"ALLOW_INSECURE_INTER_NODE_TLS": "true"})
@@ -127,13 +127,13 @@ class ProvisionerDuplicateLogFixTests(TestCase):
     def test_no_duplicate_firewall_log_marker(self):
         # The simplest correctness check: the literal "Master
         # firewall rules synchronized" string appears exactly
-        # once in provisioner.py.
-        with open(
-            "C:/Users/osaretin/Documents/SMSLY/SMSLY_CORE/"
-            "smsly-hosting/backend/apps/deployments/services/"
-            "provisioner.py",
-            encoding="utf-8",
-        ) as f:
+        # once in provisioner/helpers/firewall.py.
+        import os
+        firewall_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "services", "provisioner", "helpers", "firewall.py",
+        )
+        with open(firewall_path, encoding="utf-8") as f:
             content = f.read()
         count = content.count("Master firewall rules synchronized")
         self.assertEqual(

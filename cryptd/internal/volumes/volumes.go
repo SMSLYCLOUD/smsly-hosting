@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +21,10 @@ import (
 	"smsly-hosting/cryptd/internal/epoch"
 )
 
-var validVolumeNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,126}$`)
+var (
+	validVolumeNameRe  = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,126}$`)
+	errSkipCleanupSave = errors.New("skip cleanup save")
+)
 
 // ProvisionRequest describes a volume provisioning request from Django/napd.
 type ProvisionRequest struct {
@@ -32,6 +36,8 @@ type ProvisionRequest struct {
 	KeyID      string `json:"key_id,omitempty"`
 	OwnerUID   int    `json:"owner_uid,omitempty"`
 	OwnerGID   int    `json:"owner_gid,omitempty"`
+	SizeMB     int    `json:"size_mb,omitempty"`
+	Persistent bool   `json:"persistent,omitempty"`
 	Cipher     string `json:"cipher,omitempty"`
 }
 
@@ -45,6 +51,7 @@ type UnlockRequest struct {
 	KeyID      string `json:"key_id,omitempty"`
 	OwnerUID   int    `json:"owner_uid,omitempty"`
 	OwnerGID   int    `json:"owner_gid,omitempty"`
+	Persistent bool   `json:"persistent,omitempty"`
 }
 
 // HealthReport summarizes host filesystem encryption capabilities.
@@ -211,6 +218,7 @@ func (m *Manager) Provision(ctx context.Context, req ProvisionRequest) (*Provisi
 					WrappedDEK: existingWrapped,
 					OwnerUID:   req.OwnerUID,
 					OwnerGID:   req.OwnerGID,
+					Persistent: req.Persistent,
 				})
 			}
 		}
@@ -246,7 +254,7 @@ func (m *Manager) Provision(ctx context.Context, req ProvisionRequest) (*Provisi
 		return nil, err
 	}
 
-	hostPath, cipher, err := m.provisionHostVolume(ctx, volName, dek, req.OwnerUID, req.OwnerGID)
+	hostPath, cipher, err := m.provisionHostVolume(ctx, volName, dek, req.OwnerUID, req.OwnerGID, req.SizeMB)
 	if err != nil {
 		return nil, err
 	}
@@ -264,20 +272,21 @@ func (m *Manager) Provision(ctx context.Context, req ProvisionRequest) (*Provisi
 		RotatedAt:  time.Now().UTC(),
 	}
 	if err := m.epochs.RegisterService(&crypto.ServiceKeyRecord{
-		ServiceID:    svcID,
-		ProjectID:    projID,
-		VolumeNames:  []string{volName},
-		VolumeDEKs:   map[string]crypto.VolumeDEKRecord{volName: vrec},
-		Cipher:       cipher,
-		OwnerUID:     req.OwnerUID,
-		OwnerGID:     req.OwnerGID,
-		CurrentKeyID: keyID,
-		WrapWeek:     week,
+		ServiceID:       svcID,
+		ProjectID:       projID,
+		VolumeNames:     []string{volName},
+		VolumeDEKs:      map[string]crypto.VolumeDEKRecord{volName: vrec},
+		Cipher:          cipher,
+		OwnerUID:        req.OwnerUID,
+		OwnerGID:        req.OwnerGID,
+		CurrentKeyID:    keyID,
+		WrapWeek:        week,
+		LeasePersistent: req.Persistent,
 	}, true); err != nil {
 		_ = m.cleanupHostVolume(ctx, volName)
 		return nil, err
 	}
-	_, _ = m.epochs.UnlockService(svcID, projID, 0, false)
+	_, _ = m.epochs.UnlockService(svcID, projID, 0, req.Persistent)
 
 	return &ProvisionResult{
 		OK:         true,
@@ -304,7 +313,7 @@ func (m *Manager) Unlock(ctx context.Context, req UnlockRequest) (*ProvisionResu
 			projID = rec.ProjectID
 		}
 	}
-	_, _ = m.epochs.UnlockService(res.ServiceID, projID, 0, false)
+	_, _ = m.epochs.UnlockService(res.ServiceID, projID, 0, req.Persistent)
 	return res, nil
 }
 
@@ -329,6 +338,8 @@ func (m *Manager) unlockVolumeOnly(ctx context.Context, req UnlockRequest) (*Pro
 	var keyID string
 	var week uint64
 	wrapped := strings.TrimSpace(req.WrappedDEK)
+	ownerUID := req.OwnerUID
+	ownerGID := req.OwnerGID
 
 	if strings.TrimSpace(req.DEKHex) != "" {
 		dek, err = hex.DecodeString(strings.TrimSpace(req.DEKHex))
@@ -336,19 +347,66 @@ func (m *Manager) unlockVolumeOnly(ctx context.Context, req UnlockRequest) (*Pro
 			return nil, errors.New("dek_hex must decode to 32 bytes")
 		}
 		defer crypto.ZeroBytes(dek)
+		if ownerUID == 0 && ownerGID == 0 && m.store != nil {
+			if rec, gerr := m.store.GetService(svcID); gerr == nil && rec != nil {
+				if vrec, ok := rec.VolumeDEKs[volName]; ok && (vrec.OwnerUID != 0 || vrec.OwnerGID != 0) {
+					ownerUID = vrec.OwnerUID
+					ownerGID = vrec.OwnerGID
+				} else if rec.OwnerUID != 0 || rec.OwnerGID != 0 {
+					ownerUID = rec.OwnerUID
+					ownerGID = rec.OwnerGID
+				}
+			}
+		}
 		st := m.epochs.Status()
 		week = st.CurrentWeek
 		keyID = req.KeyID
 	} else {
-		if wrapped == "" && m.store != nil {
+		if m.store != nil {
 			if rec, gerr := m.store.GetService(svcID); gerr == nil && rec != nil {
-				if vrec, ok := rec.VolumeDEKs[volName]; ok && vrec.WrappedDEK != "" {
-					wrapped = vrec.WrappedDEK
-				} else {
-					wrapped = rec.WrappedDEK
-				}
 				if rec.ProjectID != "" {
 					projID = rec.ProjectID
+				}
+				if ownerUID == 0 && ownerGID == 0 {
+					if vrec, ok := rec.VolumeDEKs[volName]; ok && (vrec.OwnerUID != 0 || vrec.OwnerGID != 0) {
+						ownerUID = vrec.OwnerUID
+						ownerGID = vrec.OwnerGID
+					} else if rec.OwnerUID != 0 || rec.OwnerGID != 0 {
+						ownerUID = rec.OwnerUID
+						ownerGID = rec.OwnerGID
+					}
+				}
+				var storeWrapped string
+				var storeWeek uint64
+				if vrec, ok := rec.VolumeDEKs[volName]; ok && vrec.WrappedDEK != "" {
+					storeWrapped = vrec.WrappedDEK
+					storeWeek = vrec.WrapWeek
+				} else if rec.WrappedDEK != "" {
+					for _, vn := range rec.VolumeNames {
+						if vn == volName {
+							storeWrapped = rec.WrappedDEK
+							storeWeek = rec.WrapWeek
+							break
+						}
+					}
+					if storeWrapped == "" && wrapped == "" {
+						storeWrapped = rec.WrappedDEK
+						storeWeek = rec.WrapWeek
+					}
+				}
+				if storeWrapped != "" {
+					if wrapped == "" {
+						wrapped = storeWrapped
+					} else if reqParsed, perr := crypto.ParseToken(wrapped); perr == nil {
+						if storeWeek == 0 {
+							if sp, serr := crypto.ParseToken(storeWrapped); serr == nil {
+								storeWeek = sp.Week
+							}
+						}
+						if storeWeek >= reqParsed.Week {
+							wrapped = storeWrapped
+						}
+					}
 				}
 			}
 		}
@@ -376,7 +434,7 @@ func (m *Manager) unlockVolumeOnly(ctx context.Context, req UnlockRequest) (*Pro
 		week = parsed.Week
 	}
 
-	hostPath, cipher, err := m.unlockHostVolume(ctx, volName, dek, req.OwnerUID, req.OwnerGID)
+	hostPath, cipher, err := m.unlockHostVolume(ctx, volName, dek, ownerUID, ownerGID)
 	if err != nil {
 		return nil, err
 	}
@@ -400,7 +458,17 @@ func (m *Manager) Lock(ctx context.Context, volumeName, serviceID string) error 
 		return err
 	}
 	svcID := resolveVolumeServiceID(volName, serviceID)
-	_ = m.epochs.LockService(svcID, "volume locked")
+	lockEpoch := svcID == "vol-"+volName
+	if !lockEpoch && m.store != nil {
+		if rec, gerr := m.store.GetService(svcID); gerr == nil && rec != nil {
+			if len(serviceVolumeNames(rec)) <= 1 {
+				lockEpoch = true
+			}
+		}
+	}
+	if lockEpoch && m.epochs != nil {
+		_ = m.epochs.LockService(svcID, "volume locked")
+	}
 	return m.lockHostVolume(ctx, volName)
 }
 
@@ -417,21 +485,30 @@ func (m *Manager) Cleanup(ctx context.Context, volumeName, serviceID string) err
 	if m.store != nil {
 		if svcID == "vol-"+volName {
 			_ = m.store.DeleteService(svcID)
-		} else if rec, gerr := m.store.GetService(svcID); gerr == nil && rec != nil {
-			filtered := rec.VolumeNames[:0]
-			for _, vn := range rec.VolumeNames {
-				if vn != "" && vn != volName {
-					filtered = append(filtered, vn)
+		} else {
+			shouldDelete := false
+			uerr := m.store.UpdateService(svcID, func(rec *crypto.ServiceKeyRecord) error {
+				if rec.CreatedAt.IsZero() && rec.ProjectID == "" && rec.WrappedDEK == "" && len(rec.VolumeDEKs) == 0 && len(rec.VolumeNames) == 0 && !rec.OptedIn {
+					return errSkipCleanupSave
 				}
-			}
-			rec.VolumeNames = filtered
-			if rec.VolumeDEKs != nil {
-				delete(rec.VolumeDEKs, volName)
-			}
-			if rec.WrappedDEK == "" && len(rec.VolumeNames) == 0 && len(rec.VolumeDEKs) == 0 && !rec.OptedIn {
+				filtered := rec.VolumeNames[:0]
+				for _, vn := range rec.VolumeNames {
+					if vn != "" && vn != volName {
+						filtered = append(filtered, vn)
+					}
+				}
+				rec.VolumeNames = filtered
+				if rec.VolumeDEKs != nil {
+					delete(rec.VolumeDEKs, volName)
+				}
+				if rec.WrappedDEK == "" && len(rec.VolumeNames) == 0 && len(rec.VolumeDEKs) == 0 && !rec.OptedIn {
+					shouldDelete = true
+					return errSkipCleanupSave
+				}
+				return nil
+			})
+			if (uerr == nil || errors.Is(uerr, errSkipCleanupSave)) && shouldDelete {
 				_ = m.store.DeleteService(svcID)
-			} else {
-				_ = m.store.SaveService(rec)
 			}
 		}
 	}
@@ -514,13 +591,20 @@ func (m *Manager) LockServiceVolumes(ctx context.Context, serviceID string) int 
 	if m.store == nil {
 		return 0
 	}
+	if m.epochs != nil {
+		if _, allowed, _ := m.epochs.GetServicePolicy(serviceID); allowed {
+			return 0
+		}
+	}
 	rec, err := m.store.GetService(serviceID)
 	if err != nil || rec == nil {
 		return 0
 	}
 	locked := 0
 	for _, vn := range serviceVolumeNames(rec) {
-		if m.lockHostVolume(ctx, vn) == nil {
+		if lerr := m.lockHostVolume(ctx, vn); lerr != nil {
+			log.Printf("ERROR [cryptd/volumes]: lock volume %s for service %s failed: %v", vn, serviceID, lerr)
+		} else {
 			locked++
 		}
 	}
@@ -539,7 +623,9 @@ func (m *Manager) LockAll(ctx context.Context) int {
 	locked := 0
 	for _, rec := range recs {
 		for _, vn := range serviceVolumeNames(rec) {
-			if m.lockHostVolume(ctx, vn) == nil {
+			if lerr := m.lockHostVolume(ctx, vn); lerr != nil {
+				log.Printf("ERROR [cryptd/volumes]: lock volume %s failed: %v", vn, lerr)
+			} else {
 				locked++
 			}
 		}
@@ -548,7 +634,26 @@ func (m *Manager) LockAll(ctx context.Context) int {
 }
 
 func (m *Manager) mountDir(volName string) string {
-	return filepath.Join(m.cfg.BaseDir, volName)
+	mntPath := filepath.Join(m.cfg.BaseDir, "mnt", volName)
+	if _, err := os.Stat(mntPath); err == nil {
+		return mntPath
+	}
+	fscryptPath := filepath.Join(m.cfg.BaseDir, "fscrypt", volName)
+	if _, err := os.Stat(fscryptPath); err == nil {
+		return fscryptPath
+	}
+	if m.cfg.Backend == "mock" && m.cfg.AllowMock {
+		return filepath.Join(m.cfg.BaseDir, volName)
+	}
+	return mntPath
+}
+
+func (m *Manager) luksMountDir(volName string) string {
+	return filepath.Join(m.cfg.BaseDir, "mnt", volName)
+}
+
+func (m *Manager) fscryptDir(volName string) string {
+	return filepath.Join(m.cfg.BaseDir, "fscrypt", volName)
 }
 
 func parseScriptResult(out []byte, defaultCipher string) (string, string, error) {
@@ -577,7 +682,7 @@ func parseScriptResult(out []byte, defaultCipher string) (string, string, error)
 	return "", "", fmt.Errorf("volume helper did not return JSON host_path (output=%q)", strings.TrimSpace(string(out)))
 }
 
-func (m *Manager) provisionHostVolume(ctx context.Context, volName string, dek []byte, uid, gid int) (string, string, error) {
+func (m *Manager) provisionHostVolume(ctx context.Context, volName string, dek []byte, uid, gid, sizeMB int) (string, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -609,6 +714,9 @@ func (m *Manager) provisionHostVolume(ctx context.Context, volName string, dek [
 		if gid > 0 {
 			args = append(args, "--gid", strconv.Itoa(gid))
 		}
+		if sizeMB > 0 {
+			args = append(args, "--size-mb", strconv.Itoa(sizeMB))
+		}
 		out, err := m.runner.Run(cctx, stdinHex, m.cfg.ScriptPath, args...)
 		crypto.ZeroBytes(stdinHex)
 		if err != nil {
@@ -635,8 +743,8 @@ func (m *Manager) unlockHostVolume(ctx context.Context, volName string, dek []by
 	dataDir := filepath.Join(mountDir, "data")
 
 	if m.cfg.Backend == "mock" && m.cfg.AllowMock {
-		_ = os.MkdirAll(dataDir, 0o750)
 		_ = os.Chmod(mountDir, 0o755)
+		_ = os.MkdirAll(dataDir, 0o750)
 		return dataDir, "aes-256-xts-mock", nil
 	}
 
@@ -680,18 +788,31 @@ func (m *Manager) lockHostVolume(ctx context.Context, volName string) error {
 
 	if m.cfg.ScriptPath != "" {
 		out, err := m.runner.Run(cctx, nil, m.cfg.ScriptPath, "lock", volName)
-		if _, statErr := os.Stat(mountDir); statErr == nil {
-			_ = os.Chmod(mountDir, 0o000)
-		}
 		if err != nil {
 			return fmt.Errorf("volume lock failed: %w (%s)", err, strings.TrimSpace(string(out)))
+		}
+		luksMount := m.luksMountDir(volName)
+		if _, statErr := os.Stat(luksMount); statErr == nil {
+			if chErr := os.Chmod(luksMount, 0o000); chErr != nil {
+				return fmt.Errorf("chmod locked mount %s: %w", luksMount, chErr)
+			}
+		}
+		return nil
+	}
+	luksMount := m.luksMountDir(volName)
+	if _, statErr := os.Stat(luksMount); statErr == nil {
+		if chErr := os.Chmod(luksMount, 0o000); chErr != nil {
+			return fmt.Errorf("chmod locked mount %s: %w", luksMount, chErr)
 		}
 		return nil
 	}
 	if _, statErr := os.Stat(mountDir); statErr == nil {
-		_ = os.Chmod(mountDir, 0o000)
+		if chErr := os.Chmod(mountDir, 0o000); chErr != nil {
+			return fmt.Errorf("chmod locked mount %s: %w", mountDir, chErr)
+		}
+		return nil
 	}
-	return nil
+	return errors.New("volume lock backend not configured")
 }
 
 func (m *Manager) cleanupHostVolume(ctx context.Context, volName string) error {

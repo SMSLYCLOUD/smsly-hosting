@@ -133,21 +133,30 @@ from apps.deployments.tasks.infra.tasks_mesh_dns import (
 
 
 # ── Lazy re-exports from tasks_deploy (circular import avoidance) ─
+import time  # noqa: F401
+
+
 def __getattr__(name):
     import sys
 
-    if name in ('smart_deploy_task', 'resume_deploy_task', '_post_deploy_monitor'):
-        from apps.deployments.tasks.deployment.tasks_deploy import _post_deploy_monitor, resume_deploy_task, smart_deploy_task
+    if name in ('smart_deploy_task', 'resume_deploy_task', '_post_deploy_monitor', 'refresh_service_sablier_task'):
+        from apps.deployments.tasks.deployment.tasks_deploy import _post_deploy_monitor, refresh_service_sablier_task, resume_deploy_task, smart_deploy_task
         module = sys.modules[__name__]
         module.smart_deploy_task = smart_deploy_task
         module.resume_deploy_task = resume_deploy_task
         module._post_deploy_monitor = _post_deploy_monitor
+        module.refresh_service_sablier_task = refresh_service_sablier_task
         return module.__dict__[name]
     if name == 'enqueue_smart_deploy_task':
         from apps.deployments.tasks.deploy.helpers import enqueue_smart_deploy_task
         module = sys.modules[__name__]
         module.enqueue_smart_deploy_task = enqueue_smart_deploy_task
         return module.enqueue_smart_deploy_task
+    if name == '_poll_remote_deployment':
+        from apps.deployments.tasks.remote.core import _poll_remote_deployment
+        module = sys.modules[__name__]
+        module._poll_remote_deployment = _poll_remote_deployment
+        return module._poll_remote_deployment
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # ── Re-exports for the old tasks_deploy_remote inline import ──────

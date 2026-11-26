@@ -40,8 +40,9 @@ def iter_repo_files(
     Symbolic links are not followed.
     """
     total = 0
-    for root, _, filenames in os.walk(repo_path, followlinks=False):
-        for filename in filenames:
+    for root, dirs, filenames in os.walk(repo_path, followlinks=False):
+        dirs.sort()
+        for filename in sorted(filenames):
             abs_path = os.path.join(root, filename)
             size = _safe_getsize(abs_path)
             if total + size > max_total_bytes:
@@ -64,8 +65,9 @@ def walk_repo_with_cap(
     total = 0
     count = 0
     capped = False
-    for root, _, filenames in os.walk(repo_path, followlinks=False):
-        for filename in filenames:
+    for root, dirs, filenames in os.walk(repo_path, followlinks=False):
+        dirs.sort()
+        for filename in sorted(filenames):
             abs_path = os.path.join(root, filename)
             size = _safe_getsize(abs_path)
             if total + size > max_total_bytes:

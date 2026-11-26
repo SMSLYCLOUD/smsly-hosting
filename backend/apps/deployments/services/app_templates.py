@@ -437,16 +437,6 @@ APP_TEMPLATES: dict[str, AppTemplate] = {
         volumes=['/var/lib/registry'],
         docs_url='https://hub.docker.com/_/registry',
     ),
-    'portainer': AppTemplate(
-        id='portainer',
-        name='Portainer',
-        description='Container management UI for Docker, Swarm, and Kubernetes.',
-        category='dev-tools',
-        docker_image='portainer/portainer-ce:latest',
-        default_port=9443,
-        volumes=['/data', '/var/run/docker.sock:/var/run/docker.sock'],
-        docs_url='https://hub.docker.com/r/portainer/portainer-ce',
-    ),
 
     # ===== ANALYTICS & MONITORING =====
     'metabase': AppTemplate(

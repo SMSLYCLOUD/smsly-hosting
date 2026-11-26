@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Scaling, Activity, Cpu, Server, Layers, Radio, AlertTriangle,
@@ -102,6 +102,10 @@ export default function AutoscalerPage() {
   const [pendingTimer, setPendingTimer] = useState<{ task_id: string; fires_at: string; actor: string } | null>(null);
   const [nodes, setNodes] = useState<AutoscalerNode[]>([]);
   const [nodeBusy, setNodeBusy] = useState<string | null>(null);
+  const seededConfigRef = useRef(false);
+  const dirtyConfigRef = useRef(false);
+  const draggingSliderRef = useRef(false);
+  const seededAlertConfigRef = useRef(false);
 
   const handleDrainNode = async (nodeId: string, nodeName: string) => {
     if (!await confirm({ title: `Drain node ${nodeName}?`, message: 'Destroys all replicas on this node and stops new placements.', confirmText: 'Drain', variant: 'destructive' })) return;
@@ -259,8 +263,9 @@ export default function AutoscalerPage() {
       setNodes(nodeList);
       refreshTimer().catch(() => {});
 
-      // Initialize local config from status if not edited
-      if (!localConfig && s) {
+      // Initialize local config from status once (don't re-seed on polls or overwrite dirty edits)
+      if (!seededConfigRef.current && !dirtyConfigRef.current && s) {
+        seededConfigRef.current = true;
         setLocalConfig({
           total_system_mb: s.budget.total_system_mb,
           infra_reserve_mb: s.budget.infra_reserve_mb,
@@ -275,6 +280,20 @@ export default function AutoscalerPage() {
           }), {})
         });
       }
+
+      // Fetch persisted alert config once on initial load
+      if (!seededAlertConfigRef.current && svcList.length > 0) {
+        seededAlertConfigRef.current = true;
+        scalingApi.getAlertConfig(svcList[0].id)
+          .then((cfg) => {
+            if (cfg && typeof cfg === 'object' && Object.keys(cfg).length > 0) {
+              setAlertConfig((prev) => ({ ...prev, ...(cfg as Partial<typeof prev>) }));
+            }
+          })
+          .catch(() => {
+            seededAlertConfigRef.current = false;
+          });
+      }
     } catch (err: unknown) {
       // Silently handle 503 (service not installed) — show offline state
       const is503 = (err as { response?: { status?: number } })?.response?.status === 503;
@@ -288,7 +307,7 @@ export default function AutoscalerPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [historyDuration, localConfig]);
+  }, [historyDuration]);
 
   useEffect(() => {
     fetchData();
@@ -296,7 +315,10 @@ export default function AutoscalerPage() {
 
   useEffect(() => {
     if (!autoRefresh) return;
-    const interval = setInterval(fetchData, 10000); // 10s poll
+    const interval = setInterval(() => {
+      if (draggingSliderRef.current) return;
+      void fetchData();
+    }, 10000); // 10s poll
     return () => clearInterval(interval);
   }, [autoRefresh, fetchData]);
 
@@ -316,6 +338,8 @@ export default function AutoscalerPage() {
   const handleSaveConfig = async () => {
     try {
       await autoscalerApi.updateConfig(localConfig);
+      dirtyConfigRef.current = false;
+      seededConfigRef.current = false;
       toast({ title: "Configuration Saved", description: "Autoscaler settings updated." });
       setConfigOpen(false);
       fetchData();
@@ -1265,7 +1289,12 @@ export default function AutoscalerPage() {
                             <Slider
                               value={[localConfig.total_system_mb]}
                               min={1024} max={131072} step={512}
-                              onValueChange={([v]) => setLocalConfig({...localConfig, total_system_mb: v})}
+                              onValueChange={([v]) => {
+                                dirtyConfigRef.current = true;
+                                draggingSliderRef.current = true;
+                                setLocalConfig((prev: any) => ({...prev, total_system_mb: v}));
+                              }}
+                              onValueCommit={() => { draggingSliderRef.current = false; }}
                             />
                           </div>
                           <div className="space-y-3">
@@ -1276,7 +1305,12 @@ export default function AutoscalerPage() {
                             <Slider
                               value={[localConfig.infra_reserve_mb]}
                               min={512} max={32768} step={128}
-                              onValueChange={([v]) => setLocalConfig({...localConfig, infra_reserve_mb: v})}
+                              onValueChange={([v]) => {
+                                dirtyConfigRef.current = true;
+                                draggingSliderRef.current = true;
+                                setLocalConfig((prev: any) => ({...prev, infra_reserve_mb: v}));
+                              }}
+                              onValueCommit={() => { draggingSliderRef.current = false; }}
                             />
                           </div>
                        </div>
@@ -1284,6 +1318,24 @@ export default function AutoscalerPage() {
 
                      <div className="flex justify-end gap-3 pt-4 border-t border-border/50">
                        <Button variant="ghost" onClick={() => {
+                         dirtyConfigRef.current = false;
+                         seededConfigRef.current = false;
+                         if (status) {
+                           seededConfigRef.current = true;
+                           setLocalConfig({
+                             total_system_mb: status.budget.total_system_mb,
+                             infra_reserve_mb: status.budget.infra_reserve_mb,
+                             check_interval: status.check_interval,
+                             services: Object.entries(status.services).reduce((acc, [name, svc]) => ({
+                               ...acc,
+                               [name]: {
+                                 priority: svc.priority,
+                                 min_workers: svc.min_workers,
+                                 max_workers: svc.max_workers
+                               }
+                             }), {})
+                           });
+                         }
                          fetchData(); // Reset
                        }}>Reset to Current</Button>
                        <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={handleSaveConfig}>

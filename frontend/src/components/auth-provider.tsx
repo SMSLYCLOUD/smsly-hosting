@@ -1,6 +1,8 @@
 "use client";
 
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
+import { Loader2 } from "lucide-react";
 import api from "@/lib/api";
 import { clearAuthCookies } from "@/lib/auth-cookies";
 import {
@@ -50,92 +52,123 @@ const AUTH_REVALIDATE_INTERVAL = 60_000;
 const MAX_REVALIDATION_FAILURES = 2;
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname() || "/";
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [transientError, setTransientError] = useState(false);
   const revalidateTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const consecutiveFailures = useRef(0);
 
-  useEffect(() => {
-    const fetchUser = async (isRevalidate = false) => {
-      try {
-        const res = await api.get("/auth/user/");
-        setUser(res.data);
-        consecutiveFailures.current = 0;
-        if (!isRevalidate) resetRedirectGuard();
+  const fetchUser = useCallback(async (isRevalidate = false) => {
+    try {
+      const res = await api.get("/auth/user/");
+      setUser(res.data);
+      setTransientError(false);
+      consecutiveFailures.current = 0;
+      if (!isRevalidate) resetRedirectGuard();
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 401) {
+        if (revalidateTimer.current) {
+          clearInterval(revalidateTimer.current);
+          revalidateTimer.current = null;
+        }
+        setTransientError(false);
+        clearAuthCookies();
+        setUser(null);
 
         const path = window.location.pathname;
-        if (isAuthPage(path)) {
-          if (canRedirectToLogin()) {
-            window.location.replace("/dashboard");
-          }
+        if (isProtectedPath(path) && canRedirectToLogin()) {
+          window.location.replace("/login");
         }
-
-        // Role-based redirect: if the user lacks permission for the current
-        // route, redirect to the fallback page.
-        if (!isRevalidate) {
-          const req = getRequiredPermissions(path);
-          if (req) {
-            const userPerms: string[] = res.data?.permissions ?? [];
-            const hasAccess =
-              res.data?.is_superuser ||
-              req.permissions.some((p: string) => userPerms.includes(p));
-            if (!hasAccess && canRedirectToLogin()) {
-              window.location.replace(req.redirect);
-            }
-          }
-        }
-      } catch {
-        consecutiveFailures.current += 1;
-
-        // Stop the revalidation timer once we exceed the failure limit.
-        // This prevents dead sessions from hammering the server every 60s.
-        if (isRevalidate && consecutiveFailures.current > MAX_REVALIDATION_FAILURES) {
-          if (revalidateTimer.current) {
-            clearInterval(revalidateTimer.current);
-            revalidateTimer.current = null;
-          }
-        }
-
-        // On the first revalidation failure, don't kill the session yet —
-        // it might be a transient error (network blip, Docker restart, etc.).
-        // Only kill the session on the initial load or after exceeding the
-        // failure limit.
-        if (!isRevalidate || consecutiveFailures.current > MAX_REVALIDATION_FAILURES) {
-          // The api interceptor already called POST /api/v1/auth/logout/ to
-          // clear the HttpOnly cookie. We just need to clear client state
-          // and redirect.
-          clearAuthCookies();
-          setUser(null);
-
-          const path = window.location.pathname;
-          if (isProtectedPath(path) && canRedirectToLogin()) {
-            window.location.replace("/login");
-          }
-        }
-      } finally {
-        setLoading(false);
+        return;
       }
-    };
 
-    fetchUser();
+      consecutiveFailures.current += 1;
+      if (!isRevalidate) {
+        setTransientError(true);
+      }
 
-    // Periodic revalidation — detects stale sessions without waiting
-    // for an API call to return 401.  If the token has expired, the
-    // user is redirected to /login before they see broken UI.
+      // Stop the revalidation timer once we exceed the failure limit so
+      // prolonged outages don't hammer the server, without clearing cookies.
+      if (isRevalidate && consecutiveFailures.current > MAX_REVALIDATION_FAILURES) {
+        if (revalidateTimer.current) {
+          clearInterval(revalidateTimer.current);
+          revalidateTimer.current = null;
+        }
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchUser(false);
+  }, [fetchUser]);
+
+  // Gate periodic revalidation on an active authenticated user so public
+  // pages (/login, /register, /store) never poll /auth/user/ unnecessarily.
+  const hasUser = Boolean(user);
+  useEffect(() => {
+    if (!hasUser) {
+      if (revalidateTimer.current) {
+        clearInterval(revalidateTimer.current);
+        revalidateTimer.current = null;
+      }
+      return;
+    }
+
     revalidateTimer.current = setInterval(() => {
-      fetchUser(true);
+      void fetchUser(true);
     }, AUTH_REVALIDATE_INTERVAL);
 
     return () => {
       if (revalidateTimer.current) {
         clearInterval(revalidateTimer.current);
+        revalidateTimer.current = null;
       }
     };
-  }, []);
+  }, [hasUser, fetchUser]);
+
+  // Re-evaluate route auth and role permissions on every client-side navigation.
+  useEffect(() => {
+    if (loading) return;
+
+    if (!user) {
+      if (!transientError && isProtectedPath(pathname) && canRedirectToLogin()) {
+        window.location.replace("/login");
+      }
+      return;
+    }
+
+    if (isAuthPage(pathname) && canRedirectToLogin()) {
+      window.location.replace("/dashboard");
+      return;
+    }
+
+    const req = getRequiredPermissions(pathname);
+    if (req) {
+      const userPerms: string[] = user.permissions ?? [];
+      const hasAccess =
+        user.is_superuser ||
+        req.permissions.some((p: string) => userPerms.includes(p));
+      if (!hasAccess && canRedirectToLogin()) {
+        window.location.replace(req.redirect);
+      }
+    }
+  }, [pathname, user, loading, transientError]);
+
+  const hideProtectedContent = isProtectedPath(pathname) && (loading || !user);
 
   return (
     <AuthContext.Provider value={{ user, loading }}>
-      {children}
+      {hideProtectedContent ? (
+        <div className="min-h-screen flex items-center justify-center bg-background">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-label="Checking session" />
+        </div>
+      ) : (
+        children
+      )}
     </AuthContext.Provider>
   );
 }

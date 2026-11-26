@@ -68,6 +68,9 @@ jobs:
       run: pip check
     - name: Run Django Check
       working-directory: ./backend
+      env:
+        GATEWAY_SECRET: "ci-gateway-secret"
+        REDIS_PASSWORD: "ci-redis-password"
       run: |
         python manage.py check
         python manage.py check --deploy
@@ -127,12 +130,13 @@ jobs:
         touch .env
         echo "REDIS_PASSWORD=dummy" >> .env
         echo "POSTGRES_PASSWORD=dummy" >> .env
+        echo "PGCAT_ADMIN_PASSWORD=dummy" >> .env
+        echo "RABBITMQ_PASSWORD=dummy" >> .env
         echo "FIELD_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" >> .env
         echo "SECRET_KEY=dummy" >> .env
         echo "FRP_AUTH_TOKEN=dummy" >> .env
     - name: Validate Compose Config
       run: |
-        docker compose -f docker-compose.yml config > /dev/null
         docker compose -f docker-compose.prod.yml config > /dev/null
 
   sca:
@@ -239,8 +243,10 @@ jobs:
           format: cyclonedx
           output: sbom-frontend.json
       - name: Set up Cosign
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: sigstore/cosign-installer@59acb6260d86c0f8a58fa4c3ddb032a715305043 # v3.5.0
       - name: Sign SBOMs with Cosign
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
           for sbom in sbom-*.json; do
             cosign sign-blob --yes "$sbom" \
@@ -248,7 +254,7 @@ jobs:
               --output-certificate "$sbom.cert"
           done
       - name: Upload SBOMs and signatures
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sboms
           path: |
@@ -327,7 +333,122 @@ jobs:
             echo "Users should verify before executing: \`sha256sum -c install.sh.sha256\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload checksum artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: install-sha256
           path: install.sh.sha256
+
+  root-unittest:
+    name: Root Python Unittests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install cryptography, pyyaml, and pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install cryptography pyyaml pytest
+      - name: Run root unit tests
+        run: pytest tests/ -o addopts="" -v
+
+  shell-and-bundle:
+    name: Shell Syntax & Installer Bundle Parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Validate shell syntax (bash -n)
+        run: |
+          bash -n install.sh backend/install.sh
+          for f in lib/*.sh scripts/*.sh; do
+            bash -n "$f"
+          done
+      - name: Verify installer bundle parity
+        run: bash scripts/regen-bundle.sh --check
+
+  go-services:
+    name: Go Services (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [cryptd, napd, edge-sidecar]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Vet, Test (-race), and Build ${{ matrix.module }}
+        run: |
+          set -euo pipefail
+          use_host_go=false
+          if command -v go >/dev/null 2>&1; then
+            ver="$(go version | sed -n 's/.*go\([0-9]*\)\.\([0-9]*\).*/\1.\2/p' | head -n 1)"
+            maj="${ver%%.*}"; min="${ver#*.}"
+            if [ -n "$maj" ] && [ -n "$min" ] && { [ "$maj" -gt 1 ] || { [ "$maj" -eq 1 ] && [ "$min" -ge 22 ]; }; }; then
+              use_host_go=true
+            fi
+          fi
+          if [ "$use_host_go" = "true" ]; then
+            cd "${{ matrix.module }}"
+            go vet ./...
+            go test -race ./...
+            go build ./...
+          else
+            docker run --rm -v "$PWD:/src" -w "/src/${{ matrix.module }}" golang:1.22 \
+              sh -c 'go vet ./... && go test -race ./... && go build ./...'
+          fi
+
+  helm-validate:
+    name: Helm Lint & Template Matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Helm lint and template matrix
+        run: |
+          set -euo pipefail
+          helm version
+          helm lint charts/smsly-hosting \
+            --set global.environment=production \
+            --set secrets.secretKey=ci-secret-key-1234567890 \
+            --set secrets.dbPassword=ci-db-password-1234567890 \
+            --set secrets.redisPassword=ci-redis-password-1234567890 \
+            --set secrets.fieldEncryptionKey=ci-fernet-key-1234567890 \
+            --set secrets.githubWebhookSecret=ci-webhook-secret-1234567890 \
+            --set secrets.gatewaySecret=ci-gateway-secret-1234567890 \
+            --set secrets.rabbitmqPassword=ci-rabbitmq-password-1234567890 \
+            --set backend.env.allowedHosts=smsly.cloud
+          helm template smsly charts/smsly-hosting -f charts/smsly-hosting/values.prod.yaml \
+            --set secrets.secretKey=ci-secret-key-1234567890 \
+            --set secrets.dbPassword=ci-db-password-1234567890 \
+            --set secrets.redisPassword=ci-redis-password-1234567890 \
+            --set secrets.fieldEncryptionKey=ci-fernet-key-1234567890 \
+            --set secrets.githubWebhookSecret=ci-webhook-secret-1234567890 \
+            --set secrets.gatewaySecret=ci-gateway-secret-1234567890 \
+            --set secrets.rabbitmqPassword=ci-rabbitmq-password-1234567890 \
+            --set backend.env.allowedHosts=smsly.cloud > /dev/null
+          helm template smsly charts/smsly-hosting \
+            --set global.environment=production \
+            --set secrets.secretKey=ci-secret-key-1234567890 \
+            --set secrets.dbPassword=ci-db-password-1234567890 \
+            --set secrets.fieldEncryptionKey=ci-fernet-key-1234567890 \
+            --set secrets.githubWebhookSecret=ci-webhook-secret-1234567890 \
+            --set secrets.gatewaySecret=ci-gateway-secret-1234567890 \
+            --set secrets.rabbitmqPassword=ci-rabbitmq-password-1234567890 \
+            --set backend.env.allowedHosts=smsly.cloud \
+            --set redis.auth.enabled=false > /dev/null
+          helm template smsly charts/smsly-hosting \
+            --set global.environment=production \
+            --set secrets.existingSecret=ci-existing-secret \
+            --set backend.env.allowedHosts=smsly.cloud > /dev/null
+          bash charts/smsly-hosting/tests/run-validator-tests.sh

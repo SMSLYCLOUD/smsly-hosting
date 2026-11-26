@@ -18,7 +18,7 @@ def platform_update_task(self, update_id: str):
     """Execute platform update in background."""
     from apps.deployments.services.platform_updater import perform_update
 
-    from .models.updates import PlatformUpdate
+    from apps.deployments.models.updates import PlatformUpdate
 
     try:
         update = PlatformUpdate.objects.get(id=update_id)
@@ -47,7 +47,7 @@ def platform_rollback_task(self, update_id: str):
     from django.core.cache import cache
     from apps.deployments.services.platform_updater import _rollback
 
-    from .models.updates import PlatformUpdate
+    from apps.deployments.models.updates import PlatformUpdate
 
     lock_key = f"platform-rollback:{update_id}"
     if not cache.add(lock_key, "1", timeout=1800):

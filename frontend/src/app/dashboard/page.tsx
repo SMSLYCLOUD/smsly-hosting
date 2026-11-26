@@ -153,10 +153,10 @@ export default function DashboardPage() {
 
   const getStatusBorderColor = (status: string) => {
     switch (status) {
-      case "healthy": return "border-l-[var(--status-healthy)]";
-      case "degraded": return "border-l-[var(--status-degraded)]";
-      case "critical": return "border-l-[var(--status-critical)]";
-      default: return "border-l-[var(--status-offline)]";
+      case "healthy": return "border-l-[hsl(var(--status-healthy))]";
+      case "degraded": return "border-l-[hsl(var(--status-degraded))]";
+      case "critical": return "border-l-[hsl(var(--status-critical))]";
+      default: return "border-l-[hsl(var(--status-offline))]";
     }
   };
 
@@ -202,6 +202,8 @@ export default function DashboardPage() {
                 </p>
               </div>
               <button
+                type="button"
+                aria-label="Dismiss password warning"
                 onClick={() => {
                   setShowPasswordWarning(false);
                   localStorage.setItem('password_warning_dismissed', 'true');

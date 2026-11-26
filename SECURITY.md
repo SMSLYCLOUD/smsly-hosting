@@ -20,13 +20,16 @@ We aim to acknowledge within 48 hours and provide a remediation timeline within 
 
 ## Security Model
 
-Trulay Grid is a self-hosted PaaS control plane. The threat model assumes:
+Trulay Grid is a self-hosted PaaS control plane. The threat model and default posture assume:
 
-- The host machine is trusted (operator's responsibility)
-- Internal Docker network traffic is partially trusted (HMAC-signed for control-plane calls)
+- The host machine is trusted (operator's responsibility), with UFW + `DOCKER-USER` firewall isolation for internal ports
+- Startup fails closed if required secrets (`SECRET_KEY`, `FIELD_ENCRYPTION_KEY`) are missing
+- Observability & access controls default closed (`GRAFANA_ANON_ENABLED=false`, `SMSLY_DISABLE_TIER_GATES=false`, SPIRE `insecure_bootstrap=false`)
+- Internal Docker network traffic is authenticated (HMAC-V2 for control-plane calls; optional SPIFFE/SPIRE mTLS)
 - External traffic terminates at Caddy/Traefik with TLS 1.2+
 - All stored secrets are encrypted at rest (Fernet, key in `.env`)
-- SSH host-key verification is enforced by default (`SMSLY_STRICT_SSH_HOST_KEY_CHECK=True`)
+- Egress mirror applies both nginx `$host` SSRF filtering and kernel `iptables` `OUTPUT` restrictions against loopback/RFC1918/link-local/CGNAT targets
+- SSH host-key verification is enforced by default (`SMSLY_STRICT_SSH_HOST_KEY_CHECK=True`, `ALLOW_SSH_AUTOADD=False`)
 
 ## Acknowledgements
 

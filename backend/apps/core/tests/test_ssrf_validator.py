@@ -1,3 +1,5 @@
+from unittest import mock
+import socket
 import pytest
 from apps.core.validators import validate_ssrf
 from django.core.exceptions import ValidationError
@@ -6,7 +8,11 @@ from django.core.exceptions import ValidationError
 def test_ssrf_valid_paths():
     validate_ssrf('/health')
     validate_ssrf('/api/v1/status')
-    validate_ssrf('https://api.github.com/status')
+    with mock.patch(
+        'socket.getaddrinfo',
+        return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('140.82.121.6', 0))],
+    ):
+        validate_ssrf('https://api.github.com/status')
     validate_ssrf('status')
 
 def test_ssrf_blocked_hosts():

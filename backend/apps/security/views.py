@@ -342,11 +342,12 @@ class SecurityFindingsListView(GenericAPIView):
             assert_can_write(request.user, target_svc, action="run security scan")
             svcs = svcs.filter(id=svc_id)
         elif not _is_platform_admin(request.user):
-            # Ensure non-admin callers have write permission on at least one scoped service
-            # (blocks read-only Team VIEWERs from triggering DB-mutating scans).
-            first_svc = svcs.first()
-            if first_svc is not None:
+            from apps.teams.permissions import user_can_write
+            writable_ids = [s.id for s in svcs if user_can_write(request.user, s)]
+            if svcs.exists() and not writable_ids:
+                first_svc = svcs.first()
                 assert_can_write(request.user, first_svc, action="run security scan")
+            svcs = svcs.filter(id__in=writable_ids)
 
         results: dict[str, Any] = {
             "dspm": run_dspm_audit(service_qs=svcs),
@@ -661,6 +662,17 @@ class SecurityForensicsListView(GenericAPIView):
         qs = ForensicSnapshot.objects.filter(service__in=svcs).select_related("service")
         if svc_id:
             qs = qs.filter(service_id=svc_id)
+        from apps.deployments.utils.log_scrub import mask_secrets_in_text
+
+        def _scrub_bundle(val):
+            if isinstance(val, str):
+                return mask_secrets_in_text(val) or ""
+            if isinstance(val, list):
+                return [_scrub_bundle(item) for item in val]
+            if isinstance(val, dict):
+                return {k: _scrub_bundle(v) for k, v in val.items()}
+            return val
+
         items = [
             {
                 "id": str(s.id),
@@ -670,7 +682,7 @@ class SecurityForensicsListView(GenericAPIView):
                 "trigger": s.trigger,
                 "captured_by": s.captured_by,
                 "sha256_digest": s.sha256_digest,
-                "bundle": s.bundle,
+                "bundle": _scrub_bundle(s.bundle),
                 "created_at": s.created_at.isoformat(),
             }
             for s in qs[:50]
@@ -683,6 +695,10 @@ class SecurityAiHuntView(GenericAPIView):
 
     serializer_class = EmptySerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_throttles(self):
+        from apps.core.rate_limiting import AIChatRateThrottle
+        return [AIChatRateThrottle()]
 
     def post(self, request):
         raw_query = str(request.data.get("query") or "").strip()
@@ -720,6 +736,11 @@ class SecurityAiHuntView(GenericAPIView):
                 )
 
         sanitized_q = guard["sanitized_prompt"]
+        from apps.intelligence.views import _check_user_cap, _record_usage
+        cap_ok, cap_reason = _check_user_cap(request.user)
+        if not cap_ok:
+            return Response({"error": cap_reason}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
         svcs = _user_services_qs(request)
         open_findings = list(
             _scoped_findings_qs(request)
@@ -751,6 +772,7 @@ class SecurityAiHuntView(GenericAPIView):
             ai_res, _provider = ask_with_fallback(prompt, mode="fast")
             if ai_res and isinstance(ai_res, str) and len(ai_res.strip()) > 15:
                 answer = ai_res.strip()
+                _record_usage(request.user, _provider or "fallback", "fast", {}, prompt_text=prompt, response_text=answer)
         except Exception:
             answer = ""
 

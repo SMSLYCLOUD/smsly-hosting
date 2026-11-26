@@ -19,6 +19,8 @@ from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
 
 logger = logging.getLogger(__name__)
 
+MESH_DNS_LOCK_KEY = "mesh-dns-sync-lock"
+
 
 @shared_task(
     name="apps.deployments.tasks.infra.tasks_mesh_dns.sync_mesh_dns_task",
@@ -27,7 +29,7 @@ logger = logging.getLogger(__name__)
 )
 def sync_mesh_dns_task():
     """Regenerate the CoreDNS mesh zone from the mesh peer rows."""
-    if not cache.add("mesh-dns-sync-lock", "1", timeout=120):
+    if not cache.add(MESH_DNS_LOCK_KEY, "1", timeout=120):
         logger.debug("Mesh DNS sync skipped — another sync is running")
         return {"ok": True, "skipped": True, "message": "sync already running"}
     try:
@@ -43,7 +45,7 @@ def sync_mesh_dns_task():
         logger.error("Mesh DNS sync raised: %s", exc)
         return {"ok": False, "message": str(exc)}
     finally:
-        cache.delete("mesh-dns-sync-lock")
+        cache.delete(MESH_DNS_LOCK_KEY)
 
 
 def queue_mesh_dns_sync() -> None:

@@ -22,7 +22,13 @@ logger = logging.getLogger(__name__)
 # Reserved labels that cannot be used as subdomains
 # Only block subdomains that would conflict with the platform's own HTTP routing
 # or that are reserved by IANA/RFC for special use.
-RESERVED_LABELS = frozenset({'admin', 'api', 'mail', 'smtp', 'imap'})
+RESERVED_LABELS = frozenset({
+    'admin', 'api', 'mail', 'smtp', 'imap',
+    'platform', 'dashboard', 'www', 'root', 'ssh', 'git',
+    'cdn', 'assets', 'static', 'status', 'auth', 'login',
+    'oauth', 'sso', 'billing', 'docs', 'blog', 'app',
+    'console', 'proxy', 'traefik', 'caddy', 'registry',
+})
 
 # Max subdomains per user (adjustable per tier in future)
 MAX_SUBDOMAINS_PER_USER = 5
@@ -52,7 +58,7 @@ def subdomains_list_create(request):
     """
     if request.method == 'GET':
         qs = ReservedSubdomain.objects.filter(
-            owner=request.user, is_active=True,
+            owner=request.user, is_active=True, released_at__isnull=True,
         )
         serializer = ReservedSubdomainSerializer(qs, many=True)
         return Response({
@@ -67,15 +73,25 @@ def subdomains_list_create(request):
             {'error': 'subdomain is required'},
             status=status.HTTP_400_BAD_REQUEST)
 
+    if not subdomain.isascii():
+        return Response(
+            {'error': 'Subdomain contains disallowed non-ASCII characters.'},
+            status=status.HTTP_400_BAD_REQUEST)
+
     if not SUBDOMAIN_RE.match(subdomain):
         return Response(
             {'error': 'Subdomain must be lowercase alphanumeric with hyphens, '
                       '1-63 chars, cannot start/end with hyphen.'},
             status=status.HTTP_400_BAD_REQUEST)
 
+    if subdomain in RESERVED_LABELS:
+        return Response(
+            {'error': f"Subdomain '{subdomain}' is reserved and cannot be used."},
+            status=status.HTTP_400_BAD_REQUEST)
+
     # Check limit
     count = ReservedSubdomain.objects.filter(
-        owner=request.user, is_active=True,
+        owner=request.user, is_active=True, released_at__isnull=True,
     ).count()
     if count >= MAX_SUBDOMAINS_PER_USER:
         return Response(

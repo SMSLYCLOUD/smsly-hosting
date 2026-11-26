@@ -17,7 +17,9 @@ class PipelineCloneTests(SimpleTestCase):
             target_dir = Path(tmp) / "repo"
 
             def fake_run(cmd, **kwargs):
-                self.assertEqual(cmd[-1], str(target_dir))
+                clone_dest = Path(cmd[-1])
+                self.assertEqual(clone_dest.parent, Path(tmp))
+                self.assertTrue(clone_dest.name.startswith(".clone_tmp_"))
                 self.assertFalse(target_dir.exists())
 
                 askpass_path = Path(kwargs["env"]["GIT_ASKPASS"])
@@ -28,7 +30,7 @@ class PipelineCloneTests(SimpleTestCase):
                 return subprocess.CompletedProcess(cmd, 0)
 
             with patch(
-                "apps.deployments.services.pipeline.subprocess.run",
+                "apps.deployments.services.pipeline.clone.subprocess.run",
                 side_effect=fake_run,
             ) as mock_run:
                 manager._clone_with_github_token(

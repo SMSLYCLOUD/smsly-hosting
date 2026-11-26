@@ -92,6 +92,76 @@ class AddonSerializer(serializers.ModelSerializer):
         read_only_fields = ['status', 'connection_url', 'volume_encryption', 'created_at']
         extra_kwargs = {'provision_mode': {'allow_blank': True}}
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance is not None:
+            for ro_field in ('service', 'addon_type'):
+                if ro_field in self.fields:
+                    self.fields[ro_field].read_only = True
+
+    def validate_name(self, value):
+        cleaned = str(value or '').strip()
+        if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}', cleaned):
+            raise serializers.ValidationError(
+                "Addon name must start with an alphanumeric character and contain only "
+                "letters, digits, '.', '_' or '-' (max 63 chars)."
+            )
+        low = cleaned.lower()
+        from apps.deployments.constants import (
+            PLATFORM_RESERVED_CONTAINER_NAMES,
+            PLATFORM_RESERVED_CONTAINER_PREFIXES,
+        )
+        if (
+            low in PLATFORM_RESERVED_CONTAINER_NAMES
+            or low.startswith(PLATFORM_RESERVED_CONTAINER_PREFIXES)
+            or low in {'postgres', 'shared_replicator'}
+        ):
+            raise serializers.ValidationError(
+                f"Addon name '{cleaned}' is reserved for platform infrastructure."
+            )
+        request = self.context.get('request') if isinstance(self.context, dict) else None
+        if request is not None:
+            user = getattr(request, 'user', None)
+            is_superuser = bool(user and getattr(user, 'is_superuser', False))
+            if low.endswith('-shared') and not is_superuser:
+                raise serializers.ValidationError(
+                    "Addon names ending in '-shared' are reserved for platform administrators."
+                )
+        return cleaned
+
+    def validate_public_domain(self, value):
+        if value is None or str(value).strip() == '':
+            return None
+        from apps.domains.utils import normalize_domain
+        from apps.deployments.views._helpers import _is_platform_owned_domain
+        from apps.domains.models import Domain
+        try:
+            domain = normalize_domain(str(value).strip())
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc))
+        if _is_platform_owned_domain(domain):
+            raise serializers.ValidationError(
+                "This domain belongs to the platform and cannot be assigned to an addon."
+            )
+        if Service.objects.filter(public_domain__iexact=domain).exists() or Service.objects.filter(
+            custom_domains__contains=[domain]
+        ).exists():
+            raise serializers.ValidationError(
+                f"Domain '{domain}' is already assigned to a service."
+            )
+        if Domain.objects.filter(domain_name__iexact=domain).exists():
+            raise serializers.ValidationError(
+                f"Domain '{domain}' is already registered as a service domain."
+            )
+        qs = Addon.objects.filter(public_domain__iexact=domain)
+        if self.instance is not None:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError(
+                f"Domain '{domain}' is already assigned to another addon."
+            )
+        return domain
+
     def get_volume_encryption(self, obj):
         from apps.addons.services.volume_encryption import get_sanitized_status
         return get_sanitized_status(obj)
@@ -126,6 +196,13 @@ class AddonViewSet(viewsets.ModelViewSet):
     serializer_class = AddonSerializer
     permission_classes = [IsAuthenticated]
 
+    def get_throttles(self):
+        throttles = super().get_throttles()
+        if self.action == 'destroy':
+            from apps.core.rate_limiting import AddonDeleteRateThrottle
+            throttles.append(AddonDeleteRateThrottle())
+        return throttles
+
     # ==========================================================================
     # SECURITY: Zero Trust - Only return addons for user's own services
     # ==========================================================================
@@ -145,20 +222,43 @@ class AddonViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         # SECURITY: Verify user has access to the service before creating addon
+        from django.db import transaction
+        from rest_framework.exceptions import PermissionDenied
+
         service = serializer.validated_data.get('service')
         if service:
             assert_can_write(self.request.user, service, action='create addon')
 
-        addon = serializer.save()
+        with transaction.atomic():
+            if not bool(getattr(settings, 'SMSLY_DISABLE_TIER_GATES', False)):
+                from apps.billing.services.metering import UsageMeter
+                allowed, _ = UsageMeter().check_quota(self.request.user, 'ADDON', requested_amount=1)
+                if not allowed:
+                    raise PermissionDenied(
+                        "Addon quota exceeded for your current subscription plan. "
+                        "Upgrade your plan to provision more addons."
+                    )
 
-        # Auto-expose new addons by default
-        if not addon.public_domain:
-            from apps.deployments.models import Service
-            base_domain = Service.default_public_base_domain()
-            short_id = str(addon.id).split('-')[0]
-            slug = re.sub(r'[^a-z0-9]+', '-', addon.addon_type.lower()).strip('-')
-            addon.public_domain = f"addon-{slug}-{short_id}.{base_domain}"
-            addon.save(update_fields=['public_domain'])
+            addon = serializer.save()
+
+            # Auto-expose non-internal addons by default; keep internal DB/cache
+            # addons private unless the caller explicitly requests expose_public.
+            _internal_db_types = {'POSTGRES', 'REDIS', 'MYSQL', 'MONGODB', 'MARIADB'}
+            _expose_raw = getattr(getattr(self, 'request', None), 'data', {}).get('expose_public', False)
+            _expose_public = (
+                _expose_raw if isinstance(_expose_raw, bool)
+                else str(_expose_raw or '').strip().lower() in ('1', 'true', 'yes', 'on')
+            )
+            if not addon.public_domain and (
+                str(addon.addon_type or '').upper() not in _internal_db_types
+                or _expose_public
+            ):
+                from apps.deployments.models import Service
+                base_domain = Service.default_public_base_domain()
+                short_id = str(addon.id).split('-')[0]
+                slug = re.sub(r'[^a-z0-9]+', '-', addon.addon_type.lower()).strip('-')
+                addon.public_domain = f"addon-{slug}-{short_id}.{base_domain}"
+                addon.save(update_fields=['public_domain'])
 
         # Trigger async provisioning via Celery (uses Docker-native
         # provisioner)
@@ -246,8 +346,13 @@ class AddonViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST)
             from apps.deployments.models.core import ManagedServer
             server_id = request.data.get('server_id')
-            remote_server = ManagedServer.objects.filter(id=server_id).first() \
-                if server_id else None
+            if server_id:
+                server_qs = ManagedServer.objects.filter(id=server_id)
+                if not getattr(request.user, 'is_superuser', False):
+                    server_qs = server_qs.filter(owner=request.user)
+                remote_server = server_qs.first()
+            else:
+                remote_server = None
             if (not remote_server or getattr(remote_server, 'is_lite_agent', False)
                     or not getattr(remote_server, 'wg_address', None)):
                 return Response(
@@ -255,7 +360,18 @@ class AddonViewSet(viewsets.ModelViewSet):
                               'with a WireGuard address.'},
                     status=status.HTTP_400_BAD_REQUEST)
 
-        manager = AddonHaManager(network_name=addon_provisioner.network_name)
+        ha_network = addon_provisioner.network_name
+        try:
+            from apps.deployments.models.network_scope import ScopedNetwork
+            project = getattr(getattr(instance, 'service', None), 'project', None)
+            if project:
+                scoped_net = ScopedNetwork.resolve_network_name(project)
+                if scoped_net:
+                    ha_network = scoped_net
+        except Exception:
+            pass
+
+        manager = AddonHaManager(network_name=ha_network)
         instance.ha_status = Addon.HaStatus.ENABLING
         instance.save(update_fields=['ha_status'])
 
@@ -307,7 +423,7 @@ class AddonViewSet(viewsets.ModelViewSet):
         payload = {
             'status': 'healthy',
             'mode': mode,
-            'topology': topology,
+            'topology': {k: v for k, v in topology.items() if k != 'replicator_password'},
         }
         if warning:
             payload['warning'] = warning
@@ -346,6 +462,12 @@ class AddonViewSet(viewsets.ModelViewSet):
                     'connection_url', 'ha_status', 'replica_container_name',
                     'ha_topology',
                 ])
+
+                try:
+                    from apps.addons.services.addon_migrate import _sync_addon_env_vars
+                    _sync_addon_env_vars(instance, old_url=old_url)
+                except Exception:
+                    logger.exception("promote_ha(%s): failed to sync addon env vars", instance.id)
 
                 from apps.addons.tasks.ha_watchdog import _queue_service_redeploys
                 redeployed = _queue_service_redeploys(instance)
@@ -421,7 +543,10 @@ class AddonViewSet(viewsets.ModelViewSet):
             'ha_enabled': instance.ha_enabled,
             'ha_status': instance.ha_status,
             'mode': instance.ha_mode,
-            'topology': instance.ha_topology,
+            'topology': {
+                k: v for k, v in (instance.ha_topology or {}).items()
+                if k != 'replicator_password'
+            },
             'master_container': None,
         }
         if not instance.ha_enabled:
@@ -464,7 +589,7 @@ class AddonViewSet(viewsets.ModelViewSet):
             return Response(shared_ha_status())
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("shared-postgres-ha probe failed: %s", exc, exc_info=True)
-            return Response({'state': 'UNKNOWN', 'error': str(exc)[:200]})
+            return Response({'state': 'UNKNOWN', 'error': 'Shared Postgres probe failed.'})
 
     @action(detail=False, methods=['get'], url_path='shared-pooler-status')
     def shared_pooler_status(self, request):
@@ -477,7 +602,7 @@ class AddonViewSet(viewsets.ModelViewSet):
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("shared-pooler-status probe failed: %s", exc, exc_info=True)
             return Response({'enabled': False, 'container': None, 'pools': [],
-                             'error': str(exc)[:200]})
+                             'error': 'Shared pooler probe failed.'})
 
     @action(detail=False, methods=['post'], url_path='shared-pooler-push')
     def shared_pooler_push(self, request):
@@ -489,10 +614,12 @@ class AddonViewSet(viewsets.ModelViewSet):
             result = push_tenants_config()
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("shared-pooler-push failed: %s", exc, exc_info=True)
-            return Response({'ok': False, 'error': str(exc)[:300]},
+            return Response({'ok': False, 'error': 'Failed to push shared pooler configuration.'},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         if not result.get('ok'):
-            return Response(result, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.warning("shared-pooler-push returned failure: %s", result)
+            return Response({'ok': False, 'error': 'Failed to push shared pooler configuration.'},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         return Response(result)
 
     @action(detail=True, methods=['post'], url_path='migrate-mode')
@@ -540,54 +667,123 @@ class AddonViewSet(viewsets.ModelViewSet):
         return Response({'status': 'queued', 'task_id': task_id, 'target_mode': target},
                         status=status.HTTP_202_ACCEPTED)
 
-    @action(detail=True, methods=['post'], url_path='start')
-    def start_container(self, request, pk=None):
-        """Start a stopped addon container (on-demand spin-up).
+    @staticmethod
+    def _power_addon_container(instance, action: str) -> Response:
+        """Start or stop a dedicated addon container (local or remote node)."""
+        from ..models import Addon
+        from ..services.addon_provisioner import addon_container_name
 
-        Only applies to container-provisioned addons. Shared/pooled addons
-        have no container to start.
-        """
-        instance = self.get_object()
-        assert_can_write(self.request.user, instance.service, action='start addon')
-        try:
-            import docker
-            client = docker.from_env()
-            name = f"smsly-addon-{str(instance.addon_type).lower()}-{instance.id}"
-            container = client.containers.get(name)
-            if container.status == 'running':
-                return Response({'status': 'already_running', 'container': name})
-            container.start()
-            return Response({'status': 'started', 'container': name})
-        except Exception as exc:
-            logger.warning("Addon container start failed for %s: %s", pk, exc)
+        if str(getattr(instance, 'provision_mode', '') or '').strip().lower() == 'shared':
             return Response(
-                {'error': 'Start failed (container may not exist for shared addons).'},
+                {'error': 'Shared/pooled addons cannot be started or stopped individually; migrate to a dedicated container first.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        blocked_states = {
+            Addon.Status.PROVISIONING,
+            Addon.Status.MIGRATING,
+            Addon.Status.DELETION_PENDING,
+            Addon.Status.DELETED,
+            Addon.Status.BACKEND_MISSING,
+        }
+        if instance.status in blocked_states:
+            return Response(
+                {'error': f'Cannot {action} addon while status is {instance.status}.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            from ..services import cli_addons as _cli
+            if action == 'stop' and _cli.is_cli_addon(getattr(instance, 'addon_type', '')):
+                siblings = [
+                    sib for sib in (_cli.sibling_cli_addons(instance, include_self=False) or [])
+                    if getattr(sib, 'status', None) == Addon.Status.ACTIVE
+                ]
+                if siblings:
+                    return Response(
+                        {'error': 'Shared CLI container is still in use by another ACTIVE CLI addon on this service.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+        except Exception:
+            pass
+
+        name = addon_container_name(instance)
+        service = getattr(instance, 'service', None)
+        server = getattr(service, 'server', None) if service else None
+        target = str(getattr(service, 'active_target_type', '') or '').lower() if service else ''
+        is_remote = target in ('remote', 'lite_agent') or (
+            server is not None and not getattr(server, 'is_primary', True)
+        )
+
+        # Remote full-stack node addons run on the worker node unless mesh-backed on master.
+        rmeta = dict(getattr(instance, 'provider_metadata', None) or {})
+        if (
+            is_remote
+            and not rmeta.get('mesh_backed')
+            and server is not None
+            and not getattr(server, 'is_lite_agent', False)
+        ):
+            try:
+                from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+                remote_res = RemoteOrchestrator(server).power_remote_container(name, action)
+                if isinstance(remote_res, dict) and remote_res.get('ok'):
+                    next_status = Addon.Status.ACTIVE if action == 'start' else Addon.Status.STOPPED
+                    if instance.status != next_status:
+                        instance.status = next_status
+                        instance.save(update_fields=['status', 'updated_at'])
+                    return Response({
+                        'status': remote_res.get('status', 'started' if action == 'start' else 'stopped'),
+                        'addon_status': instance.status,
+                        'container': name,
+                        'remote': getattr(server, 'name', ''),
+                    })
+            except Exception as exc:
+                logger.warning("Remote addon %s failed for %s (%s): %s", action, instance.id, name, exc)
+
+        try:
+            import docker
+            client = docker.from_env(timeout=15)
+            container = client.containers.get(name)
+            next_status = Addon.Status.ACTIVE if action == 'start' else Addon.Status.STOPPED
+            if action == 'start':
+                if container.status == 'running':
+                    if instance.status != next_status:
+                        instance.status = next_status
+                        instance.save(update_fields=['status', 'updated_at'])
+                    return Response({'status': 'already_running', 'addon_status': instance.status, 'container': name})
+                container.start()
+                instance.status = next_status
+                instance.save(update_fields=['status', 'updated_at'])
+                return Response({'status': 'started', 'addon_status': instance.status, 'container': name})
+            if container.status != 'running':
+                if instance.status != next_status:
+                    instance.status = next_status
+                    instance.save(update_fields=['status', 'updated_at'])
+                return Response({'status': 'already_stopped', 'addon_status': instance.status, 'container': name})
+            container.stop(timeout=30)
+            instance.status = next_status
+            instance.save(update_fields=['status', 'updated_at'])
+            return Response({'status': 'stopped', 'addon_status': instance.status, 'container': name})
+        except Exception as exc:
+            logger.warning("Addon container %s failed for %s (%s): %s", action, instance.id, name, exc)
+            return Response(
+                {'error': f'{action.capitalize()} failed (container {name} unavailable).'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @action(detail=True, methods=['post'], url_path='start')
+    def start_container(self, request, pk=None):
+        """Start a stopped addon container (on-demand spin-up)."""
+        instance = self.get_object()
+        assert_can_write(self.request.user, instance.service, action='start addon')
+        return self._power_addon_container(instance, 'start')
 
     @action(detail=True, methods=['post'], url_path='stop')
     def stop_container(self, request, pk=None):
-        """Stop a running addon container (park idle capacity).
-
-        Volumes are kept — nothing is deleted. Start it again later.
-        """
+        """Stop a running addon container (park idle capacity, volumes preserved)."""
         instance = self.get_object()
         assert_can_write(self.request.user, instance.service, action='stop addon')
-        try:
-            import docker
-            client = docker.from_env()
-            name = f"smsly-addon-{str(instance.addon_type).lower()}-{instance.id}"
-            container = client.containers.get(name)
-            if container.status != 'running':
-                return Response({'status': 'already_stopped', 'container': name})
-            container.stop(timeout=30)
-            return Response({'status': 'stopped', 'container': name})
-        except Exception as exc:
-            logger.warning("Addon container stop failed for %s: %s", pk, exc)
-            return Response(
-                {'error': 'Stop failed.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        return self._power_addon_container(instance, 'stop')
 
     @action(detail=True, methods=['post'], url_path='retry-delete')
     def retry_delete(self, request, pk=None):
@@ -750,7 +946,8 @@ class AddonViewSet(viewsets.ModelViewSet):
             pushed = sorted(_cli.container_files(
                 getattr(addon, 'addon_type', ''), merged).keys())
         except Exception as exc:
-            push_error = str(exc)[:200]
+            logger.warning("Failed to push CLI files for addon %s: %s", addon.id, exc)
+            push_error = 'Failed to push CLI configuration into container.'
         if key_env_changed:
             from ..tasks.crud import provision_addon_task
             ok, _ = _guard_delay(provision_addon_task, str(addon.id))
@@ -806,6 +1003,7 @@ class AddonViewSet(viewsets.ModelViewSet):
     def credentials(self, request, pk=None):
         """Return parsed connection credentials for this addon."""
         addon = self.get_object()
+        assert_can_write(request.user, addon.service, action='view addon credentials')
         if addon.status != 'ACTIVE':
             return Response(
                 {'error': 'Addon not active'},
@@ -839,7 +1037,7 @@ class AddonViewSet(viewsets.ModelViewSet):
             logger.error(f"Failed to check addon status: {e}")
             return Response({
                 'status': addon.status,
-                'error': str(e)
+                'error': 'Failed to check addon status.'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=['get'])
@@ -855,12 +1053,31 @@ class AddonViewSet(viewsets.ModelViewSet):
         addons have no remote container and always read locally.
         """
         addon = self.get_object()
-        from apps.addons.services.addon_provisioner import addon_provisioner
+        from ..services.addon_provisioner import addon_provisioner
         from apps.deployments.utils.log_scrub import mask_secrets_in_text
         container_name, notice = addon_provisioner.resolve_log_container(addon)
 
-        tail = int(request.query_params.get('tail', 200))
-        tail = min(tail, 2000)
+        is_shared_target = (
+            str(getattr(addon, 'provision_mode', '') or '') == 'shared'
+            or bool(getattr(addon, 'pooler_routed', False))
+            or container_name in ('smsly-shared-postgres', 'pgbouncer-tenants')
+        )
+        if is_shared_target and not getattr(request.user, 'is_superuser', False):
+            return Response({
+                'id': str(addon.id),
+                'addon_type': addon.addon_type,
+                'container_name': container_name,
+                'status': addon.status,
+                'logs': '',
+                'notice': 'Shared database logs contain multi-tenant output and are restricted to platform administrators.',
+                'source': 'restricted_shared',
+            })
+
+        try:
+            tail = int(request.query_params.get('tail', 200))
+        except (TypeError, ValueError):
+            tail = 200
+        tail = max(1, min(tail, 2000))
 
         try:
             if str(getattr(addon, 'provision_mode', '') or '') != 'shared':
@@ -883,7 +1100,7 @@ class AddonViewSet(viewsets.ModelViewSet):
             return Response({
                 'id': str(addon.id),
                 'logs': '',
-                'message': f'Could not fetch addon logs: {e!s}',
+                'message': 'Could not fetch addon logs.',
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def _remote_addon_logs(self, addon, container_name: str, tail: int):
@@ -926,6 +1143,7 @@ class AddonViewSet(viewsets.ModelViewSet):
         GET /api/v1/addons/{id}/network_check/
         """
         addon = self.get_object()
+        assert_can_write(self.request.user, addon.service, action='repair addon network')
         from apps.addons.services.addon_provisioner import addon_provisioner
 
         try:
@@ -940,7 +1158,7 @@ class AddonViewSet(viewsets.ModelViewSet):
             logger.error("Network check failed for addon %s: %s", pk, e)
             return Response({
                 'id': str(addon.id),
-                'error': str(e),
+                'error': 'Network check failed.',
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=['post'])
@@ -993,6 +1211,7 @@ class AddonViewSet(viewsets.ModelViewSet):
     def download_backup(self, request, pk=None):
         """Download a backup file."""
         addon = self.get_object()
+        assert_can_write(request.user, addon.service, action='download addon backup')
         backup_id = request.query_params.get('backup_id')
         if not backup_id:
             return Response({'error': 'backup_id required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1004,21 +1223,30 @@ class AddonViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Backup not found'}, status=status.HTTP_404_NOT_FOUND)
 
         import os
-        if not os.path.exists(backup.file_path):
-            return Response({'error': 'File not found on disk'}, status=status.HTTP_404_NOT_FOUND)
+        if not backup.file_path:
+            return Response({'error': 'Backup file not available'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Security: ensure the file path is within the expected backups directory
-        backups_root = os.path.realpath(os.path.join(settings.BASE_DIR, 'backups'))
+        # Security: ensure the file path is within an allowed backups directory
         real_path = os.path.realpath(backup.file_path)
-        if not real_path.startswith(backups_root):
+        allowed_roots = [
+            os.path.realpath('/app/backups'),
+            os.path.realpath(os.path.join(settings.BASE_DIR, 'backups')),
+        ]
+        if not any(
+            real_path == root or real_path.startswith(root + os.sep)
+            for root in allowed_roots
+        ):
             logger.warning("Blocked backup download path traversal: %s", backup.file_path)
             return Response({'error': 'Invalid backup path'}, status=status.HTTP_403_FORBIDDEN)
 
-        backup_file = open(backup.file_path, 'rb')
+        if not os.path.isfile(real_path):
+            return Response({'error': 'File not found on disk'}, status=status.HTTP_404_NOT_FOUND)
+
+        backup_file = open(real_path, 'rb')
         response = _ClosingFileResponse(
             backup_file,
             as_attachment=True,
-            filename=os.path.basename(backup.file_path),
+            filename=os.path.basename(real_path),
         )
         return response
 
@@ -1082,8 +1310,9 @@ class AddonViewSet(viewsets.ModelViewSet):
             exit_code, output = container.exec_run(cmd)
 
             if exit_code != 0:
+                logger.error("Failed to apply bucket policy for %s: %s", addon.id, output.decode(errors='replace').strip())
                 return Response({
-                    'error': f"Failed to apply bucket policy: {output.decode().strip()}"
+                    'error': 'Failed to apply bucket policy.'
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
             # Persist the state in the database
@@ -1228,13 +1457,14 @@ def toggle_bucket_public_api(request, pk) -> Response:
         # public.
         try:
             addon = Addon.objects.filter(
-                Q(service__owner=request.user) |
-                Q(service__project__team__members__user=request.user)
+                get_team_q_filter(request.user, prefix='service__')
             ).distinct().get(pk=pk)
         except Addon.DoesNotExist:
             if settings.DEBUG:
                 logger.warning("Addon %s not accessible to user %s", pk, request.user.id)
             return Response({'error': f'Addon {pk} not found'}, status=404)
+
+        assert_can_write(request.user, addon.service, action='toggle bucket access')
 
         if settings.DEBUG:
             logger.info("Found addon %s (%s)", addon.name, addon.addon_type)
@@ -1289,7 +1519,8 @@ def toggle_bucket_public_api(request, pk) -> Response:
         cmd = ['mc', 'anonymous', 'set', policy, f'myminio/{bucket_name}']
         exit_code, output = container.exec_run(cmd)
         if exit_code != 0:
-            return Response({'error': output.decode().strip()}, status=500)
+            logger.error("Failed to apply bucket policy for %s: %s", addon.id, output.decode(errors='replace').strip())
+            return Response({'error': 'Failed to apply bucket policy.'}, status=500)
 
         addon.is_bucket_public = is_public
         addon.save(update_fields=['is_bucket_public'])

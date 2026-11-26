@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Search, Shield, User, Settings, Server, Key, AlertTriangle, Loader2 } from 'lucide-react';
@@ -13,10 +13,9 @@ interface AuditLogEntry {
   action: string;
   actor: string;
   target?: string;
-  detail?: string;
-  ip_address?: string;
+  metadata?: Record<string, unknown> | null;
   timestamp: string;
-  user?: string | null;
+  user?: string | number | null;
   project?: string | null;
 }
 
@@ -107,7 +106,12 @@ export default function AuditLogsPage() {
         ) : (
           <Card>
             <div className="divide-y divide-border">
-              {filtered.map((log) => (
+              {filtered.map((log) => {
+                const ipAddress = typeof log.metadata?.ip_address === 'string' ? log.metadata.ip_address : null;
+                const metaEntries = log.metadata
+                  ? Object.entries(log.metadata).filter(([k]) => k !== 'ip_address')
+                  : [];
+                return (
                 <div key={log.id} className="px-4 py-3 flex items-start gap-3 hover:bg-muted/30 transition-colors">
                   <div className={`p-1.5 rounded-lg mt-0.5 ${getActionColor(log.action)}`}>
                     {getActionIcon(log.action)}
@@ -123,16 +127,17 @@ export default function AuditLogsPage() {
                       )}
                     </div>
                     <div className="text-xs text-muted-foreground mt-0.5">
-                      by {log.user ? `User ${log.user}` : log.actor}
-                      {log.ip_address && ` • ${log.ip_address}`}
-                      {log.detail && ` • ${log.detail}`}
+                      by {log.actor || (log.user ? `User ${log.user}` : 'System')}
+                      {ipAddress && ` • ${ipAddress}`}
+                      {metaEntries.length > 0 && ` • ${JSON.stringify(Object.fromEntries(metaEntries))}`}
                     </div>
                   </div>
                   <span className="text-xs text-muted-foreground whitespace-nowrap">
                     {new Date(log.timestamp).toLocaleString()}
                   </span>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </Card>
         )}

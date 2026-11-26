@@ -7,12 +7,13 @@ import uuid
 from datetime import date
 
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import DatabaseError
+from django.db import DatabaseError, transaction
 from django.db.models import Q, Sum
 from django.http import JsonResponse, StreamingHttpResponse
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import (
     api_view,
     authentication_classes,
@@ -22,7 +23,12 @@ from rest_framework.decorators import (
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
-from apps.core.auth import APIKeyAuthentication, CsrfExemptSessionAuthentication
+from apps.core.auth import (
+    APIKeyAuthentication,
+    CookieAwareTokenAuthentication,
+    CsrfExemptSessionAuthentication,
+)
+from apps.core.models.api_token import APITokenAuthentication
 from apps.core.models.audit import AuditLog
 from apps.core.rate_limiting import AIAnalysisRateThrottle, AIChatRateThrottle
 
@@ -61,39 +67,93 @@ def _parse_int(value, default):
         return default
 
 
-def _check_user_cap(user):
-    """Check the user's daily token / cost cap. Returns (ok, reason)."""
+def _cap_reserve_cache_key(user, day) -> str:
+    return f"ai:cap_reserved:{getattr(user, 'id', 'anon')}:{day.isoformat()}"
+
+
+def _get_reserved_tokens(user, day) -> int:
+    try:
+        from django.core.cache import cache
+        return max(0, int(cache.get(_cap_reserve_cache_key(user, day)) or 0))
+    except Exception:
+        return 0
+
+
+def _reserve_cap_tokens(user, day, tokens: int) -> int:
+    if tokens <= 0:
+        return 0
+    try:
+        from django.core.cache import cache
+        key = _cap_reserve_cache_key(user, day)
+        cache.add(key, 0, timeout=300)
+        cache.incr(key, tokens)
+        return tokens
+    except Exception:
+        return 0
+
+
+def _release_cap_reservation(user, reserved_tokens: int) -> None:
+    if not reserved_tokens or reserved_tokens <= 0:
+        return
+    try:
+        from django.core.cache import cache
+        key = _cap_reserve_cache_key(user, date.today())
+        new_val = cache.decr(key, reserved_tokens)
+        if new_val < 0:
+            cache.set(key, 0, timeout=300)
+    except Exception:
+        pass
+
+
+def _check_user_cap(user, reserve_tokens: int = 0):
+    """Check the user's daily token / cost cap with atomic reservation. Returns (ok, reason)."""
     from ..providers import _is_circuit_open  # noqa: F401  (kept for downstream use)
-    cap, _ = UserAICap.objects.get_or_create(user=user)
-    today = date.today()
-    used = LLMUsage.objects.filter(user=user, created_at__date=today).aggregate(
-        total=Sum('total_tokens'), cost=Sum('estimated_cost_usd')
-    )
-    total_used = used.get('total') or 0
-    cost_used = used.get('cost') or 0
-    if total_used and total_used >= cap.daily_token_cap:
-        return False, "Daily token cap exceeded"
-    if cost_used and cost_used >= cap.daily_cost_cap_usd:
-        return False, "Daily cost cap exceeded"
-    return True, None
+    if getattr(user, "is_anonymous", True):
+        return False, "Authentication required"
+    with transaction.atomic():
+        cap, _ = UserAICap.objects.get_or_create(user=user)
+        cap = UserAICap.objects.select_for_update().get(pk=cap.pk)
+        today = date.today()
+        used = LLMUsage.objects.filter(user=user, created_at__date=today).aggregate(
+            total=Sum('total_tokens'), cost=Sum('estimated_cost_usd')
+        )
+        total_used = int(used.get('total') or 0)
+        cost_used = float(used.get('cost') or 0)
+        reserved = _get_reserved_tokens(user, today)
+        if (total_used + reserved) >= cap.daily_token_cap:
+            return False, "Daily token cap exceeded"
+        if cost_used >= float(cap.daily_cost_cap_usd):
+            return False, "Daily cost cap exceeded"
+        if reserve_tokens > 0:
+            to_reserve = min(int(reserve_tokens), max(1, cap.daily_token_cap))
+            _reserve_cap_tokens(user, today, to_reserve)
+        return True, None
 
 
-def _check_user_cap_for_committee(user, _member_count: int):
+def _check_user_cap_for_committee(user, _member_count: int, reserve_tokens: int = 0):
     """Pre-flight cap check scaled by Senate Committee multiplier."""
-    cap, _ = UserAICap.objects.get_or_create(user=user)
-    today = date.today()
-    used = LLMUsage.objects.filter(user=user, created_at__date=today).aggregate(
-        total=Sum('total_tokens'), cost=Sum('estimated_cost_usd')
-    )
-    total_used = used.get('total') or 0
-    cost_used = used.get('cost') or 0
-    scaled_token_cap = cap.daily_token_cap // max(SENATE_COMMITTEE_COST_MULTIPLIER, 1)
-    scaled_cost_cap = float(cap.daily_cost_cap_usd) / max(SENATE_COMMITTEE_COST_MULTIPLIER, 1)
-    if total_used >= scaled_token_cap:
-        return False, "Daily token cap exceeded (senate multiplier)"
-    if cost_used >= scaled_cost_cap:
-        return False, "Daily cost cap exceeded (senate multiplier)"
-    return True, None
+    if getattr(user, "is_anonymous", True):
+        return False, "Authentication required"
+    with transaction.atomic():
+        cap, _ = UserAICap.objects.get_or_create(user=user)
+        cap = UserAICap.objects.select_for_update().get(pk=cap.pk)
+        today = date.today()
+        used = LLMUsage.objects.filter(user=user, created_at__date=today).aggregate(
+            total=Sum('total_tokens'), cost=Sum('estimated_cost_usd')
+        )
+        total_used = int(used.get('total') or 0)
+        cost_used = float(used.get('cost') or 0)
+        reserved = _get_reserved_tokens(user, today)
+        scaled_token_cap = cap.daily_token_cap // max(SENATE_COMMITTEE_COST_MULTIPLIER, 1)
+        scaled_cost_cap = float(cap.daily_cost_cap_usd) / max(SENATE_COMMITTEE_COST_MULTIPLIER, 1)
+        if (total_used + reserved) >= scaled_token_cap:
+            return False, "Daily token cap exceeded (senate multiplier)"
+        if cost_used >= scaled_cost_cap:
+            return False, "Daily cost cap exceeded (senate multiplier)"
+        if reserve_tokens > 0:
+            to_reserve = min(int(reserve_tokens), max(1, scaled_token_cap))
+            _reserve_cap_tokens(user, today, to_reserve)
+        return True, None
 
 
 def _record_usage(user, provider_name: str, model: str, usage: dict,
@@ -285,6 +345,7 @@ def ai_providers_update(request):
         "zenmax_api_key", "zenmax_model", "zenmax_base_url",
         "agentrouter_api_key", "agentrouter_model", "agentrouter_base_url",
         "senate_enabled", "senate_max_members",
+        "jules_auto_deploy_pr",
     ]
 
     updated = []
@@ -483,7 +544,7 @@ def ai_test_prompt(request):
 
 @extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
 @api_view(["POST"])
-@authentication_classes([APIKeyAuthentication, CsrfExemptSessionAuthentication])
+@authentication_classes([APIKeyAuthentication, APITokenAuthentication, CookieAwareTokenAuthentication, SessionAuthentication])
 @permission_classes([IsAuthenticated])
 @throttle_classes([AIChatRateThrottle])
 def ai_chat_completions(request):
@@ -663,12 +724,23 @@ def ai_analyze_logs(request):
     Body: { "logs": "...", "context": "deployment|runtime|build" }
     Returns: { "diagnosis": "...", "issues": [...], "recommendations": [...], "provider": "..." }
     """
-    logs = request.data.get("logs", "")
+    logs = str(request.data.get("logs", "") or "")
     request.data.get("context", "deployment")
-    analyzer = LogAnalyzer()
 
-    issues = analyzer.analyze_logs(logs)
-    diagnosis = analyzer.generate_diagnosis(logs)
+    reserve = max(64, len(logs[:2000]) // 4 + 128)
+    cap_ok, cap_reason = _check_user_cap(request.user, reserve_tokens=reserve)
+    if not cap_ok:
+        return Response(
+            {"error": cap_reason, "code": "ai_cap_exceeded"},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    try:
+        analyzer = LogAnalyzer()
+        issues = analyzer.analyze_logs(logs)
+        diagnosis = analyzer.generate_diagnosis(logs)
+    finally:
+        _release_cap_reservation(request.user, reserve)
 
     # Try to extract provider from diagnosis string if it exists in format [Provider] ...
     provider = "Mock AI"
@@ -678,6 +750,15 @@ def ai_analyze_logs(request):
             diagnosis = diagnosis.split("] ", 1)[1]
         except IndexError:
             pass
+
+    _record_usage(
+        request.user,
+        provider,
+        provider,
+        {},
+        prompt_text=logs[:2000],
+        response_text=diagnosis,
+    )
 
     return Response({
         "diagnosis": diagnosis,
@@ -689,12 +770,21 @@ def ai_analyze_logs(request):
 
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
+@throttle_classes([AIAnalysisRateThrottle])
 def ai_cost_estimate(request):
     """
     POST /api/v1/ai/cost-estimate/
     Body: { "cpu_cores": 2, "memory_mb": 1024, "stack": "django", "provider": "aws" }
     Returns: { "estimates": {...}, "ai_recommendations": "..." }
     """
+    reserve = 256
+    cap_ok, cap_reason = _check_user_cap(request.user, reserve_tokens=reserve)
+    if not cap_ok:
+        return Response(
+            {"error": cap_reason, "code": "ai_cap_exceeded"},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
     advisor = CostAdvisor()
     config = request.data
 
@@ -703,7 +793,19 @@ def ai_cost_estimate(request):
         float(config.get('memory_mb', 512)) / 1024
     )
 
-    ai_recommendations = advisor.ai_cost_analysis(config)
+    try:
+        ai_recommendations = advisor.ai_cost_analysis(config)
+    finally:
+        _release_cap_reservation(request.user, reserve)
+
+    _record_usage(
+        request.user,
+        "cost_advisor",
+        "cost_advisor",
+        {},
+        prompt_text=json.dumps(config, default=str)[:500],
+        response_text=str(ai_recommendations or ""),
+    )
 
     return Response({
         "estimates": estimates,
@@ -718,8 +820,39 @@ def ai_intelligence_report(request):
     GET /api/v1/ai/report/
     Returns the latest daily intelligence report, optionally scoped to a service.
     Query params: ?service_id=<uuid>
+    Unscoped requests require admin privileges (IsAdminUser).
     """
-    request.query_params.get("service_id", "").strip()
+    service_id = request.query_params.get("service_id", "").strip()
+    if service_id:
+        from apps.deployments.models import Deployment, Service
+        from apps.permissions.utils import get_accessible_q
+
+        svc = Service.objects.filter(get_accessible_q(request.user), id=service_id).first()
+        if not svc:
+            return Response({"error": "Service not found."}, status=status.HTTP_404_NOT_FOUND)
+        total_deps = Deployment.objects.filter(service=svc).count()
+        failed_deps = Deployment.objects.filter(service=svc, status=Deployment.Status.FAILED).count()
+        anomalies_count = AuditLog.objects.filter(
+            actor__in=["AI_REMEDIATOR", "AI_REVIEWER"],
+        ).filter(Q(target=svc.name) | Q(target__icontains=str(svc.id))).count()
+        rate = f"{((total_deps - failed_deps) / total_deps * 100):.1f}%" if total_deps else "100.0%"
+        return Response(_json_safe({
+            "available": True,
+            "message": f"Scoped report for {svc.name}.",
+            "service_id": str(svc.id),
+            "service_name": svc.name,
+            "total_deployments": total_deps,
+            "failed_deployments": failed_deps,
+            "anomalies_detected": anomalies_count,
+            "success_rate": rate,
+        }, {"available": True}))
+
+    if not (request.user.is_staff or request.user.is_superuser):
+        return Response(
+            {"error": "Admin privileges required for unscoped intelligence reports; pass ?service_id=<uuid>."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     try:
         filters = Q(actor="AI_REPORTER", action="DAILY_REPORT")
         report = (
@@ -766,6 +899,26 @@ def ai_intelligence_report(request):
     return Response(_json_safe(payload, {"available": True}))
 
 
+_ALLOWED_ANOMALY_META_KEYS = (
+    "summary", "message", "reason", "action", "status",
+    "result", "diagnosis", "confidence", "severity",
+)
+
+
+def _scrub_secret_tokens(text: str) -> str:
+    """Scrub standard secrets plus common LLM/GitHub/Google token prefixes."""
+    import re
+    from apps.deployments.utils.log_scrub import mask_secrets_in_text
+
+    cleaned = mask_secrets_in_text(text) or ""
+    cleaned = re.sub(
+        r"\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{16,}|AIza[0-9A-Za-z_-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b",
+        "***",
+        cleaned,
+    )
+    return cleaned
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def ai_anomaly_history(request):
@@ -774,15 +927,29 @@ def ai_anomaly_history(request):
     Returns history of detected anomalies and remediation actions.
     Query params: ?service_id=<uuid>
     """
+    from apps.deployments.models import Service
+    from apps.permissions.utils import get_accessible_q
+
     service_id = request.query_params.get("service_id", "").strip()
     try:
         qs = AuditLog.objects.filter(actor__in=["AI_REMEDIATOR", "AI_REVIEWER"])
         if service_id:
-            qs = qs.filter(target__icontains=service_id)
-        # AuditLog's timestamp field is 'timestamp' — a previous
-        # order_by('-created_at') raised FieldError, which the blanket
-        # except swallowed into "anomalies: [], available: false" —
-        # the Anomalies tab has been silently empty ever since.
+            svc = Service.objects.filter(get_accessible_q(request.user), id=service_id).first()
+            if not svc:
+                return Response({"error": "Service not found."}, status=status.HTTP_404_NOT_FOUND)
+            qs = qs.filter(Q(target=svc.name) | Q(target=f"Service: {svc.name}") | Q(target__icontains=str(svc.id)))
+        elif not (request.user.is_superuser or request.user.is_staff):
+            user_svcs = list(
+                Service.objects.filter(get_accessible_q(request.user)).values_list("name", "id")
+            )
+            if not user_svcs:
+                return Response({"anomalies": [], "available": True})
+            target_q = Q()
+            for n, sid in user_svcs:
+                if n:
+                    target_q |= Q(target=n) | Q(target=f"Service: {n}")
+                target_q |= Q(target__icontains=str(sid))
+            qs = qs.filter(target_q)
         anomalies = qs.order_by("-timestamp")[:50]
     except (DatabaseError, Exception):
         return Response({"anomalies": [], "available": False})
@@ -793,14 +960,21 @@ def ai_anomaly_history(request):
         safe_meta = _json_safe(meta, {})
         if not isinstance(safe_meta, dict):
             safe_meta = {}
+        allowlisted_meta = {
+            k: _scrub_secret_tokens(str(safe_meta[k]))
+            if isinstance(safe_meta[k], str)
+            else safe_meta[k]
+            for k in _ALLOWED_ANOMALY_META_KEYS
+            if k in safe_meta
+        }
         data.append({
             "id": str(a.id),
             "service_name": str(a.target or ""),
             "issue_type": str(a.action or "UNKNOWN"),
-            "severity": str(safe_meta.get("severity", "WARNING")),
+            "severity": str(allowlisted_meta.get("severity", "WARNING")),
             "detected_at": a.timestamp,
             "auto_fixed": a.action in ["SCALE_UP", "ROLLBACK", "CLEANUP", "RESTART", "REBUILD", "DIAGNOSE"],
-            "fix_result": str(safe_meta),
+            "fix_result": json.dumps(allowlisted_meta) if allowlisted_meta else "",
         })
 
     return Response(_json_safe({"anomalies": data, "available": True}, {"anomalies": [], "available": True}))
@@ -813,27 +987,29 @@ def jules_fix_history(request, service_id: str):
     Return Jules auto-fix history for a service by scanning deployment logs.
     """
     try:
-        from django.db.models import Q
-
         from apps.deployments.models import Deployment, Service
+        from apps.permissions.codes import DEPLOYMENT_VIEW
+        from apps.permissions.utils import get_accessible_q, has_permission
 
-        # SECURITY: scope to services the caller can access (owner or
-        # team member). Without this, any authenticated user could
-        # read another tenant's jules events (which include snippets
-        # of build logs).
         service = Service.objects.filter(
-            Q(owner=request.user) |
-            Q(project__team__members__user=request.user)
+            get_accessible_q(request.user)
         ).distinct().get(id=service_id)
+        if not request.user.is_superuser and not has_permission(request.user, service, DEPLOYMENT_VIEW):
+            return Response({"error": "Service not found"}, status=status.HTTP_404_NOT_FOUND)
+
         deployments = Deployment.objects.filter(service=service).order_by("-updated_at")[:20]
 
         entries = []
         for d in deployments:
-            logs = (d.build_logs or "")
+            logs = _scrub_secret_tokens(d.build_logs or "")
             if not logs:
                 continue
 
-            jules_lines = [line for line in logs.split("\n") if "jules" in line.lower() or "auto-fix" in line.lower() or "Jules" in line]
+            jules_lines = [
+                _scrub_secret_tokens(line)
+                for line in logs.split("\n")
+                if "jules" in line.lower() or "auto-fix" in line.lower()
+            ]
             if not jules_lines:
                 continue
 

@@ -39,9 +39,20 @@ export const AddonLogsViewer = React.memo(function AddonLogsViewer({ addonId, ad
     const [isLive, setIsLive] = useState(false);
     const logsEndRef = useRef<HTMLDivElement>(null);
     const wsRef = useRef<WebSocket | null>(null);
+    const targetAddonIdRef = useRef<string | null>(null);
     const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
+    const disposedRef = useRef(false);
+
+    const MAX_LOG_LINES = 5000;
+    const capLogLines = (raw: string): string => {
+        const parts = raw.split('\n');
+        if (parts.length <= MAX_LOG_LINES) return raw;
+        return parts.slice(-MAX_LOG_LINES).join('\n');
+    };
 
     const isActive = status === 'ACTIVE' || status === 'RUNNING';
+    const isActiveRef = useRef(isActive);
+    isActiveRef.current = isActive;
 
     // Auto-scroll
     useEffect(() => {
@@ -54,7 +65,7 @@ export const AddonLogsViewer = React.memo(function AddonLogsViewer({ addonId, ad
     const fetchLogs = useCallback(async () => {
         try {
             const data = await addonsApi.getLogs(addonId, compact ? 100 : 200);
-            setLogs(data.logs || '');
+            setLogs(capLogLines(data.logs || ''));
             setError(data.message || '');
             if (data.notice) setNotice(data.notice);
         } catch {
@@ -66,23 +77,44 @@ export const AddonLogsViewer = React.memo(function AddonLogsViewer({ addonId, ad
 
     // WebSocket for live streaming
     const connectWebSocket = useCallback(() => {
-        if (!addonId || wsRef.current?.readyState === WebSocket.OPEN) return;
+        if (disposedRef.current || !addonId) return;
+        if (
+            targetAddonIdRef.current === addonId &&
+            (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING)
+        ) {
+            return;
+        }
+
+        if (wsRef.current) {
+            try { wsRef.current.close(); } catch { /* ignore */ }
+            wsRef.current = null;
+        }
+        targetAddonIdRef.current = addonId;
 
         const wsUrl = getWsUrl(`/ws/addon-logs/${addonId}/`);
         try {
             const ws = new WebSocket(wsUrl);
+            wsRef.current = ws;
             ws.onopen = () => {
+                if (disposedRef.current || wsRef.current !== ws || targetAddonIdRef.current !== addonId) {
+                    try { ws.close(); } catch { /* ignore */ }
+                    return;
+                }
                 setIsLive(true);
                 setLoading(false);
             };
             ws.onmessage = (event) => {
+                if (disposedRef.current || wsRef.current !== ws || targetAddonIdRef.current !== addonId) {
+                    try { ws.close(); } catch { /* ignore */ }
+                    return;
+                }
                 try {
                     const data = JSON.parse(event.data);
                     if (data.type === 'initial_state') {
-                        if (data.logs) setLogs(data.logs);
+                        if (data.logs) setLogs(capLogLines(data.logs));
                         if (data.notice) setNotice(data.notice);
                     } else if (data.type === 'log') {
-                        setLogs(prev => prev + '\n' + (data.log || ''));
+                        setLogs(prev => capLogLines(prev ? `${prev}\n${data.log || ''}` : (data.log || '')));
                     } else if (data.error) {
                         setError(data.error);
                     }
@@ -90,29 +122,47 @@ export const AddonLogsViewer = React.memo(function AddonLogsViewer({ addonId, ad
                     // Non-JSON message
                 }
             };
-            ws.onclose = () => {
+            ws.onclose = (event) => {
+                if (wsRef.current !== ws) return;
+                wsRef.current = null;
+                if (disposedRef.current) return;
                 setIsLive(false);
-                if (isActive) {
-                    reconnectTimer.current = setTimeout(connectWebSocket, 3000);
+                const isFatalCode = [4001, 4002, 4003, 4403, 4404].includes(event.code);
+                if (isFatalCode || !isActiveRef.current) {
+                    return;
                 }
+                if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+                reconnectTimer.current = setTimeout(connectWebSocket, 3000);
             };
-            ws.onerror = () => ws.close();
-            wsRef.current = ws;
+            ws.onerror = () => {
+                if (wsRef.current !== ws) {
+                    try { ws.close(); } catch { /* ignore */ }
+                    return;
+                }
+                try { ws.close(); } catch { /* ignore */ }
+            };
         } catch {
             // WebSocket not supported
         }
-    }, [addonId, isActive]);
+    }, [addonId]);
 
     // Connect: try WebSocket first, fall back to REST polling
     useEffect(() => {
+        disposedRef.current = false;
         if (isActive) {
             connectWebSocket();
         } else {
             fetchLogs();
         }
         return () => {
+            disposedRef.current = true;
+            targetAddonIdRef.current = null;
             wsRef.current?.close();
-            if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+            wsRef.current = null;
+            if (reconnectTimer.current) {
+                clearTimeout(reconnectTimer.current);
+                reconnectTimer.current = null;
+            }
         };
     }, [isActive, connectWebSocket, fetchLogs]);
 
@@ -166,7 +216,11 @@ export const AddonLogsViewer = React.memo(function AddonLogsViewer({ addonId, ad
     }
 
     return (
-        <div className={`bg-[#09090b] border border-border rounded-xl overflow-hidden font-mono text-xs ${compact ? 'h-[300px]' : 'h-[500px]'} flex flex-col`}>
+        <div
+            role="region"
+            aria-label={`${addonType} addon logs`}
+            className={`bg-[#09090b] border border-border rounded-xl overflow-hidden font-mono text-xs ${compact ? 'h-[300px]' : 'h-[500px]'} flex flex-col`}
+        >
             {/* Header */}
             <div className="bg-white/5 p-3 border-b border-white/10 flex justify-between items-center">
                 <div className="flex gap-2">

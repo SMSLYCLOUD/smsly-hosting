@@ -16,6 +16,7 @@ import { ProfileTab } from "@/components/settings/ProfileTab";
 import { ApiKeysTab } from "@/components/settings/ApiKeysTab";
 import { AlertsTab } from "@/components/settings/AlertsTab";
 import { TeamsTab } from "@/components/settings/TeamsTab";
+import { OrganizationsTab } from "@/components/settings/OrganizationsTab";
 import { SecurityTab } from "@/components/settings/SecurityTab";
 import { PrivacyTab } from "@/components/settings/PrivacyTab";
 import { MtlsTab } from "@/components/settings/MtlsTab";
@@ -37,6 +38,7 @@ import { RegistryCredentialsTab } from "@/components/settings/RegistryCredential
 import { ScopedRegistryTab } from "@/components/settings/ScopedRegistryTab";
 import { MaintenanceTab } from "@/components/settings/MaintenanceTab";
 import { BillingTab } from "@/components/settings/BillingTab";
+import { usePermissions } from "@/hooks/usePermissions";
 
 const SETTINGS_SECTIONS = [
   {
@@ -101,9 +103,19 @@ const SETTINGS_SECTIONS = [
   },
 ] as const;
 
+const ADMIN_ONLY_TABS = new Set(["infra", "platform", "ai"]);
+
 function SettingsContent() {
   const searchParams = useSearchParams();
-  const defaultTab = searchParams.get("tab") || "account";
+  const { isStaff, isSuperuser } = usePermissions();
+  const isAdmin = isStaff || isSuperuser;
+  const visibleSections = SETTINGS_SECTIONS.filter(
+    (section) => isAdmin || !ADMIN_ONLY_TABS.has(section.value)
+  );
+  const requestedTab = searchParams.get("tab") || "account";
+  const defaultTab = visibleSections.some((section) => section.value === requestedTab)
+    ? requestedTab
+    : "account";
   const githubAppStatus = searchParams.get("github_app");
 
   // Show a one-time success toast when returning from GitHub App install/creation
@@ -138,15 +150,15 @@ function SettingsContent() {
 
         <Tabs defaultValue={defaultTab} className="space-y-6">
           <div className="card-enterprise p-1">
-            <TabsList className="h-auto w-full grid grid-cols-10 gap-1 bg-transparent p-0">
-              {SETTINGS_SECTIONS.map((section) => {
+            <TabsList className={`h-auto w-full flex overflow-x-auto xl:grid ${isAdmin ? "xl:grid-cols-10" : "xl:grid-cols-7"} gap-1 bg-transparent p-0`}>
+              {visibleSections.map((section) => {
                 const Icon = section.icon;
                 return (
                   <TabsTrigger
                     key={section.value}
                     value={section.value}
                     title={section.tooltip}
-                    className="h-9 items-center justify-center gap-2 rounded border border-transparent px-3 text-sm data-[state=active]:border-primary/30 data-[state=active]:bg-primary/5 data-[state=active]:text-primary"
+                    className="h-9 shrink-0 items-center justify-center gap-2 rounded border border-transparent px-3 text-sm data-[state=active]:border-primary/30 data-[state=active]:bg-primary/5 data-[state=active]:text-primary"
                   >
                     <Icon className="h-4 w-4" />
                     {section.label}
@@ -171,7 +183,11 @@ function SettingsContent() {
 
           {/* Teams */}
           <TabsContent value="teams">
-            <TeamsTab />
+            <div className="space-y-8">
+              <OrganizationsTab />
+              <Separator />
+              <TeamsTab />
+            </div>
           </TabsContent>
 
           {/* Git & Deploy */}
@@ -227,34 +243,40 @@ function SettingsContent() {
             </div>
           </TabsContent>
 
-          {/* Infrastructure */}
-          <TabsContent value="infra">
-            <div className="space-y-8">
-              <InfraTab />
-              <Separator />
-              <DatabaseReplicasTab />
-            </div>
-          </TabsContent>
+          {/* Infrastructure (admin only) */}
+          {isAdmin && (
+            <TabsContent value="infra">
+              <div className="space-y-8">
+                <InfraTab />
+                <Separator />
+                <DatabaseReplicasTab />
+              </div>
+            </TabsContent>
+          )}
 
-          {/* Platform */}
-          <TabsContent value="platform">
-            <div className="space-y-8">
-              <PlatformStorageOverview />
-              <Separator />
-              <PlatformSettingsTab />
-              <Separator />
-              <PlatformConfigTab />
-              <Separator />
-              <PerformanceTab />
-              <Separator />
-              <MtlsTab />
-            </div>
-          </TabsContent>
+          {/* Platform (admin only) */}
+          {isAdmin && (
+            <TabsContent value="platform">
+              <div className="space-y-8">
+                <PlatformStorageOverview />
+                <Separator />
+                <PlatformSettingsTab />
+                <Separator />
+                <PlatformConfigTab />
+                <Separator />
+                <PerformanceTab />
+                <Separator />
+                <MtlsTab />
+              </div>
+            </TabsContent>
+          )}
 
-          {/* AI */}
-          <TabsContent value="ai">
-            <AiTab />
-          </TabsContent>
+          {/* AI (admin only) */}
+          {isAdmin && (
+            <TabsContent value="ai">
+              <AiTab />
+            </TabsContent>
+          )}
 
           {/* Storage & Backups */}
           <TabsContent value="storage">

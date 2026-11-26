@@ -208,3 +208,8 @@ class DeploymentMixin:
             run_kwargs["network_mode"] = "host"
 
         client.containers.run(**run_kwargs)
+        try:
+            from apps.deployments.services.mesh_dns import sync_dns_now
+            sync_dns_now(client=client)
+        except Exception:
+            pass

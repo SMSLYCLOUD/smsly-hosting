@@ -18,10 +18,11 @@ BASE_SECURE=(
   --set secrets.redisPassword=strong-redis-password-1234567890
   --set secrets.fieldEncryptionKey=strong-fernet-key-1234567890
   --set secrets.githubWebhookSecret=strong-webhook-secret-1234567890
+  --set secrets.gatewaySecret=strong-gateway-secret-1234567890
+  --set secrets.rabbitmqPassword=strong-rabbitmq-password-1234567890
   --set backend.env.allowedHosts=smsly.cloud
   --set backend.env.corsAllowedOrigins=https://smsly.cloud
   --set redis.auth.enabled=true
-  --set redis.auth.password=strong-redis-password-1234567890
 )
 
 # expect_fail <name> <expected substring> [<extra helm args>...]
@@ -63,6 +64,8 @@ expect_fail "empty secrets.dbPassword"         "secrets.dbPassword must be set" 
 expect_fail "empty secrets.redisPassword"      "secrets.redisPassword must be set"      --set secrets.redisPassword=
 expect_fail "empty secrets.fieldEncryptionKey" "secrets.fieldEncryptionKey must be set" --set secrets.fieldEncryptionKey=
 expect_fail "empty secrets.githubWebhookSecret" "secrets.githubWebhookSecret must be set" --set secrets.githubWebhookSecret=
+expect_fail "empty secrets.gatewaySecret"       "secrets.gatewaySecret must be set"       --set secrets.gatewaySecret=
+expect_fail "empty secrets.rabbitmqPassword"    "secrets.rabbitmqPassword must be set"    --set secrets.rabbitmqPassword=
 
 echo "=== Negative: placeholder values must be rejected ==="
 expect_fail "change-me secretKey"   "secrets.secretKey must be set"   --set secrets.secretKey=change-me
@@ -75,12 +78,17 @@ expect_fail "latest frontend tag"  "frontend.image.tag must be pinned" --set fro
 expect_fail "latest celery tag"    "celery.image.tag must be pinned"   --set celery.image.tag=latest
 expect_fail "latest postgres tag"  "postgresql.image.tag must be pinned" --set postgresql.image.tag=latest
 expect_fail "redis:latest image"   "redis.image must be pinned"          --set redis.image=redis:latest
+expect_fail "rabbitmq:latest image" "rabbitmq.image must be pinned"      --set rabbitmq.image=rabbitmq:latest
 
 echo "=== Negative: production-only host / origin settings ==="
-expect_fail 'allowedHosts="*"'             'allowedHosts="\*" is forbidden in production' --set backend.env.allowedHosts='*'
+expect_fail 'allowedHosts="*"'             'allowedHosts="*" is forbidden in production' --set backend.env.allowedHosts='*'
 expect_fail "empty allowedHosts"           "backend.env.allowedHosts is empty in production" --set backend.env.allowedHosts=
-expect_fail 'corsAllowedOrigins="*"'       'corsAllowedOrigins="\*" is forbidden in production' --set backend.env.corsAllowedOrigins='*'
-expect_fail "redis no-pwd + auth-disabled" "secrets.redisPassword must be set" --set secrets.redisPassword= --set redis.auth.enabled=false --set redis.auth.password=
+expect_fail 'corsAllowedOrigins="*"'       'corsAllowedOrigins="*" is forbidden in production' --set backend.env.corsAllowedOrigins='*'
+
+echo "=== Positive: disabled subcharts, redis.auth.enabled=false and existingSecret validate cleanly ==="
+expect_pass "redis auth-disabled with empty redisPassword" --set secrets.redisPassword= --set redis.auth.enabled=false
+expect_pass "disabled postgres/redis/rabbitmq skip image checks" --set postgresql.enabled=false --set postgresql.image.tag=latest --set redis.enabled=false --set redis.image=redis:latest --set rabbitmq.enabled=false --set rabbitmq.image=rabbitmq:latest
+expect_pass "existingSecret skips inline secret requirements" --set secrets.existingSecret=my-prod-secret --set secrets.secretKey= --set secrets.dbPassword= --set secrets.redisPassword= --set secrets.fieldEncryptionKey= --set secrets.githubWebhookSecret= --set secrets.gatewaySecret= --set secrets.rabbitmqPassword=
 
 echo "=== Negative: accidental re-introduction of secrets under backend.env ==="
 expect_fail "backend.env.secretKey"             "backend.env.secretKey must not be empty"             --set backend.env.secretKey=
@@ -90,7 +98,7 @@ expect_fail "backend.env.githubWebhookSecret"   "backend.env.githubWebhookSecret
 
 echo "=== Positive: non-production relaxes host / redis checks ==="
 expect_pass "staging with wildcard allowedHosts"      --set global.environment=staging --set backend.env.allowedHosts='*' --set backend.env.corsAllowedOrigins=
-expect_pass "staging with empty redisPassword"        --set global.environment=staging --set secrets.redisPassword= --set redis.auth.enabled=false --set redis.auth.password=
+expect_pass "staging with empty redisPassword"        --set global.environment=staging --set secrets.redisPassword= --set redis.auth.enabled=false
 
 echo "=== Negative: non-production still requires pinned secrets ==="
 expect_fail "staging: empty fieldEncryptionKey" "secrets.fieldEncryptionKey must be set" --set global.environment=staging --set secrets.fieldEncryptionKey=

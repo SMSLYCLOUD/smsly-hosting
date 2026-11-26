@@ -104,6 +104,52 @@ class KeyWrappingAndPreflightTests(SimpleTestCase):
                 with self.assertRaises(volume_encryption.VolumeEncryptionError):
                     volume_encryption.verify_or_unlock(addon, "vol-locked")
 
+    def test_validate_volume_name_enforces_regex_and_rejects_dotdot(self):
+        self.assertEqual(volume_encryption.validate_volume_name("vol_1.data-a"), "vol_1.data-a")
+        self.assertEqual(volume_encryption.validate_volume_name("a"), "a")
+        for bad in ("", ".hidden", "-leading-dash", "vol..bad", "a/b", "vol name", "x" * 128):
+            with self.assertRaises(volume_encryption.VolumeEncryptionError):
+                volume_encryption.validate_volume_name(bad)
+
+    def test_verify_or_unlock_persists_updated_wrapped_dek_week_and_key_id(self):
+        addon = SimpleNamespace(
+            provider_metadata={
+                "volume_encryption": {
+                    "encrypted": True,
+                    "backend": "daemon",
+                    "wrapped_dek": "grid:v1:10:svc-1:k1:oldblob",
+                    "key_id": "k1",
+                    "week": 10,
+                }
+            },
+            service=SimpleNamespace(id="svc-1", project_id="proj-1"),
+        )
+        with mock.patch.dict(
+            os.environ,
+            {"SMSLY_VOLUME_DAEMON_URL": "http://127.0.0.1:9105"},
+        ), mock.patch.object(
+            volume_encryption,
+            "_daemon_request",
+            return_value=(
+                200,
+                {
+                    "ok": True,
+                    "wrapped_dek": "grid:v1:12:svc-1:k2:newblob",
+                    "week": 12,
+                    "key_id": "k2",
+                    "host_path": "/var/lib/smsly/encrypted-volumes/mnt/vol-1/data",
+                    "cipher": "aes-256-xts-luks2",
+                },
+            ),
+        ):
+            ve = volume_encryption.verify_or_unlock(addon, "vol-1")
+
+        self.assertEqual(ve["wrapped_dek"], "grid:v1:12:svc-1:k2:newblob")
+        self.assertEqual(ve["week"], 12)
+        self.assertEqual(ve["key_id"], "k2")
+        self.assertEqual(addon.provider_metadata["volume_encryption"]["wrapped_dek"], "grid:v1:12:svc-1:k2:newblob")
+        self.assertEqual(addon.provider_metadata["volume_encryption"]["week"], 12)
+
 
 class AddonEncryptionIntegrationTests(TestCase):
     def setUp(self):

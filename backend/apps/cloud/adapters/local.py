@@ -495,6 +495,25 @@ def _remove_promote_hold_file(hold_path: str | None) -> None:
         os.unlink(hold_path)
 
 
+def _filter_network_aliases(network_name: str, aliases: list[str]) -> list[str]:
+    """Strip bare control-plane aliases when attaching to the shared `smsly-net` bridge."""
+    if str(network_name or "").strip() != "smsly-net":
+        return list(aliases)
+    from apps.deployments.constants import (
+        CONTROL_PLANE_NETWORK_ALIASES,
+        PLATFORM_RESERVED_CONTAINER_PREFIXES,
+    )
+    filtered: list[str] = []
+    for alias in aliases:
+        low = str(alias or "").strip().lower()
+        if not low:
+            continue
+        if low in CONTROL_PLANE_NETWORK_ALIASES or low.startswith(PLATFORM_RESERVED_CONTAINER_PREFIXES):
+            continue
+        filtered.append(alias)
+    return filtered
+
+
 class LocalAdapter(BaseCloudAdapter):
     """
     Adapter for Local Docker (Development) and K3s (Production).
@@ -523,6 +542,21 @@ class LocalAdapter(BaseCloudAdapter):
             self.batch_v1 = client.BatchV1Api()
         except Exception as e:
             logger.warning(f"Kubernetes client not available: {e}")
+
+    def _resolve_current_service_for_guard(self, name: str, fallback_labels: dict | None = None):
+        svc_id = str(getattr(self, '_service_id', '') or getattr(self, 'service_id', '') or '').strip()
+        if not svc_id and fallback_labels:
+            svc_id = str(fallback_labels.get('smsly.service_id') or '').strip()
+        if svc_id:
+            return type('_SvcRef', (), {'id': svc_id})()
+        try:
+            from apps.deployments.models import Service as _SvcGuard
+            svc_obj = _SvcGuard.objects.filter(name=name).only('id').first()
+            if svc_obj is not None:
+                return svc_obj
+        except Exception:
+            pass
+        return None
 
     def _resolve_network_name(self) -> str:
         """Resolve the scoped Docker network name for the current service.
@@ -604,6 +638,11 @@ class LocalAdapter(BaseCloudAdapter):
         labels[f'traefik.http.routers.{router_name}.entrypoints'] = ','.join(entrypoints)
         self._apply_crowdsec_middleware(labels, name, router_name=router_name)
         self._apply_edge_middlewares(labels, name, router_name=router_name)
+        if not is_public and labels.get("sablier.enable") == "true":
+            labels['traefik.enable'] = 'true'
+            pub_prefix = f'traefik.http.routers.{router_name}.'
+            for rk in [k for k in labels if k.startswith(pub_prefix)]:
+                labels.pop(rk, None)
         return labels
 
     def _apply_crowdsec_middleware(
@@ -661,24 +700,25 @@ class LocalAdapter(BaseCloudAdapter):
         if svc is not None and getattr(svc, "sablier_enabled", False):
             from apps.deployments.services.internal_wake import (
                 internal_wake_host,
-                service_has_mesh_sidecar,
             )
             from apps.deployments.services.traefik_labels import (
                 internal_wake_labels,
+                normalize_sablier_session,
                 sablier_middleware_ref,
                 sablier_retry_labels,
                 sablier_retry_ref,
                 sablier_service_labels,
+                service_supports_sablier,
             )
-            if service_has_mesh_sidecar(svc):
-                # Mesh-served: no in-band wake path (see internal_wake).
-                # Skip enrollment so the provider never sleeps stranded.
+            sablier_ok, sablier_reason = service_supports_sablier(svc)
+            if not sablier_ok:
                 logger.warning(
-                    "sablier deferred for %s: mesh sidecar attached",
+                    "sablier deferred for %s: %s",
                     name,
+                    sablier_reason,
                 )
             else:
-                session = str(getattr(svc, "sablier_session", "") or "10m").strip() or "10m"
+                session = normalize_sablier_session(getattr(svc, "sablier_session", "") or "10m")
                 labels.update(sablier_service_labels(
                     router_name=router_name, group=name, session=session,
                 ))
@@ -882,10 +922,16 @@ class LocalAdapter(BaseCloudAdapter):
             from apps.deployments.services.internal_wake import (
                 ensure_internal_wake_alias,
             )
+            from apps.deployments.services.traefik_labels import (
+                service_supports_sablier,
+            )
             _svc_a = _SvcA.objects.filter(name=name).only(
-                "id", "sablier_enabled").first()
-            if _svc_a is not None and bool(
-                    getattr(_svc_a, "sablier_enabled", False)):
+                "id", "sablier_enabled", "active_target_type", "server").first()
+            if (
+                _svc_a is not None
+                and bool(getattr(_svc_a, "sablier_enabled", False))
+                and service_supports_sablier(_svc_a)[0]
+            ):
                 ensure_internal_wake_alias(name, network_name)
         except Exception as exc:
             logger.debug("internal-wake alias skipped for %s: %s", name, exc)
@@ -928,9 +974,19 @@ class LocalAdapter(BaseCloudAdapter):
                     docker_volumes[vol_name] = {
                         'bind': vol['mount_path'], 'mode': 'rw'}
 
+        from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
+        if DeletionOrchestrator._is_foreign_or_platform_resource(None, {}, name):
+            raise RuntimeError(f"Refusing to deploy container with reserved platform name '{name}'")
+
         old_container = None
         with contextlib.suppress(docker.errors.NotFound):
-            old_container = self.docker_client.containers.get(name)
+            candidate = self.docker_client.containers.get(name)
+            guard_svc = self._resolve_current_service_for_guard(name)
+            c_labels = (getattr(candidate, 'attrs', None) or {}).get('Config', {}).get('Labels') or getattr(candidate, 'labels', None) or {}
+            c_name = getattr(candidate, 'name', '') or name
+            if DeletionOrchestrator._is_foreign_or_platform_resource(guard_svc, c_labels, c_name):
+                raise RuntimeError(f"Refusing to overwrite foreign or platform container '{name}'")
+            old_container = candidate
         hold_for_staging = bool(str(env.get('STAGING_DOMAIN', '')).strip())
         stage_before_cutover = old_container is not None or hold_for_staging
 
@@ -1159,7 +1215,11 @@ class LocalAdapter(BaseCloudAdapter):
         else:
             labels.update(self._get_traefik_labels(name, host_rule, port, is_public, network_name=network_name))
             self._apply_router_special_labels(labels, name, env)
-            if platform_hc_enabled and hc_primary_path:
+            if (
+                platform_hc_enabled
+                and hc_primary_path
+                and labels.get("sablier.enable") != "true"
+            ):
                 # Use same fallback paths as Docker health check
                 hc_paths = _health_paths(hc_primary_path)
                 hc_path_primary = hc_paths[0] if hc_paths else hc_primary_path or "/"
@@ -1222,6 +1282,8 @@ class LocalAdapter(BaseCloudAdapter):
                     aliases.append(_mesh_alias)
             except Exception as exc:
                 logger.debug("Mesh alias lookup skipped for %s: %s", name, exc)
+
+        aliases = _filter_network_aliases(network_name, aliases)
 
         logger.info(
             "Deploy strategy for %s: %s",
@@ -1420,47 +1482,12 @@ class LocalAdapter(BaseCloudAdapter):
         if container_runtime:
             create_kwargs["runtime"] = container_runtime
 
-        # When running under gVisor (runsc), the container's userspace TCP/IP
-        # stack cannot reach Docker's embedded DNS proxy at 127.0.0.11, so
-        # hostname-based addon connections fail. Work around this via the
-        # shared _resolve_gvisor_extra_hosts resolver (honors shared Postgres,
-        # synced node container_name metadata, and dual-homed bridges).
-        if container_runtime == "runsc":
-            try:
-                from apps.deployments.models import Service as _AddonSvc
-                from apps.deployments.services.container_refresh import (
-                    _resolve_gvisor_extra_hosts,
-                )
-
-                svc_id = getattr(self, "_service_id", None) or getattr(self, "service_id", None)
-                _addsvc = None
-                if svc_id:
-                    _addsvc = (
-                        _AddonSvc.objects.filter(id=svc_id)
-                        .select_related("project")
-                        .first()
-                    )
-                if _addsvc is not None or not svc_id:
-                    extra_hosts = _resolve_gvisor_extra_hosts(
-                        _addsvc,
-                        list(networks_dict.keys()),
-                        self.docker_client,
-                    )
-                    if extra_hosts:
-                        create_kwargs["extra_hosts"] = extra_hosts
-                        logger.info(
-                            "gVisor detected: injecting %d addon hostname->IP mappings into /etc/hosts: %s",
-                            len(extra_hosts),
-                            extra_hosts,
-                        )
-            except Exception as exc:
-                logger.warning("Failed to resolve addon IPs for gVisor extra_hosts: %s", exc)
-
         from apps.deployments.services.container_runtime import (
             ensure_sandbox_resolv_conf,
             is_sandboxed_runtime,
             sandbox_dns_servers,
         )
+        _deploy_resolv_mounted = False
         if container_runtime and is_sandboxed_runtime(container_runtime):
             # Sandboxed runtimes (gVisor/Kata) swallow 127.0.0.11
             # in-sandbox, so Docker embedded DNS is dead and every
@@ -1488,8 +1515,60 @@ class LocalAdapter(BaseCloudAdapter):
                     ):
                         _vols[_resolv_path] = {"bind": "/etc/resolv.conf", "mode": "ro"}
                         create_kwargs["volumes"] = _vols
+                    _deploy_resolv_mounted = True
             except Exception as exc:
                 logger.debug("Sandbox resolv.conf mount skipped: %s", exc)
+
+        # When running under gVisor (runsc), the container's userspace TCP/IP
+        # stack cannot reach Docker's embedded DNS proxy at 127.0.0.11, so
+        # hostname-based addon connections fail. Work around this via the
+        # shared _resolve_gvisor_extra_hosts resolver (honors shared Postgres,
+        # synced node container_name metadata, and dual-homed bridges).
+        if container_runtime == "runsc":
+            try:
+                from apps.deployments.models import Service as _AddonSvc
+                from apps.deployments.services.container_refresh import (
+                    _resolve_gvisor_extra_hosts,
+                )
+
+                svc_id = getattr(self, "_service_id", None) or getattr(self, "service_id", None)
+                _addsvc = None
+                if svc_id:
+                    _addsvc = (
+                        _AddonSvc.objects.filter(id=svc_id)
+                        .select_related("project")
+                        .first()
+                    )
+                if _addsvc is not None or not svc_id:
+                    extra_hosts = _resolve_gvisor_extra_hosts(
+                        _addsvc,
+                        list(networks_dict.keys()),
+                        self.docker_client,
+                        include_siblings=not _deploy_resolv_mounted,
+                    )
+                    if extra_hosts:
+                        existing_eh = create_kwargs.get("extra_hosts")
+                        merged_eh = list(extra_hosts)
+                        seen_hosts = {str(h).partition(":")[0] for h in merged_eh}
+                        if isinstance(existing_eh, dict):
+                            for eh_k, eh_v in existing_eh.items():
+                                if eh_k not in seen_hosts:
+                                    merged_eh.append(f"{eh_k}:{eh_v}")
+                                    seen_hosts.add(eh_k)
+                        elif isinstance(existing_eh, list):
+                            for eh_item in existing_eh:
+                                eh_k = str(eh_item).partition(":")[0]
+                                if eh_k and eh_k not in seen_hosts:
+                                    merged_eh.append(str(eh_item))
+                                    seen_hosts.add(eh_k)
+                        create_kwargs["extra_hosts"] = merged_eh
+                        logger.info(
+                            "gVisor detected: injecting %d addon hostname->IP mappings into /etc/hosts: %s",
+                            len(merged_eh),
+                            merged_eh,
+                        )
+            except Exception as exc:
+                logger.warning("Failed to resolve addon IPs for gVisor extra_hosts: %s", exc)
 
         new_container = self.docker_client.containers.create(**create_kwargs)
         new_container.start()
@@ -1722,7 +1801,12 @@ class LocalAdapter(BaseCloudAdapter):
         # Probe now; if the working path differs, do a one-time recreate
         # with corrected labels. The container is seconds old and behind
         # no traffic yet, so the recreate is invisible to users.
-        if platform_hc_enabled and docker_healthcheck is not None and not stage_before_cutover:
+        if (
+            platform_hc_enabled
+            and docker_healthcheck is not None
+            and not stage_before_cutover
+            and labels.get("sablier.enable") != "true"
+        ):
             try:
                 hc_paths = _health_paths(hc_primary_path)
                 detected_path = _detect_working_health_path(
@@ -1786,6 +1870,11 @@ class LocalAdapter(BaseCloudAdapter):
                     "Health-path probe/recreate skipped for %s: %s", name, exc
                 )
 
+        try:
+            from apps.deployments.services.mesh_dns import sync_dns_now
+            sync_dns_now(client=self.docker_client)
+        except Exception:
+            pass
         logger.info("Container %s is healthy and serving traffic", name)
         return new_container.id
 
@@ -1873,10 +1962,20 @@ class LocalAdapter(BaseCloudAdapter):
         old_ip = ""
         old_router_info = None
         backup_name = ""
+        from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
+        if DeletionOrchestrator._is_foreign_or_platform_resource(None, {}, name):
+            raise RuntimeError(f"Refusing to promote container with reserved platform name '{name}'")
+
         try:
             if self.docker_client is None:
                 raise RuntimeError("Docker client unavailable")
-            old_container = self.docker_client.containers.get(name)
+            candidate_old = self.docker_client.containers.get(name)
+            guard_svc = self._resolve_current_service_for_guard(name, fallback_labels=green_labels)
+            c_labels = (getattr(candidate_old, 'attrs', None) or {}).get('Config', {}).get('Labels') or getattr(candidate_old, 'labels', None) or {}
+            c_name = getattr(candidate_old, 'name', '') or name
+            if DeletionOrchestrator._is_foreign_or_platform_resource(guard_svc, c_labels, c_name):
+                raise RuntimeError(f"Refusing to promote over foreign or platform container '{name}'")
+            old_container = candidate_old
             with contextlib.suppress(Exception):
                 old_container.reload()
             old_is_live_running = (
@@ -2007,7 +2106,12 @@ class LocalAdapter(BaseCloudAdapter):
                 logger.debug(
                     "Promote health-path probe failed for %s: %s", name, exc
                 )
-            if auth_locked:
+            if live_labels.get("sablier.enable") == "true":
+                hc_prefix = f"traefik.http.services.{router_name}.loadbalancer.healthcheck."
+                for hk in [k for k in live_labels if k.startswith(hc_prefix)]:
+                    live_labels.pop(hk, None)
+                live_labels['smsly.blue_green.hc_path'] = hc_path_primary
+            elif auth_locked:
                 logger.info(
                     "Promote health-path: every candidate for %s is "
                     "auth-locked (401/403) — dropping Traefik healthcheck "
@@ -2168,10 +2272,11 @@ class LocalAdapter(BaseCloudAdapter):
             )
             green_runtime = green_host_config.get('Runtime')
             sandboxed_promote = bool(green_runtime and is_sandboxed_runtime(green_runtime))
-            initial_aliases = (
+            initial_aliases = _filter_network_aliases(
+                network_name,
                 promote_aliases
                 if (not old_is_live_running or sandboxed_promote)
-                else [create_name]
+                else [create_name],
             )
             promote_networks_dict: dict[str, Any] = {
                 network_name: self.docker_client.api.create_endpoint_config(
@@ -2192,7 +2297,12 @@ class LocalAdapter(BaseCloudAdapter):
                     if use_platform_bridge:
                         promote_networks_dict[platform_bridge] = (
                             self.docker_client.api.create_endpoint_config(
-                                aliases=initial_aliases
+                                aliases=_filter_network_aliases(
+                                    platform_bridge,
+                                    promote_aliases
+                                    if (not old_is_live_running or sandboxed_promote)
+                                    else [create_name],
+                                )
                             )
                         )
             except Exception as exc:
@@ -2226,6 +2336,37 @@ class LocalAdapter(BaseCloudAdapter):
                     {"Name": "fsize", "Soft": 512000000, "Hard": 512000000},
                 ]
 
+            green_dns = green_host_config.get('Dns')
+            if green_dns:
+                run_kwargs['dns'] = list(green_dns)
+            elif green_runtime and is_sandboxed_runtime(green_runtime):
+                try:
+                    run_kwargs['dns'] = sandbox_dns_servers()
+                except Exception:
+                    run_kwargs['dns'] = ["8.8.8.8", "1.1.1.1"]
+
+            _promote_resolv_mounted = False
+            if green_runtime and is_sandboxed_runtime(green_runtime):
+                try:
+                    _resolv_path = ensure_sandbox_resolv_conf(run_kwargs.get('dns'))
+                    if _resolv_path and os.path.isfile(_resolv_path):
+                        _bind_spec = f"{_resolv_path}:/etc/resolv.conf:ro"
+                        if green_volumes is None:
+                            green_volumes = [_bind_spec]
+                        elif isinstance(green_volumes, list):
+                            if not any(":/etc/resolv.conf" in str(b) for b in green_volumes):
+                                green_volumes = list(green_volumes) + [_bind_spec]
+                        elif isinstance(green_volumes, dict):
+                            if not any(
+                                isinstance(v, dict) and v.get("bind") == "/etc/resolv.conf"
+                                for v in green_volumes.values()
+                            ):
+                                green_volumes = dict(green_volumes)
+                                green_volumes[_resolv_path] = {"bind": "/etc/resolv.conf", "mode": "ro"}
+                        _promote_resolv_mounted = True
+                except Exception as exc:
+                    logger.debug("Promote sandbox resolv.conf mount skipped: %s", exc)
+
             green_extra_hosts = green_host_config.get('ExtraHosts')
             if green_runtime == 'runsc':
                 try:
@@ -2245,12 +2386,13 @@ class LocalAdapter(BaseCloudAdapter):
                         list(promote_networks_dict.keys()),
                         self.docker_client,
                         live=_live_hosts or None,
+                        include_siblings=not _promote_resolv_mounted,
                     )
                     if refreshed_hosts:
                         run_kwargs['extra_hosts'] = refreshed_hosts
                 except Exception as exc:
                     logger.debug("Promote gVisor extra_hosts refresh skipped: %s", exc)
-            if 'extra_hosts' not in run_kwargs and green_extra_hosts:
+            if 'extra_hosts' not in run_kwargs and green_extra_hosts and green_runtime != 'runsc':
                 if isinstance(green_extra_hosts, dict):
                     run_kwargs['extra_hosts'] = dict(green_extra_hosts)
                 elif isinstance(green_extra_hosts, list):
@@ -2261,35 +2403,6 @@ class LocalAdapter(BaseCloudAdapter):
                             _eh_dict[h_k] = h_v
                     if _eh_dict:
                         run_kwargs['extra_hosts'] = _eh_dict
-
-            green_dns = green_host_config.get('Dns')
-            if green_dns:
-                run_kwargs['dns'] = list(green_dns)
-            elif green_runtime and is_sandboxed_runtime(green_runtime):
-                try:
-                    run_kwargs['dns'] = sandbox_dns_servers()
-                except Exception:
-                    run_kwargs['dns'] = ["8.8.8.8", "1.1.1.1"]
-
-            if green_runtime and is_sandboxed_runtime(green_runtime):
-                try:
-                    _resolv_path = ensure_sandbox_resolv_conf(run_kwargs.get('dns'))
-                    if _resolv_path and os.path.isfile(_resolv_path):
-                        _bind_spec = f"{_resolv_path}:/etc/resolv.conf:ro"
-                        if green_volumes is None:
-                            green_volumes = [_bind_spec]
-                        elif isinstance(green_volumes, list):
-                            if not any(":/etc/resolv.conf" in str(b) for b in green_volumes):
-                                green_volumes = list(green_volumes) + [_bind_spec]
-                        elif isinstance(green_volumes, dict):
-                            if not any(
-                                isinstance(v, dict) and v.get("bind") == "/etc/resolv.conf"
-                                for v in green_volumes.values()
-                            ):
-                                green_volumes = dict(green_volumes)
-                                green_volumes[_resolv_path] = {"bind": "/etc/resolv.conf", "mode": "ro"}
-                except Exception as exc:
-                    logger.debug("Promote sandbox resolv.conf mount skipped: %s", exc)
 
             from apps.core.crypto_daemon import needs_host_gateway
             if needs_host_gateway(promoted_env):
@@ -2398,7 +2511,10 @@ class LocalAdapter(BaseCloudAdapter):
                                 continue
                             if needed_net in attached:
                                 net_obj.disconnect(promoted)
-                            net_obj.connect(promoted, aliases=promote_aliases)
+                            net_obj.connect(
+                                promoted,
+                                aliases=_filter_network_aliases(needed_net, promote_aliases),
+                            )
                         except Exception as alias_exc:
                             logger.warning(
                                 "Blue-green promote: alias cutover failed on %s for %s: %s",
@@ -2443,7 +2559,10 @@ class LocalAdapter(BaseCloudAdapter):
                             continue
                         try:
                             missing_net = self.docker_client.networks.get(needed_net)
-                            missing_net.connect(promoted, aliases=[name, f"{name}.default.internal"])
+                            missing_net.connect(
+                                promoted,
+                                aliases=_filter_network_aliases(needed_net, [name, f"{name}.default.internal"]),
+                            )
                             logger.info(
                                 "Blue-green promote: repaired missing network attachment %s for %s",
                                 needed_net, name,
@@ -2507,11 +2626,26 @@ class LocalAdapter(BaseCloudAdapter):
                 from apps.deployments.services.traefik_manager.canary_file import (
                     remove_canary_file,
                 )
+                from apps.deployments.services.traefik_manager.overflow_file import (
+                    sync_overflow_file,
+                )
                 _svc_id = getattr(self, "_service_id", None) or getattr(self, "service_id", None)
                 if _svc_id:
                     remove_canary_file(str(_svc_id))
+                    try:
+                        from apps.deployments.models import Service as _SvcOverflow
+                        _svc_row = _SvcOverflow.objects.filter(id=str(_svc_id)).first()
+                        if _svc_row is not None:
+                            sync_overflow_file(_svc_row)
+                    except Exception:
+                        pass
             except Exception as exc:
-                logger.debug("Canary file cleanup on promote failed: %s", exc)
+                logger.debug("Traefik dynamic file update on promote failed: %s", exc)
+            try:
+                from apps.deployments.services.mesh_dns import sync_dns_now
+                sync_dns_now(client=self.docker_client)
+            except Exception:
+                pass
             return promoted.id
 
         except Exception as exc:
@@ -2572,12 +2706,20 @@ class LocalAdapter(BaseCloudAdapter):
                             raise RuntimeError("Docker client unavailable")
                         net = self.docker_client.networks.get(network_name)
                         net.disconnect(old_container)
-                        net.connect(old_container, aliases=[name, f"{name}.default.internal"])
+                        net.connect(
+                            old_container,
+                            aliases=_filter_network_aliases(network_name, [name, f"{name}.default.internal"]),
+                        )
                     except Exception as net_exc:
                         logger.warning(
                             "Blue-green promote restore alias update failed: %s",
                             net_exc,
                         )
+                    try:
+                        from apps.deployments.services.mesh_dns import sync_dns_now
+                        sync_dns_now(client=self.docker_client)
+                    except Exception:
+                        pass
                 else:
                     # Emergency: rollback container is gone and promote failed.
                     # Attempt to recreate from the green image to avoid total loss.
@@ -2594,7 +2736,7 @@ class LocalAdapter(BaseCloudAdapter):
                         emergency_aliases = [name, f"{name}.default.internal"]
                         emergency_networks: dict[str, Any] = {
                             network_name: self.docker_client.api.create_endpoint_config(
-                                aliases=emergency_aliases
+                                aliases=_filter_network_aliases(network_name, emergency_aliases)
                             )
                         }
                         try:
@@ -2602,31 +2744,61 @@ class LocalAdapter(BaseCloudAdapter):
                             if _emerg_bridge != network_name:
                                 emergency_networks[_emerg_bridge] = (
                                     self.docker_client.api.create_endpoint_config(
-                                        aliases=emergency_aliases
+                                        aliases=_filter_network_aliases(_emerg_bridge, emergency_aliases)
                                     )
                                 )
                         except Exception:
                             pass
-                        emergency = self.docker_client.containers.create(
-                            image=image_ref,
-                            name=name,
-                            environment=green_env,
-                            network=network_name,
-                            networking_config=emergency_networks,
-                            labels=live_labels,
-                            restart_policy=rp,
-                            init=True,
-                            command=green_cmd,
-                            security_opt=["no-new-privileges:true", "apparmor:docker-default"],
-                            cap_drop=["ALL"],
-                            cap_add=["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
-                            pids_limit=1024,
-                        )
+                        emergency_kwargs: dict[str, Any] = {
+                            "image": image_ref,
+                            "name": name,
+                            "environment": green_env,
+                            "network": network_name,
+                            "networking_config": emergency_networks,
+                            "labels": live_labels,
+                            "restart_policy": rp,
+                            "init": bool(green_host_config.get("Init", True)),
+                            "command": green_cmd,
+                            "security_opt": green_host_config.get("SecurityOpt") or ["no-new-privileges:true", "apparmor:docker-default"],
+                            "cap_drop": green_host_config.get("CapDrop") or ["ALL"],
+                            "cap_add": green_host_config.get("CapAdd") or ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
+                            "pids_limit": green_host_config.get("PidsLimit") or 1024,
+                        }
+                        if green_entrypoint:
+                            emergency_kwargs["entrypoint"] = green_entrypoint
+                        if green_config.get("WorkingDir"):
+                            emergency_kwargs["working_dir"] = green_config["WorkingDir"]
+                        if green_config.get("User"):
+                            emergency_kwargs["user"] = green_config["User"]
+                        if green_healthcheck:
+                            emergency_kwargs["healthcheck"] = green_healthcheck
+                        if green_volumes:
+                            emergency_kwargs["volumes"] = green_volumes
+                        if green_host_config.get("ReadonlyRootfs") is not None:
+                            emergency_kwargs["read_only"] = bool(green_host_config["ReadonlyRootfs"])
+                        if green_host_config.get("Tmpfs"):
+                            emergency_kwargs["tmpfs"] = green_host_config["Tmpfs"]
+                        if green_host_config.get("Dns"):
+                            emergency_kwargs["dns"] = green_host_config["Dns"]
+                        if green_host_config.get("ExtraHosts"):
+                            emergency_kwargs["extra_hosts"] = green_host_config["ExtraHosts"]
+                        if green_host_config.get("Memory"):
+                            emergency_kwargs["mem_limit"] = green_host_config["Memory"]
+                        if green_host_config.get("NanoCpus"):
+                            emergency_kwargs["nano_cpus"] = green_host_config["NanoCpus"]
+                        if green_runtime:
+                            emergency_kwargs["runtime"] = green_runtime
+                        emergency = self.docker_client.containers.create(**emergency_kwargs)
                         emergency.start()
                         logger.info(
                             "Emergency recreate succeeded for %s (container %s).",
                             name, emergency.id[:12],
                         )
+                        try:
+                            from apps.deployments.services.mesh_dns import sync_dns_now
+                            sync_dns_now(client=self.docker_client)
+                        except Exception:
+                            pass
                     except Exception as emergency_exc:
                         logger.error(
                             "Emergency recreate also failed for %s: %s",

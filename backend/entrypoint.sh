@@ -420,11 +420,7 @@ collect_static_nonfatal() {
         python manage.py collectstatic --noinput || \
             echo "WARNING: collectstatic failed (non-fatal)"
     fi
-
-
-
-# } ensure_prometheus_targets_writable closing brace removed (function call merged above)
-
+}
 
 
 setup_social_apps_nonfatal() {
@@ -610,60 +606,6 @@ import django; django.setup()
 from apps.deployments.services.caddy_manager.config_generation import ensure_ip_cert
 ensure_ip_cert()
 " 2>/dev/null || true
-
-
-
-    mkdir -p /opt/smsly-hosting/prometheus-targets  || true
-
-
-
-    chown 1000:1000 /opt/smsly-hosting/prometheus-targets  || true
-
-
-
-    chmod 2777 /opt/smsly-hosting/prometheus-targets  || true
-
-
-
-    # Remove stale root-owned files from previous runs
-
-
-
-    find /opt/smsly-hosting/prometheus-targets -type f -exec chmod 666 {} +  || true
-
-
-
-    # Verify write access with a probe file
-
-
-
-    if ! touch /opt/smsly-hosting/prometheus-targets/.perm_probe ; then
-
-
-
-        echo "[entrypoint] WARNING: /opt/smsly-hosting/prometheus-targets is not writable by uid $(id -u)." >&2
-
-
-
-        echo "[entrypoint] Run on host: sudo chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets" >&2
-
-
-
-    else
-
-
-
-        rm -f /opt/smsly-hosting/prometheus-targets/.perm_probe
-
-
-
-    fi
-
-
-
-}
-
-
 
 # ensure_prometheus_targets_writable: merged into ensure_bind_mount_permissions()
 

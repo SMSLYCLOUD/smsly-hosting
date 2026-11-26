@@ -518,11 +518,15 @@ class Service(TimeStampedModel):
     health_webhook_token = models.CharField(  # type: ignore[var-annotated]
         max_length=64, blank=True,
         help_text="Token for the service to push health status to the platform")
+    health_webhook_token_last_used_at = models.DateTimeField(  # type: ignore[var-annotated]
+        blank=True, null=True,
+        help_text="Last time the health webhook token was used (for idle expiry).")
     health_status = models.CharField(  # type: ignore[var-annotated]
         max_length=32, default='unknown',
         choices=[
             ('healthy', 'Healthy'),
             ('unhealthy', 'Unhealthy'),
+            ('standby', 'Standby'),
             ('unknown', 'Unknown'),
             ('starting', 'Starting'),
             ('needs_manual_intervention', 'Needs Manual Intervention'),
@@ -803,17 +807,22 @@ class Service(TimeStampedModel):
         # isolation guarantees as ecosystem deploys.
         if not self.project_id and self.owner_id:
             from django.db import IntegrityError
-            try:
-                project = Project.objects.get(owner_id=self.owner_id, slug='default')
-            except Project.DoesNotExist:
+            project = Project.objects.filter(owner_id=self.owner_id, is_default=True).first()
+            if not project:
+                project = Project.objects.filter(owner_id=self.owner_id, slug='default').first()
+            if not project:
                 try:
                     project = Project.objects.create(
                         owner_id=self.owner_id,
                         name='Default',
                         slug='default',
+                        is_default=True,
                     )
                 except IntegrityError:
-                    project = Project.objects.get(owner_id=self.owner_id, slug='default')
+                    project = (
+                        Project.objects.filter(owner_id=self.owner_id, is_default=True).first()
+                        or Project.objects.get(owner_id=self.owner_id, slug='default')
+                    )
             self.project = project
 
         if not self.slug:

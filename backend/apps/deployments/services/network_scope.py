@@ -28,6 +28,9 @@ import docker
 logger = logging.getLogger(__name__)
 
 RULE_TAG_PREFIX = "smsly-egress-"
+INPUT_RULE_TAG_PREFIX = "smsly-input-"
+TENANT_INPUT_WILDCARD_TAG = "smsly-tenant-input"
+TENANT_BLOCKED_HOST_PORTS = ("3100", "8888", "9105", "8971", "8972", "2019", "9443")
 
 # Tag for the mesh-reply exception (see ensure_mesh_reply_rule). Kept
 # separate from the per-bridge egress tag so old-format blocks — whose
@@ -109,10 +112,10 @@ def _nft_fallback_command(args: list[str]) -> str:
     iptables -I DOCKER-USER -i BR -o BR2 -j DROP [-m comment --comment TAG]
     nft insert rule ip filter DOCKER-USER iifname "BR" oifname "BR2" drop comment "TAG"
     """
-    chain = "DOCKER-USER"
-    if args[:3] != ["iptables", "-I", chain]:
+    if args[:3] not in (["iptables", "-I", "DOCKER-USER"], ["iptables", "-I", "INPUT"]):
         # Untranslatable (e.g. '-S', '-D' listing/delete) — best-effort raw.
         return "nft " + " ".join(args[1:])
+    chain = args[2]
 
     parts = args[3:]
     expr: list[str] = []
@@ -407,6 +410,54 @@ def _list_docker_user_rules() -> list[str]:
     return rules
 
 
+def _list_input_rules() -> list[str]:
+    """Return current INPUT chain rules as spec strings (without '-A INPUT')."""
+    res = _sh(["iptables", "-S", "INPUT"])
+    rules: list[str] = []
+    for line in (res.stdout or "").splitlines():
+        line = line.strip()
+        if line.startswith("-A INPUT "):
+            rules.append(line[len("-A INPUT "):].strip())
+    return rules
+
+
+def _is_untrusted_tenant_network(network_name: str) -> bool:
+    """True for per-service/per-project untrusted tenant bridges."""
+    name = str(network_name or "").strip().lower()
+    return name.startswith("paas-") or name.startswith("smsly-net-")
+
+
+def _input_rule_tag(bridge_iface: str) -> str:
+    return INPUT_RULE_TAG_PREFIX + bridge_iface.replace("br-", "", 1)
+
+
+def _ensure_tenant_host_input_isolation(bridge_iface: str, network_name: str) -> None:
+    """Block untrusted tenant bridges from reaching host-local control/admin ports."""
+    if not _is_untrusted_tenant_network(network_name):
+        return
+    try:
+        existing_input = _list_input_rules()
+    except Exception:
+        existing_input = []
+
+    input_tag = _input_rule_tag(bridge_iface)
+    if not any(input_tag in r for r in existing_input):
+        for port in TENANT_BLOCKED_HOST_PORTS:
+            _sh([
+                "iptables", "-I", "INPUT", "-i", bridge_iface,
+                "-p", "tcp", "--dport", port, "-j", "DROP",
+                "-m", "comment", "--comment", input_tag,
+            ])
+
+    if not any(TENANT_INPUT_WILDCARD_TAG in r for r in existing_input):
+        for port in TENANT_BLOCKED_HOST_PORTS:
+            _sh([
+                "iptables", "-I", "INPUT", "-i", "paas-+",
+                "-p", "tcp", "--dport", port, "-j", "DROP",
+                "-m", "comment", "--comment", TENANT_INPUT_WILDCARD_TAG,
+            ])
+
+
 def _rule_tag(bridge_iface: str) -> str:
     """Stable per-bridge comment tag: br-<id12> -> smsly-egress-<id12>."""
     return RULE_TAG_PREFIX + bridge_iface.replace("br-", "", 1)
@@ -519,6 +570,16 @@ def clear_scoped_rules(network_name: str) -> int:
             logger.info("Removed DOCKER-USER rule for %s", network_name)
         else:
             logger.warning("Failed removing rule: %s", del_res.stderr.strip()[:120])
+    if _is_untrusted_tenant_network(network_name):
+        input_tag = _input_rule_tag(bridge_iface)
+        try:
+            for parts in [r.split() for r in _list_input_rules()]:
+                if input_tag in parts and bridge_iface in parts:
+                    del_res = _sh(["iptables", "-D", "INPUT"] + parts)
+                    if del_res.returncode == 0:
+                        removed += 1
+        except Exception:
+            pass
     return removed
 
 
@@ -665,10 +726,11 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
         # ESTABLISHED,RELATED must come BEFORE the cross-bridge DROP so that
         # responses (e.g. from Traefik or internet) reach the container.
         _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "RETURN"])
-        _run([
-            "iptables", "-I", "DOCKER-USER", "-i", bridge_iface,
-            "-d", MESH_CIDR, "-j", "RETURN",
-        ])
+        if not _is_untrusted_tenant_network(network_name):
+            _run([
+                "iptables", "-I", "DOCKER-USER", "-i", bridge_iface,
+                "-d", MESH_CIDR, "-j", "RETURN",
+            ])
     else:
         for cidr in valid_cidrs:
             _run([
@@ -696,6 +758,7 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
         "iptables", "-I", "DOCKER-USER", "-i", bridge_iface,
         "-p", "udp", "--dport", "53", "-j", "RETURN",
     ])
+    _ensure_tenant_host_input_isolation(bridge_iface, network_name)
 
 
 def ensure_mesh_reply_rule(bridge_iface: str) -> bool:
@@ -1417,6 +1480,11 @@ def attach_container_to_service_network(service, container_id: str) -> bool:
                 getattr(service, "name", "?"), str(container_id)[:12],
                 network_name,
             )
+            try:
+                from apps.deployments.services.mesh_dns import sync_dns_now
+                sync_dns_now(client=client)
+            except Exception:
+                pass
             return True
         except Exception as exc:
             # Tolerate the connect race (attached concurrently).

@@ -601,15 +601,19 @@ def _probe_container_state(container_id: str, service=None, runtime_id: str | No
         except Exception:
             pass
     if not container_id:
-        return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": ""}
+        return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": "", "oom_killed": False, "sablier_enrolled": True}
     try:
         client = get_docker_client()
         container = client.containers.get(container_id)
-        state = container.attrs.get("State", {})
+        attrs = container.attrs or {}
+        state = attrs.get("State", {}) or {}
+        labels = ((attrs.get("Config") or {}).get("Labels") or {})
         status = (state.get("Status") or "unknown").lower()
         exit_code = state.get("ExitCode")
         restart_count = int(state.get("RestartCount") or 0)
         started_at = state.get("StartedAt") or ""
+        oom_killed = bool(state.get("OOMKilled", False))
+        sablier_enrolled = str(labels.get("sablier.enable", "") or "").strip().lower() == "true"
         health = ((state.get("Health") or {}).get("Status") or "").lower()
         return {
             "status": status,
@@ -617,11 +621,13 @@ def _probe_container_state(container_id: str, service=None, runtime_id: str | No
             "exit_code": exit_code,
             "restart_count": restart_count,
             "started_at": started_at,
+            "oom_killed": oom_killed,
+            "sablier_enrolled": sablier_enrolled,
         }
     except docker.errors.NotFound:
-        return {"status": "not-found", "exit_code": None, "restart_count": 0, "started_at": ""}
+        return {"status": "not-found", "exit_code": None, "restart_count": 0, "started_at": "", "oom_killed": False, "sablier_enrolled": False}
     except Exception:
-        return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": ""}
+        return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": "", "oom_killed": False, "sablier_enrolled": True}
 
 
 def _probe_remote_container_state(server, service, container_ref: str) -> dict:
@@ -629,11 +635,33 @@ def _probe_remote_container_state(server, service, container_ref: str) -> dict:
         from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
         stats = RemoteOrchestrator(server).get_container_stats(container_ref or service.name)
         if not stats:
-            return {"status": "not-found", "exit_code": None, "restart_count": 0, "started_at": ""}
+            return {"status": "not-found", "exit_code": None, "restart_count": 0, "started_at": "", "oom_killed": False, "sablier_enrolled": False}
         status = str(stats.get("status", "running") or "running").lower()
-        return {"status": status, "exit_code": 0 if status == "running" else None, "restart_count": 0, "started_at": ""}
+        return {"status": status, "exit_code": 0 if status == "running" else None, "restart_count": 0, "started_at": "", "oom_killed": False, "sablier_enrolled": True}
     except Exception:
-        return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": ""}
+        return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": "", "oom_killed": False, "sablier_enrolled": True}
+
+
+def is_sablier_clean_sleep(service: object, state_info: dict) -> bool:
+    """True only when a Sablier service stopped cleanly for scale-to-zero.
+
+    OOMKilled containers, unexpected non-signal exit codes (e.g. 1, 139),
+    or containers not actually enrolled with ``sablier.enable=true`` must
+    be treated as crashes rather than masked as healthy ``standby``.
+    """
+    if not bool(getattr(service, "sablier_enabled", False)):
+        return False
+    state = str((state_info or {}).get("status", "") or "").lower()
+    if state not in {"exited", "stopped", "paused"}:
+        return False
+    if bool((state_info or {}).get("oom_killed", False)):
+        return False
+    if not bool((state_info or {}).get("sablier_enrolled", True)):
+        return False
+    exit_code = (state_info or {}).get("exit_code")
+    if exit_code not in (None, 0, 143, 137):
+        return False
+    return True
 
 
 def _check_service_health(service: object, Deployment: object) -> None:
@@ -676,7 +704,7 @@ def _check_service_health(service: object, Deployment: object) -> None:
     state = state_info["status"]
     exit_code = state_info["exit_code"]
     restart_count = state_info["restart_count"]
-    sablier_sleeping = bool(getattr(service, "sablier_enabled", False)) and state in {"exited", "dead", "not-found", "stopped"}
+    sablier_sleeping = is_sablier_clean_sleep(service, state_info)
     if sablier_sleeping:
         if service.health_status != "standby":
             service.health_status = "standby"
@@ -1070,12 +1098,31 @@ def _trigger_restart(service, service_key: str) -> bool:
             logger.info("Skipping auto-restart for %s: deployment already in progress.", service.name)
             return False
 
-        # Don't pile on if a deployment recently failed — the issue
-        # is likely systemic and auto-restart won't help.
+        state = cache.get(_restart_key(service_key)) or {}
+        last_fallback_id = state.get("last_fallback_deployment_id")
+        if last_fallback_id:
+            last_fallback = Deployment.objects.filter(id=last_fallback_id).first()
+            if last_fallback and last_fallback.status == Deployment.Status.FAILED:
+                logger.warning(
+                    "Auto-restart skipped for %s: previous fallback deployment %s failed.",
+                    service.name, last_fallback_id,
+                )
+                if service.health_status != "needs_manual_intervention":
+                    service.health_status = "needs_manual_intervention"
+                    service.save(update_fields=["health_status", "updated_at"])
+                    _dispatch_health_alert(
+                        service, "needs_manual_intervention",
+                        f"Previous fallback deployment {last_fallback_id} failed",
+                    )
+                return False
+
+        # Don't pile on if an auto-restart deployment recently failed — the issue
+        # is likely systemic and another immediate auto-restart won't help.
         from datetime import timedelta
         if Deployment.objects.filter(
             service=service,
             status=Deployment.Status.FAILED,
+            commit_message__istartswith="Auto-restart",
             finished_at__gte=timezone.now() - timedelta(seconds=RESTART_COOLDOWN_BASE),
         ).exists():
             logger.info(

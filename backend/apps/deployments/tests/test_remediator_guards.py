@@ -30,12 +30,15 @@ class RemediatorGuardTests(TestCase):
             repository_url="https://github.com/example/repo",
             owner=self.user,
             provider=self.provider,
+            auto_rollback_enabled=True,
+            auto_rollback_threshold=1,
         )
         self.good_deploy = Deployment.objects.create(
             service=self.service,
             status=Deployment.Status.ACTIVE,
             commit_hash="good1234567",
             commit_message="Known good",
+            finished_at=self.service.created_at,
         )
         self.bad_deploy = Deployment.objects.create(
             service=self.service,
@@ -45,7 +48,7 @@ class RemediatorGuardTests(TestCase):
         )
         self.engine = RemediationEngine()
 
-    @patch("apps.intelligence.remediator.enqueue_smart_deploy_task")
+    @patch("apps.deployments.tasks.deployment.tasks_deploy.enqueue_smart_deploy_task")
     def test_crash_loop_creates_marked_rollback_and_skips_review(self, mock_delay):
         result = self.engine.apply_fix("CRASH_LOOP", str(self.service.id))
         self.assertTrue(result)
@@ -58,7 +61,7 @@ class RemediatorGuardTests(TestCase):
         self.assertEqual(rollback.status, Deployment.Status.QUEUED)
         self.assertEqual(rollback.commit_hash, self.good_deploy.commit_hash)
         self.assertEqual(rollback.rollback_from_id, self.bad_deploy.id)
-        self.assertTrue(rollback.commit_message.startswith("Auto-Rollback: Reverted to"))
+        self.assertTrue(rollback.commit_message.startswith("AUTO-ROLLBACK"))
 
         mock_delay.assert_called_once()
         args, kwargs = mock_delay.call_args

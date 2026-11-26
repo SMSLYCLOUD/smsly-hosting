@@ -58,7 +58,8 @@ class TransferMixin:
             return None
         try:
             from ....models.core import ManagedServer
-            from ...ssh_client import SSHClient
+            import apps.deployments.services.transfer_service as _ts_pkg
+            SSHClient = _ts_pkg.SSHClient
             row = ManagedServer.objects.filter(host=ip).first()
             client = SSHClient(
                 ip=ip,
@@ -286,12 +287,26 @@ class TransferMixin:
             )
 
     def _complete(self):
-        self.transfer.status = 'COMPLETED'
-        self.transfer.completed_at = timezone.now()
-        rollback_hours = int(os.environ.get("TRANSFER_ROLLBACK_HOURS", "48"))
-        self.transfer.rollback_deadline = timezone.now() + timedelta(hours=max(1, rollback_hours))
-        self.transfer.target_ssh_key = ''
-        self.transfer.target_ssh_password = ''
+        from django.db import transaction
+        from ....models.transfer import ServerTransfer
+
+        with transaction.atomic():
+            locked = ServerTransfer.objects.select_for_update().get(pk=self.transfer.pk)
+            locked.status = 'COMPLETED'
+            locked.completed_at = timezone.now()
+            rollback_hours = int(os.environ.get("TRANSFER_ROLLBACK_HOURS", "48"))
+            locked.rollback_deadline = timezone.now() + timedelta(hours=max(1, rollback_hours))
+            locked.target_ssh_key = ''
+            locked.target_ssh_password = ''
+            locked.save(update_fields=[
+                'status', 'completed_at', 'rollback_deadline',
+                'target_ssh_key', 'target_ssh_password',
+            ])
+            self.transfer.status = locked.status
+            self.transfer.completed_at = locked.completed_at
+            self.transfer.rollback_deadline = locked.rollback_deadline
+            self.transfer.target_ssh_key = ''
+            self.transfer.target_ssh_password = ''
 
         if self.transfer.transfer_type == 'SERVICE' and self.transfer.service:
             from ....models.core import ManagedServer

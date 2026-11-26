@@ -24,6 +24,7 @@ platform infra are NEVER touched (monitoring must stay up).
 """
 
 import logging
+import os
 from datetime import timedelta
 
 from celery import shared_task
@@ -104,8 +105,57 @@ def _wake_path_enrolled(container) -> tuple[bool, str]:
         return False, f"label read failed: {exc}"
 
 
+def _is_worker_node_runtime() -> bool:
+    """True when running inside a full worker node (which runs its own Sablier)."""
+    return (
+        str(os.environ.get("MODE_NODE", "") or "").strip().lower() == "true"
+        or str(os.environ.get("NODE_TYPE", "") or "").strip().lower() == "node"
+    )
+
+
+def _node_access_log_has_recent_traffic(service, idle_minutes: int) -> bool:
+    """Best-effort check of local Caddy/Traefik access logs on worker nodes."""
+    slug = str(getattr(service, "slug", "") or getattr(service, "name", "") or "").strip().lower()
+    pub = str(getattr(service, "public_domain", "") or "").strip().lower()
+    needles = [n for n in (pub, f"{slug}." if slug else "") if n]
+    if not needles:
+        return False
+    now_ts = timezone.now().timestamp()
+    cutoff_ts = now_ts - (idle_minutes * 60)
+    for log_path in ("/var/log/caddy/access.log", "/var/log/traefik/access.log"):
+        try:
+            st = os.stat(log_path)
+            if st.st_mtime < cutoff_ts:
+                continue
+            with open(log_path, "rb") as fh:
+                fh.seek(0, 2)
+                size = fh.tell()
+                fh.seek(max(0, size - 256 * 1024))
+                tail = fh.read().decode("utf-8", errors="ignore").lower()
+            for needle in needles:
+                if needle in tail:
+                    return True
+        except Exception:
+            continue
+    return False
+
+
 def _service_is_idle(service, idle_minutes: int) -> bool:
-    """No recorded traffic for this service within the window."""
+    """No recorded traffic or recent Sablier wake activity within the window."""
+    import time
+
+    svc_id = getattr(service, "id", None)
+    if svc_id:
+        try:
+            from django.core.cache import cache
+
+            last_ts = cache.get(f"sablier:last_activity:{svc_id}")
+            if isinstance(last_ts, (int, float)) and (time.time() - float(last_ts)) < (idle_minutes * 60):
+                return False
+        except Exception:
+            pass
+    if _is_worker_node_runtime() and _node_access_log_has_recent_traffic(service, idle_minutes):
+        return False
     try:
         from apps.deployments.models.traffic import ServiceTrafficLog
 
@@ -117,9 +167,78 @@ def _service_is_idle(service, idle_minutes: int) -> bool:
         return False
 
 
+def _container_recently_started(container, grace_minutes: int) -> bool:
+    """True when Docker reports the container started within *grace_minutes*."""
+    try:
+        attrs = getattr(container, "attrs", None)
+        if not isinstance(attrs, dict):
+            return False
+        state = attrs.get("State")
+        if not isinstance(state, dict):
+            return False
+        raw_started = state.get("StartedAt")
+        if not isinstance(raw_started, str) or len(raw_started) < 19:
+            return False
+        from datetime import datetime as _dt, timezone as _tz
+
+        cleaned = raw_started.strip()
+        if cleaned.endswith("Z"):
+            cleaned = cleaned[:-1] + "+00:00"
+        if "." in cleaned:
+            head, tail = cleaned.split(".", 1)
+            tz_idx = max(tail.find("+"), tail.find("-"))
+            if tz_idx != -1:
+                cleaned = f"{head}.{tail[:6]}{tail[tz_idx:]}"
+            else:
+                cleaned = f"{head}.{tail[:6]}+00:00"
+        started_dt = _dt.fromisoformat(cleaned)
+        if started_dt.tzinfo is None:
+            started_dt = started_dt.replace(tzinfo=_tz.utc)
+        age_seconds = (timezone.now() - started_dt).total_seconds()
+        return 0 <= age_seconds < (grace_minutes * 60)
+    except Exception:
+        return False
+
+
+def _find_service_containers(client, service, name: str) -> list:
+    """Resolve primary container or Compose stack containers owned by *service*."""
+    from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
+
+    try:
+        candidate = client.containers.get(name)
+        if not DeletionOrchestrator._is_foreign_or_platform_resource(
+            service, _container_labels(candidate), getattr(candidate, "name", name)
+        ):
+            return [candidate]
+    except Exception:
+        pass
+    svc_id = str(getattr(service, "id", "") or "").strip()
+    if not svc_id:
+        return []
+    try:
+        matches = []
+        for c in client.containers.list(filters={"label": f"smsly.service_id={svc_id}"}) or []:
+            cname = str(getattr(c, "name", "") or "")
+            if any(tag in cname for tag in ("-rollback-", "-green-", "-promoting-")):
+                continue
+            if cname.startswith("envoy-"):
+                continue
+            if DeletionOrchestrator._is_foreign_or_platform_resource(
+                service, _container_labels(c), cname
+            ):
+                continue
+            matches.append(c)
+        return matches
+    except Exception:
+        return []
+
+
 def _sleep_sablier_services(client) -> dict:
     slept: list[str] = []
     skipped: dict[str, str] = {}
+    if str(os.environ.get("MODE_AGENT_LITE", "") or "").strip().lower() == "true":
+        return {"slept": slept, "skipped": {"*": "agent-lite has no sablier"}}
+    is_worker_node = _is_worker_node_runtime()
     try:
         from apps.deployments.models import Deployment, Service
     except Exception as exc:
@@ -132,12 +251,34 @@ def _sleep_sablier_services(client) -> dict:
         name = getattr(service, "name", "") or ""
         if not name:
             continue
-        # Remote services: master Sablier cannot wake node containers.
+        svc_status = str(getattr(service, "status", "") or "").upper()
+        if svc_status in ("STOPPED", "DELETED", "DELETION_PENDING"):
+            skipped[name] = f"service {svc_status.lower()}"
+            continue
+        # Locality check:
+        # - Lite agents never run Sablier and must always be skipped.
+        # - Master Sablier skips remote services ("no master wake path").
+        # - Full worker nodes run their own Sablier daemon and backstop-sleep
+        #   containers running locally on that node.
         try:
             target = str(getattr(service, "active_target_type", "") or "").lower()
             server = getattr(service, "server", None)
-            if target in ("remote", "lite_agent") or (
-                server is not None and not getattr(server, "is_primary", True)
+            if server is None:
+                try:
+                    from apps.deployments.services.caddy_manager.config_generation import (
+                        _resolve_effective_server,
+                    )
+                    eff = _resolve_effective_server(service)
+                    if eff is not None and not getattr(eff, "is_primary", True):
+                        server = eff
+                except Exception:
+                    pass
+            if target == "lite_agent" or (server is not None and getattr(server, "is_lite_agent", False) is True):
+                skipped[name] = "lite_agent: no sablier on lite agent"
+                continue
+            if not is_worker_node and (
+                target == "remote"
+                or (server is not None and not getattr(server, "is_primary", True))
             ):
                 skipped[name] = "remote: no master wake path"
                 continue
@@ -176,14 +317,18 @@ def _sleep_sablier_services(client) -> dict:
                 continue
         except Exception:
             pass
-        try:
-            container = client.containers.get(name)
-        except Exception:
+        containers = _find_service_containers(client, service, name)
+        if not containers:
             skipped[name] = "no local container"
             continue
+        container = containers[0]
+        extra_containers = containers[1:]
         try:
             if getattr(container, "status", "") != "running":
                 skipped[name] = f"already {getattr(container, 'status', 'not-running')}"
+                continue
+            if _container_recently_started(container, session_min * 2):
+                skipped[name] = "recently started/woken"
                 continue
             # Fail-closed: never sleep a container with no wake path.
             # DB enrollment (sablier_enabled) is not enough — the wake
@@ -200,13 +345,71 @@ def _sleep_sablier_services(client) -> dict:
             container.stop(timeout=30)
             slept.append(name)
             logger.info("Sleeper: stopped idle sablier service %s", name)
+            # Stop any remaining Compose-group containers that belong to the same group.
+            for extra_c in extra_containers:
+                try:
+                    if getattr(extra_c, "status", "") != "running":
+                        continue
+                    ex_ok, _ = _wake_path_enrolled(extra_c)
+                    if ex_ok:
+                        extra_c.stop(timeout=30)
+                        logger.info(
+                            "Sleeper: co-slept group container %s of %s",
+                            getattr(extra_c, "name", "?"), name,
+                        )
+                except Exception:
+                    pass
+            # Co-sleep local RUNNING replicas that are Sablier-enrolled so
+            # scaled-out replicas don't keep burning RAM when the service
+            # goes idle (Sablier wakes the full group via sablier.group).
+            try:
+                from apps.autoscaler.models.replica import ServiceReplica
+
+                for rep in ServiceReplica.objects.filter(
+                    service=service,
+                    node__isnull=True,
+                    status="RUNNING",
+                ):
+                    cname = (getattr(rep, "container_name", "") or "").strip()
+                    if not cname:
+                        continue
+                    try:
+                        rc = client.containers.get(cname)
+                        if getattr(rc, "status", "") != "running":
+                            continue
+                        rep_enrolled, rep_why = _wake_path_enrolled(rc)
+                        if not rep_enrolled:
+                            logger.warning(
+                                "Sleeper: NOT sleeping replica %s of %s: %s",
+                                cname, name, rep_why,
+                            )
+                            continue
+                        rc.stop(timeout=30)
+                        logger.info("Sleeper: co-slept replica %s of %s", cname, name)
+                    except Exception:
+                        pass
+            except Exception as rep_exc:
+                logger.debug("Sleeper: replica co-sleep skipped for %s: %s", name, rep_exc)
             # Co-sleep the Envoy sidecar (if any) so sablier's group
             # state stays consistent: wake starts the whole group
             # together, and the repair beat never sees a lone sidecar
             # it would otherwise remove as an orphan.
             try:
                 sidecar = client.containers.get(f"envoy-{name}")
-                if getattr(sidecar, "status", "") == "running":
+                from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
+                sidecar_labels = _container_labels(sidecar)
+                sidecar_svc = str(
+                    sidecar_labels.get("com.paas.service")
+                    or sidecar_labels.get("smsly.blue_green.canonical_name")
+                    or ""
+                ).strip()
+                if (
+                    getattr(sidecar, "status", "") == "running"
+                    and not DeletionOrchestrator._is_foreign_or_platform_resource(
+                        service, sidecar_labels, ""
+                    )
+                    and (not sidecar_svc or sidecar_svc == name)
+                ):
                     sidecar.stop(timeout=15)
                     logger.info("Sleeper: co-slept sidecar envoy-%s", name)
             except Exception:

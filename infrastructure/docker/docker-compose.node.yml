@@ -157,6 +157,10 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     env_file: ../../.env
     command: >
       redis-server
@@ -188,6 +192,10 @@ services:
   rabbitmq:
     image: rabbitmq:3-management-alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-smsly_user}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-${RABBITMQ_PASSWORD:-}}
@@ -215,6 +223,8 @@ services:
       context: ../../backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     ports:
       # Mesh-direct API for master control traffic (preflight, sync,
       # deploy polling). Bound to the WireGuard address ONLY (default
@@ -395,6 +405,10 @@ services:
   agent-registrar:
     image: python:3.12-alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     command: >
       sh -c '
         apk add --no-cache docker-cli curl tzdata ca-certificates >/dev/null 2>&1 || true;
@@ -403,6 +417,7 @@ services:
       '
     env_file: ../../.env
     environment:
+      - DOCKER_HOST=tcp://socket-proxy:2375
       - MASTER_API_URL=${MASTER_URL:?MASTER_URL must be set in .env}
       # Mesh-direct fallback (WireGuard-encrypted): used when the public
       # URL is bot-walled (Cloudflare challenges 403 non-browser clients
@@ -425,9 +440,10 @@ services:
       - TZ=${TZ:-UTC}
     volumes:
       - ../../scripts/agent_registrar.py:/usr/local/bin/agent_registrar.py:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       backend:
+        condition: service_healthy
+      socket-proxy:
         condition: service_healthy
     healthcheck:
       # Freshness marker maintained by the registrar itself
@@ -440,6 +456,7 @@ services:
       start_period: 60s
     networks:
       - smsly-net
+      - socket-proxy
 
   # ============================================================
   # Caddy (Reverse proxy + automatic TLS via Let's Encrypt)
@@ -643,6 +660,12 @@ services:
     security_opt: [no-new-privileges:true, apparmor:docker-default]
     command:
       - --containerd=unix:///var/run/containerd/containerd.sock
+      - --docker_only=true
+      - --housekeeping_interval=30s
+      - --max_housekeeping_interval=35s
+      - --event_storage_event_limit=default=0
+      - --event_storage_age_limit=default=0
+      - --disable_metrics=percpu,sched,tcp,udp,disk,diskIO,hugetlb,referenced_memory,cpu_topology,resctrl,process,advtcp,memory_numa
     volumes:
       - /:/rootfs:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -669,6 +692,10 @@ services:
   node-exporter:
     image: prom/node-exporter:v1.6.1
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
@@ -698,13 +725,18 @@ services:
   # DEDICATED socket proxy (POST for start/stop); the shared
   # socket-proxy deliberately lacks POST. Traefik carries the sablier +
   # crowdsec plugins and the file-provider shared middlewares written
-  # by the node backend to traefik_dynamic. Sleep on node is NOT
-  # implemented (sleeper skips remote) — this is wake-only.
+  # by the node backend to traefik_dynamic. Sablier sleeps idle node
+  # containers after each service's configured session_duration and wakes
+  # them on request (direct node URL or via master proxy).
   # ============================================================
   sablier:
     image: sablierapp/sablier:1.18.0
     container_name: smsly-sablier
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     command:
       - start
       - --provider.name=docker
@@ -833,6 +865,10 @@ services:
   promtail:
     image: grafana/promtail:2.9.3
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     environment:
       - MASTER_MESH_IP=${MASTER_MESH_IP:-10.100.0.1}
       - SMSLY_NODE_ID=${SMSLY_NODE_ID:-unknown}
@@ -863,6 +899,10 @@ services:
   docker-labels:
     image: python:3.12-alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     command: python3 -u /app/exporter.py
     environment:
       - NODE_NAME=local

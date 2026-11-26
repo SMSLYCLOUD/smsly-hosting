@@ -149,6 +149,21 @@ export function SolarSystemView({ data, loading, error }: { data: any, loading: 
         domEl.removeEventListener('webglcontextlost', handleContextLost as EventListener);
       }
       sizeObserver?.disconnect();
+      controlsRef.current?.dispose();
+      sceneRef.current?.traverse((obj) => {
+        if (obj instanceof THREE.Mesh || obj instanceof THREE.Points || obj instanceof THREE.Line) {
+          obj.geometry?.dispose();
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          mats.forEach((m) => {
+            if (!m) return;
+            (m as THREE.MeshBasicMaterial).map?.dispose();
+            m.dispose();
+          });
+        } else if (obj instanceof THREE.Sprite) {
+          obj.material.map?.dispose();
+          obj.material.dispose();
+        }
+      });
       if (domEl && containerEl.contains(domEl)) {
         containerEl.removeChild(domEl);
       }
@@ -163,12 +178,28 @@ export function SolarSystemView({ data, loading, error }: { data: any, loading: 
 
     const scene = sceneRef.current;
 
-    // Clear previous system meshes
+    // Clear and dispose previous system meshes/materials/textures
     const toRemove: THREE.Object3D[] = [];
     scene.traverse((obj) => {
       if (obj.userData.isSystemObj) toRemove.push(obj);
     });
-    toRemove.forEach(obj => scene.remove(obj));
+    toRemove.forEach((obj) => {
+      obj.traverse((child) => {
+        if (child instanceof THREE.Mesh || child instanceof THREE.Points || child instanceof THREE.Line) {
+          child.geometry?.dispose();
+          const mats = Array.isArray(child.material) ? child.material : [child.material];
+          mats.forEach((m) => {
+            if (!m) return;
+            (m as THREE.MeshBasicMaterial).map?.dispose();
+            m.dispose();
+          });
+        } else if (child instanceof THREE.Sprite) {
+          child.material.map?.dispose();
+          child.material.dispose();
+        }
+      });
+      obj.parent?.remove(obj);
+    });
 
     const currentSystem = systems[currentSystemIndex];
     if (!currentSystem) return;

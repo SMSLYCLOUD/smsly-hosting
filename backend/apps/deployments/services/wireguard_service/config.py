@@ -1,3 +1,4 @@
+import ipaddress
 import logging
 import shlex
 import textwrap
@@ -31,6 +32,10 @@ class ConfigMixin:
 
         mesh = peer.mesh
         peer_port = cls._effective_listen_port(peer)
+        try:
+            prefix_len = ipaddress.IPv4Network(mesh.subnet, strict=False).prefixlen
+        except Exception:
+            prefix_len = 24
         other_peers = WireGuardPeer.objects.filter(
             mesh=mesh, is_active=True,
         ).exclude(id=peer.id)
@@ -39,33 +44,35 @@ class ConfigMixin:
             config = textwrap.dedent(f"""\
                 [Interface]
                 PrivateKey = {peer.private_key}
-                Address = {peer.wg_address}/24
+                Address = {peer.wg_address}/{prefix_len}
                 ListenPort = {peer_port}
                 # SaveConfig = false
             """)
         else:
             config = textwrap.dedent(f"""\
                 [Interface]
-                Address = {peer.wg_address}/24
+                Address = {peer.wg_address}/{prefix_len}
                 ListenPort = {peer_port}
                 # SaveConfig = false
                 # PrivateKey is server-managed (not stored on master)
             """)
 
-        nat_up = ""
-        nat_down = ""
+        fallback_up = ""
+        fallback_down = ""
         if getattr(mesh, "listen_port_fallback", None) and mesh.listen_port_fallback != mesh.listen_port:
-            nat_up = (
+            fallback_up = (
+                f"; iptables -A INPUT -p udp --dport {mesh.listen_port_fallback} -j ACCEPT"
                 f"; iptables -t nat -C PREROUTING -p udp --dport {mesh.listen_port_fallback} -j REDIRECT --to-ports {mesh.listen_port} 2>/dev/null"
                 f" || iptables -t nat -A PREROUTING -p udp --dport {mesh.listen_port_fallback} -j REDIRECT --to-ports {mesh.listen_port}"
             )
-            nat_down = (
+            fallback_down = (
+                f"; iptables -D INPUT -p udp --dport {mesh.listen_port_fallback} -j ACCEPT"
                 f"; iptables -t nat -D PREROUTING -p udp --dport {mesh.listen_port_fallback} -j REDIRECT --to-ports {mesh.listen_port} 2>/dev/null || true"
             )
 
         config += textwrap.dedent(f"""\
-            PostUp = sysctl -w net.ipv4.conf.%i.rp_filter=2 net.ipv4.conf.all.rp_filter=2; iptables -A INPUT -p udp --dport {mesh.listen_port} -j ACCEPT; iptables -A INPUT -p udp --dport {mesh.listen_port_fallback} -j ACCEPT{nat_up}
-            PostDown = iptables -D INPUT -p udp --dport {mesh.listen_port} -j ACCEPT; iptables -D INPUT -p udp --dport {mesh.listen_port_fallback} -j ACCEPT{nat_down}; sysctl -w net.ipv4.conf.all.rp_filter=1
+            PostUp = sysctl -w net.ipv4.conf.%i.rp_filter=2 net.ipv4.conf.all.rp_filter=2; iptables -A INPUT -p udp --dport {mesh.listen_port} -j ACCEPT{fallback_up}
+            PostDown = iptables -D INPUT -p udp --dport {mesh.listen_port} -j ACCEPT{fallback_down}; sysctl -w net.ipv4.conf.all.rp_filter=1
         """)
 
         for other in other_peers:
@@ -117,18 +124,24 @@ class ConfigMixin:
         import docker
         iface = cls.validate_interface_name(iface)
         cls.validate_wg_config(config)
-        client = docker.from_env()
+        client = docker.from_env(timeout=60)
         docker_host = os.environ.get("DOCKER_HOST", "tcp://socket-proxy:2375")
 
         safe_iface = shlex.quote(iface)
         import base64
         b64_config = base64.b64encode(config.encode()).decode()
-        cmd = f"mkdir -p /etc/wireguard && echo '{b64_config}' | base64 -d > /etc/wireguard/{safe_iface}.conf && chmod 600 /etc/wireguard/{safe_iface}.conf"
+        cmd = (
+            f"umask 077 && mkdir -p /etc/wireguard && "
+            f"tmp=$(mktemp /etc/wireguard/{safe_iface}.conf.tmp.XXXXXX) && "
+            f"printf %s {shlex.quote(b64_config)} | base64 -d > \"$tmp\" && "
+            f"chmod 600 \"$tmp\" && "
+            f"mv \"$tmp\" /etc/wireguard/{safe_iface}.conf"
+        )
 
         try:
             client.containers.run(
-                "alpine",
-                command=["sh", "-c", cmd],
+                "alpine:3.20",
+                command=["sh", "-c", f"timeout 30 sh -c {shlex.quote(cmd)}"],
                 remove=True,
                 environment={"DOCKER_HOST": docker_host},
                 volumes={"/etc/wireguard": {"bind": "/etc/wireguard", "mode": "rw"}},
@@ -139,14 +152,14 @@ class ConfigMixin:
 
         safe_iface = shlex.quote(iface)
         commands = [
-            "apk add wireguard-tools iptables >/dev/null 2>&1 || true",
+            "timeout 45 apk add wireguard-tools iptables >/dev/null 2>&1 || true",
             "grep -q wireguard /proc/modules || (echo 'WIREGUARD_MODULE_MISSING' && exit 1)",
-            f"wg-quick down {safe_iface} >/dev/null 2>&1 || true",
-            f"wg-quick up {safe_iface}"
+            f"timeout 15 wg-quick down {safe_iface} >/dev/null 2>&1 || true",
+            f"timeout 30 wg-quick up {safe_iface}"
         ]
         try:
             client.containers.run(
-                "alpine",
+                "alpine:3.20",
                 command=["sh", "-c", " && ".join(commands)],
                 remove=True,
                 privileged=True,
@@ -182,6 +195,7 @@ class ConfigMixin:
             "command -v wg-quick >/dev/null 2>&1 || { echo 'wg-quick is not installed' >&2; exit 41; }",
             "$SUDO mkdir -p /etc/wireguard",
             (
+                "umask 077 && "
                 f"tmp=$($SUDO mktemp /etc/wireguard/{safe_iface}.conf.tmp.XXXXXX) && "
                 f"printf %s {shlex.quote(b64_config)} | base64 -d | $SUDO tee \"$tmp\" >/dev/null && "
                 "$SUDO chmod 600 \"$tmp\" && "

@@ -1,7 +1,8 @@
 [Unit]
 Description=SMSLY Hosting egress mirror (Alpine CDN rewrite for blocked networks)
-After=network-online.target docker.service
+After=network-online.target docker.service nginx.service
 Wants=network-online.target
+Requires=nginx.service
 DefaultDependencies=no
 Conflicts=shutdown.target
 Before=shutdown.target

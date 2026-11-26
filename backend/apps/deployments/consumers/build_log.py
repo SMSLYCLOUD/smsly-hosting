@@ -69,6 +69,8 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
         self.deployment_id = None
         self.group_name = None
         self.user = None
+        self.api_token = None
+        self._accepted = False
         self._remote_ws = None
         self._remote_relay_task = None
 
@@ -77,18 +79,19 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
 
         try:
             self.user = self.scope.get('user')
+            self.api_token = self.scope.get('api_token')
+            subproto = get_websocket_subprotocol(self.scope)
 
             if not self.user or not getattr(self.user, 'is_authenticated', False):
-                await self.send(text_data=json.dumps({'error': 'Missing or invalid token'}))
                 await self.close(code=4001)
                 return
 
             if not await self._verify_ownership():
-                await self.send(text_data=json.dumps({'error': 'Access denied'}))
                 await self.close(code=4003)
                 return
 
-            await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
+            await self.accept(subprotocol=subproto)
+            self._accepted = True
 
             # Node-executed deploys stream live from the node (same relay
             # pattern as the terminal consumer). When no relay target
@@ -110,24 +113,27 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             if settings.DEBUG:
                 logger.error("BuildLogConsumer.connect() failed: %s", e, exc_info=True)
-            with contextlib.suppress(Exception):
-                await self.send(text_data=json.dumps({'error': 'Internal error'}))
+            if self._accepted:
+                with contextlib.suppress(Exception):
+                    await self.send(text_data=json.dumps({'error': 'Internal error'}))
             await self.close(code=4000)
 
     async def disconnect(self, code):
         if self._remote_relay_task is not None:
-            with contextlib.suppress(Exception):
-                self._remote_relay_task.cancel()
+            self._remote_relay_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._remote_relay_task
             self._remote_relay_task = None
         if self._remote_ws is not None:
             with contextlib.suppress(Exception):
                 await self._remote_ws.close()
             self._remote_ws = None
         if self.group_name:
-            await self.channel_layer.group_discard(
-                self.group_name,
-                self.channel_name
-            )
+            with contextlib.suppress(Exception):
+                await self.channel_layer.group_discard(
+                    self.group_name,
+                    self.channel_name
+                )
 
     async def _maybe_start_remote_relay(self) -> bool:
         """Open a live relay to the node's build-log stream if remote."""
@@ -166,7 +172,9 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
             if not node_base:
                 return False
             headers = orchestrator.ws_auth_headers(remote_dep_id)
-            token_value = headers.get("Authorization", "").replace("Token ", "").replace("Bearer ", "")
+            auth_hdr = headers.get("Authorization", "")
+            _scheme, _sep, _tok = auth_hdr.partition(" ")
+            token_value = _tok.strip() if _scheme.lower() in ("token", "bearer") else ""
             extra = {k: v for k, v in dict(headers).items() if v}
             import websockets
             ws_url = f"{node_base}/ws/build-logs/{remote_dep_id}/"
@@ -258,7 +266,11 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
         return await authenticate_ws_token(token_key)
 
     async def _verify_ownership(self):
-        return await verify_deployment_ownership(self.user, self.deployment_id)
+        return await verify_deployment_ownership(
+            self.user,
+            self.deployment_id,
+            api_token=getattr(self, 'api_token', None),
+        )
 
     @database_sync_to_async
     def _get_current_state(self):

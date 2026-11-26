@@ -32,10 +32,24 @@ def _resolve_upload_zip_path(repository_url: str) -> str:
     zip_path = unquote(parsed.path or "")
     if os.name == "nt" and zip_path.startswith("/"):
         zip_path = zip_path.lstrip("/")
-    zip_path = os.path.abspath(zip_path)
-    if not os.path.isfile(zip_path):
-        raise FileNotFoundError(f"Uploaded source archive not found: {zip_path}")
-    return zip_path
+    real_zip = os.path.realpath(zip_path)
+    allowed_roots = [os.path.realpath("/app/var/uploads")]
+    media_root = getattr(settings, "MEDIA_ROOT", None)
+    if media_root:
+        allowed_roots.append(os.path.realpath(os.path.join(str(media_root), "uploads")))
+    allowed = False
+    for root in allowed_roots:
+        try:
+            if os.path.commonpath([real_zip, root]) == root and real_zip != root:
+                allowed = True
+                break
+        except ValueError:
+            continue
+    if not allowed:
+        raise ValueError("Uploaded source archive path must be inside uploads directory")
+    if not os.path.isfile(real_zip):
+        raise FileNotFoundError(f"Uploaded source archive not found: {real_zip}")
+    return real_zip
 
 def _safe_extract_zip(zip_path: str, destination: str):
     with zipfile.ZipFile(zip_path, "r") as zf:

@@ -161,4 +161,141 @@ describe('ConfirmProvider / useConfirm', () => {
       ).toBe('true');
     });
   });
+
+  it('uses warning styling and custom button labels when specified', async () => {
+    render(
+      <ConfirmProvider>
+        <TestComp
+          options={{
+            title: 'Restart cluster?',
+            message: 'Brief interruption expected.',
+            variant: 'warning',
+            confirmText: 'Proceed',
+            cancelText: 'Abort',
+          }}
+        />
+      </ConfirmProvider>
+    );
+
+    fireEvent.click(screen.getByTestId('trigger'));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('Restart cluster?');
+    expect(dialog).toHaveTextContent('Brief interruption expected.');
+
+    const confirmBtn = await screen.findByRole('button', { name: 'Proceed' });
+    expect(confirmBtn.className).toContain('bg-amber-600');
+    expect(await screen.findByRole('button', { name: 'Abort' })).toBeInTheDocument();
+  });
+
+  describe('requireMatchText confirmation guard', () => {
+    it('disables confirm until trimmed input matches requireMatchText and resolves true on confirm', async () => {
+      render(
+        <ConfirmProvider>
+          <TestComp
+            options={{
+              title: 'Delete project?',
+              message: 'This deletes everything.',
+              variant: 'destructive',
+              confirmText: 'Delete',
+              requireMatchText: 'my-prod-app',
+            }}
+          />
+        </ConfirmProvider>
+      );
+
+      fireEvent.click(screen.getByTestId('trigger'));
+      await screen.findByRole('dialog');
+
+      const confirmBtn = await screen.findByRole('button', { name: 'Delete' });
+      const matchInput = screen.getByLabelText(/Type my-prod-app to confirm/i);
+
+      expect(confirmBtn).toBeDisabled();
+
+      fireEvent.change(matchInput, { target: { value: 'my-prod' } });
+      expect(confirmBtn).toBeDisabled();
+
+      // Enter key must not submit while input does not match
+      fireEvent.keyDown(matchInput, { key: 'Enter', code: 'Enter' });
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+      // Matching with surrounding whitespace should satisfy the guard
+      fireEvent.change(matchInput, { target: { value: '  my-prod-app  ' } });
+      expect(confirmBtn).toBeEnabled();
+
+      fireEvent.click(confirmBtn);
+      await waitFor(() => {
+        expect(
+          document.querySelector('[data-testid="last-result"]')?.textContent
+        ).toBe('true');
+      });
+
+      // Re-opening resets the typed confirmation input
+      fireEvent.click(screen.getByTestId('trigger'));
+      await screen.findByRole('dialog');
+      expect(screen.getByLabelText(/Type my-prod-app to confirm/i)).toHaveValue('');
+      expect(await screen.findByRole('button', { name: 'Delete' })).toBeDisabled();
+    });
+
+    it('submits on Enter key only when requireMatchText is satisfied', async () => {
+      render(
+        <ConfirmProvider>
+          <TestComp
+            options={{
+              message: 'Confirm purge',
+              confirmText: 'Purge',
+              requireMatchText: 'CONFIRM',
+            }}
+          />
+        </ConfirmProvider>
+      );
+
+      fireEvent.click(screen.getByTestId('trigger'));
+      await screen.findByRole('dialog');
+
+      const matchInput = screen.getByLabelText(/Type CONFIRM to confirm/i);
+      fireEvent.change(matchInput, { target: { value: 'CONFIRM' } });
+      fireEvent.keyDown(matchInput, { key: 'Enter', code: 'Enter' });
+
+      await waitFor(() => {
+        expect(
+          document.querySelector('[data-testid="last-result"]')?.textContent
+        ).toBe('true');
+      });
+    });
+
+    it('allows cancelling without typing match text and clears input on reopen', async () => {
+      render(
+        <ConfirmProvider>
+          <TestComp
+            options={{
+              message: 'Delete addon?',
+              variant: 'destructive',
+              confirmText: 'Delete',
+              requireMatchText: 'redis-main',
+            }}
+          />
+        </ConfirmProvider>
+      );
+
+      fireEvent.click(screen.getByTestId('trigger'));
+      await screen.findByRole('dialog');
+
+      const matchInput = screen.getByLabelText(/Type redis-main to confirm/i);
+      fireEvent.change(matchInput, { target: { value: 'redis-' } });
+
+      const cancelBtn = await screen.findByRole('button', { name: /cancel/i });
+      fireEvent.click(cancelBtn);
+
+      await waitFor(() => {
+        expect(
+          document.querySelector('[data-testid="last-result"]')?.textContent
+        ).toBe('false');
+      });
+
+      fireEvent.click(screen.getByTestId('trigger'));
+      await screen.findByRole('dialog');
+      expect(screen.getByLabelText(/Type redis-main to confirm/i)).toHaveValue('');
+    });
+  });
 });

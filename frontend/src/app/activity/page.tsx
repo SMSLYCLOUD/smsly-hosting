@@ -2,30 +2,20 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
-import { Activity, Clock, Filter, Rocket, Database, Settings, RefreshCw, Trash2, ArrowRightLeft, Search } from 'lucide-react';
+import { Activity, Clock, Rocket, Database, Settings, Trash2, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { formatDistanceToNow } from 'date-fns';
-import Link from 'next/link';
+import api from '@/lib/api';
 
 interface AuditLog {
     id: string;
+    timestamp: string;
+    user?: string | number | null;
+    project?: string | null;
+    actor: string;
     action: string;
-    service: string | null;
-    service_name: string | null;
-    user: string;
-    details: string;
-    ip_address: string;
-    created_at: string;
-}
-
-function getHeaders(): Record<string, string> {
-    return { 'Content-Type': 'application/json' };
-}
-
-function apiUrl(path: string) {
-    const base = typeof window !== 'undefined' ? `${window.location.origin}/api/v1` : '/api/v1';
-    return `${base}${path}`;
+    target?: string;
+    metadata?: Record<string, unknown> | null;
 }
 
 export default function ActivityPage() {
@@ -36,14 +26,11 @@ export default function ActivityPage() {
 
     const fetchLogs = useCallback(async () => {
         try {
-            const res = await fetch(apiUrl('/audit-logs/?ordering=-created_at&limit=50'), {
-                credentials: 'include',
-                headers: getHeaders(),
+            const res = await api.get('/audit-logs/', {
+                params: { ordering: '-timestamp', limit: 50 },
             });
-            if (res.ok) {
-                const data = await res.json();
-                setLogs(Array.isArray(data) ? data : data.results);
-            }
+            const data = res.data;
+            setLogs(Array.isArray(data) ? data : (data?.results || []));
         } catch (e) {
             console.error('Failed to fetch activity:', e);
         } finally {
@@ -58,29 +45,32 @@ export default function ActivityPage() {
     }, [fetchLogs]);
 
     const getIcon = (action: string) => {
-        if (action.includes('DEPLOY')) return <Rocket size={16} className="text-emerald-500" />;
-        if (action.includes('ADDON')) return <Database size={16} className="text-blue-500" />;
-        if (action.includes('ENV')) return <Settings size={16} className="text-yellow-500" />;
-        if (action.includes('DELETE')) return <Trash2 size={16} className="text-red-500" />;
-        if (action.includes('TRANSFER')) return <ArrowRightLeft size={16} className="text-purple-500" />;
+        const upper = (action || '').toUpperCase();
+        if (upper.includes('DEPLOY')) return <Rocket size={16} className="text-emerald-500" />;
+        if (upper.includes('ADDON')) return <Database size={16} className="text-blue-500" />;
+        if (upper.includes('ENV')) return <Settings size={16} className="text-yellow-500" />;
+        if (upper.includes('DELETE')) return <Trash2 size={16} className="text-red-500" />;
+        if (upper.includes('TRANSFER')) return <ArrowRightLeft size={16} className="text-purple-500" />;
         return <Activity size={16} className="text-zinc-500" />;
     };
 
     const getDotColor = (action: string) => {
-        if (action.includes('DEPLOY')) return 'bg-emerald-500';
-        if (action.includes('ADDON')) return 'bg-blue-500';
-        if (action.includes('ENV')) return 'bg-yellow-500';
-        if (action.includes('DELETE')) return 'bg-red-500';
-        if (action.includes('TRANSFER')) return 'bg-purple-500';
+        const upper = (action || '').toUpperCase();
+        if (upper.includes('DEPLOY')) return 'bg-emerald-500';
+        if (upper.includes('ADDON')) return 'bg-blue-500';
+        if (upper.includes('ENV')) return 'bg-yellow-500';
+        if (upper.includes('DELETE')) return 'bg-red-500';
+        if (upper.includes('TRANSFER')) return 'bg-purple-500';
         return 'bg-zinc-500';
     };
 
     const filteredLogs = logs.filter(log => {
+        const upper = (log.action || '').toUpperCase();
         if (filter === 'ALL') return true;
-        if (filter === 'DEPLOYMENTS') return log.action.includes('DEPLOY');
-        if (filter === 'ADDONS') return log.action.includes('ADDON');
-        if (filter === 'ENV') return log.action.includes('ENV');
-        if (filter === 'TRANSFERS') return log.action.includes('TRANSFER');
+        if (filter === 'DEPLOYMENTS') return upper.includes('DEPLOY');
+        if (filter === 'ADDONS') return upper.includes('ADDON');
+        if (filter === 'ENV') return upper.includes('ENV');
+        if (filter === 'TRANSFERS') return upper.includes('TRANSFER');
         return true;
     });
 
@@ -117,7 +107,10 @@ export default function ActivityPage() {
                     ) : filteredLogs.length === 0 ? (
                         <div className="pl-8 text-muted-foreground">No activity found.</div>
                     ) : (
-                        filteredLogs.map((log) => (
+                        filteredLogs.map((log) => {
+                            const hasMetadata = Boolean(log.metadata && Object.keys(log.metadata).length > 0);
+                            const ipAddress = typeof log.metadata?.ip_address === 'string' ? log.metadata.ip_address : null;
+                            return (
                             <div key={log.id} className="relative pl-8">
                                 {/* Dot */}
                                 <div className={`absolute left-[-5px] top-1.5 w-2.5 h-2.5 rounded-full ${getDotColor(log.action)} shadow-[0_0_10px_currentColor] opacity-80`} />
@@ -130,13 +123,11 @@ export default function ActivityPage() {
                                             </div>
                                             <div>
                                                 <p className="text-sm font-medium text-foreground">
-                                                    <span className="font-bold">{log.user}</span> {log.action.toLowerCase().replace('_', ' ')}
-                                                    {log.service_name && (
+                                                    <span className="font-bold">{log.actor || (log.user ? `User ${log.user}` : 'System')}</span> {(log.action || '').toLowerCase().replace(/_/g, ' ')}
+                                                    {log.target && (
                                                         <>
                                                             {' on '}
-                                                            <Link href={`/services/${log.service}`} className="text-primary hover:underline">
-                                                                {log.service_name}
-                                                            </Link>
+                                                            <span className="text-primary font-mono text-xs">{log.target}</span>
                                                         </>
                                                     )}
                                                 </p>
@@ -144,16 +135,20 @@ export default function ActivityPage() {
                                                     <Clock size={10} />
                                                     {(() => {
                                                         try {
-                                                            const d = new Date(log.created_at);
+                                                            const d = new Date(log.timestamp);
                                                             return isNaN(d.getTime()) ? 'recently' : formatDistanceToNow(d, { addSuffix: true });
                                                         } catch { return 'recently'; }
                                                     })()}
-                                                    <span className="w-1 h-1 rounded-full bg-zinc-700" />
-                                                    {log.ip_address}
+                                                    {ipAddress && (
+                                                        <>
+                                                            <span className="w-1 h-1 rounded-full bg-zinc-700" />
+                                                            {ipAddress}
+                                                        </>
+                                                    )}
                                                 </p>
                                             </div>
                                         </div>
-                                        {log.details && (
+                                        {hasMetadata && (
                                             <Button
                                                 variant="ghost"
                                                 size="sm"
@@ -165,16 +160,17 @@ export default function ActivityPage() {
                                         )}
                                     </div>
 
-                                    {expanded === log.id && log.details && (
+                                    {expanded === log.id && hasMetadata && (
                                         <div className="mt-3 pt-3 border-t border-border">
                                             <pre className="text-[10px] font-mono text-zinc-400 bg-black/30 p-2 rounded overflow-x-auto whitespace-pre-wrap">
-                                                {log.details}
+                                                {JSON.stringify(log.metadata, null, 2)}
                                             </pre>
                                         </div>
                                     )}
                                 </div>
                             </div>
-                        ))
+                        );
+                        })
                     )}
                 </div>
             </div>

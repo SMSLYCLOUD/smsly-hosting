@@ -25,7 +25,8 @@ class DockerMixin:
         config = PlatformConfig.load()
 
         from ....models.network_scope import ScopedNetwork
-        net = ScopedNetwork.resolve_network_name(service.project) if service.project else 'smsly-net'
+        _proj = getattr(service, 'project', None)
+        net = ScopedNetwork.resolve_network_name(_proj) if _proj else 'smsly-net'
 
         run_args = ["docker", "run", "-d", "--name", name, "--restart", "unless-stopped"]
         run_args.extend([

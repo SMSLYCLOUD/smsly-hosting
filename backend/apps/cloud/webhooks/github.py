@@ -228,12 +228,44 @@ class GitHubWebhookHandler:
 
         # Get the Pull Request info
         pr_info = payload.get('pull_request', {})
-        head_ref = pr_info.get('head', {}).get('ref')  # The branch name of the PR
-        head_sha = pr_info.get('head', {}).get('sha')
-        base_ref = pr_info.get('base', {}).get('ref')  # The target branch (e.g., main)
+        head_info = pr_info.get('head') or {}
+        base_info = pr_info.get('base') or {}
+        head_ref = head_info.get('ref')  # The branch name of the PR
+        head_sha = head_info.get('sha')
+        base_ref = base_info.get('ref')  # The target branch (e.g., main)
 
         if not all([repo_url, pr_number, head_ref, base_ref]):
             return False
+
+        # Reject fork PR preview deployments (head repository != base repository)
+        if 'repo' in head_info and head_info.get('repo') is None:
+            logger.warning("Rejecting fork PR #%s with deleted head repo on %s", pr_number, repo_url)
+            return False
+        head_repo = head_info.get('repo') or {}
+        base_repo = base_info.get('repo') or payload.get('repository') or {}
+        if (
+            head_repo.get('id') is not None
+            and base_repo.get('id') is not None
+            and head_repo.get('id') != base_repo.get('id')
+        ):
+            logger.warning("Rejecting fork PR #%s on %s (repo ID mismatch)", pr_number, repo_url)
+            return False
+        head_full = (head_repo.get('full_name') or '').strip().lower()
+        base_full = (base_repo.get('full_name') or '').strip().lower()
+        if head_full and base_full and head_full != base_full:
+            logger.warning("Rejecting fork PR #%s: %s != %s", pr_number, head_full, base_full)
+            return False
+        head_html = (head_repo.get('html_url') or '').rstrip('/').lower()
+        base_html = (base_repo.get('html_url') or repo_url or '').rstrip('/').lower()
+        if head_html and base_html and head_html != base_html:
+            logger.warning("Rejecting fork PR #%s: %s != %s", pr_number, head_html, base_html)
+            return False
+        head_label = str(head_info.get('label') or '')
+        base_label = str(base_info.get('label') or '')
+        if ':' in head_label and ':' in base_label:
+            if head_label.split(':', 1)[0].lower() != base_label.split(':', 1)[0].lower():
+                logger.warning("Rejecting fork PR #%s by label owner mismatch", pr_number)
+                return False
 
         # Find the Parent Service (the one deployed from the base branch)
         from apps.deployments.services.repo_matcher import match_service_repo
@@ -291,6 +323,8 @@ class GitHubWebhookHandler:
                 'pr_number': pr_number,
                 'repository_url': parent.repository_url,
                 'provider': parent.provider,
+                'project': parent.project,
+                'server': parent.server,
                 'deploy_type': 'GIT',
                 'owner': parent.owner,
                 'build_command': parent.build_command,
@@ -303,6 +337,12 @@ class GitHubWebhookHandler:
                 'public_domain': f"{preview_slug}.{base_domain}"
             }
         )
+        if not created and preview_service.parent_service_id != parent.id:
+            logger.warning(
+                "Aborting preview update for %s: belongs to parent %s, not %s",
+                preview_name, preview_service.parent_service_id, parent.id,
+            )
+            return 0
 
         # Update branch to the PR's branch
         if preview_service.branch != branch:
@@ -484,28 +524,31 @@ class GitHubWebhookHandler:
         if not installation_id:
             return False
 
+        from django.db import transaction
+
         try:
-            inst = GitHubAppInstallation.objects.select_for_update().get(installation_id=installation_id)
+            with transaction.atomic():
+                inst = GitHubAppInstallation.objects.select_for_update().get(installation_id=installation_id)
+
+                current = list(inst.repositories or [])
+                existing_names = {r['name'] for r in current}
+
+                for repo in repos_added:
+                    name = repo.get('full_name', '')
+                    if name and name not in existing_names:
+                        current.append({'id': repo.get('id', 0), 'name': name})
+
+                removed_names = {r.get('full_name', '') for r in repos_removed}
+                current = [r for r in current if r['name'] not in removed_names]
+
+                inst.repositories = current
+                inst.save(update_fields=['repositories', 'updated_at'])
         except GitHubAppInstallation.DoesNotExist:
             logger.warning(
                 "installation_repositories event for unknown installation %s",
                 installation_id,
             )
             return False
-
-        current = list(inst.repositories or [])
-        existing_names = {r['name'] for r in current}
-
-        for repo in repos_added:
-            name = repo.get('full_name', '')
-            if name and name not in existing_names:
-                current.append({'id': repo.get('id', 0), 'name': name})
-
-        removed_names = {r.get('full_name', '') for r in repos_removed}
-        current = [r for r in current if r['name'] not in removed_names]
-
-        inst.repositories = current
-        inst.save(update_fields=['repositories', 'updated_at'])
 
         logger.info(
             "installation_repositories %s: installation_id=%s, added=%d, removed=%d",

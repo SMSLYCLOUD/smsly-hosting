@@ -21,7 +21,7 @@ static_resources:
           # Preserve the client chain Cloudflare built: CF appends the
           # real client IP to X-Forwarded-For; Envoy must append (not
           # overwrite) so Caddy/CrowdSec keep seeing true clients.
-          use_remote_address: false
+          use_remote_address: true
           xff_num_trusted_hops: 0
           http_filters:
           - name: envoy.filters.http.golang

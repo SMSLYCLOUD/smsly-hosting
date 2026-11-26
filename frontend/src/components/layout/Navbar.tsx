@@ -12,6 +12,14 @@ import {
 } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { ModeToggle } from '@/components/ui/mode-toggle';
 import { NotificationsDropdown } from './NotificationsDropdown';
 import { m, AnimatePresence, useReducedMotion } from 'framer-motion';
@@ -26,7 +34,7 @@ export function Navbar() {
   const { user: authUser } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
-  const userMenuRef = React.useRef<HTMLDivElement>(null);
+  const headerRef = React.useRef<HTMLElement>(null);
   const prefersReducedMotion = useReducedMotion();
 
   React.useEffect(() => {
@@ -53,16 +61,17 @@ export function Navbar() {
   }, [authUser]);
 
   React.useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
-        setIsUserMenuOpen(false);
-      }
+    const el = headerRef.current;
+    if (!el || typeof window === 'undefined') return;
+    const syncHeight = () => {
+      document.documentElement.style.setProperty('--navbar-height', `${el.offsetHeight}px`);
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, []);
+    syncHeight();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(syncHeight);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [authUser, isMenuOpen]);
 
   React.useEffect(() => {
     setIsMenuOpen(false);
@@ -147,8 +156,8 @@ export function Navbar() {
   const tertiaryAuthLinks = visibleAuthLinks.filter((link) => link.tier === 'tertiary');
 
   return (
-    <header className="sticky top-0 z-50 w-full transition-colors duration-200 border-b border-white/10 bg-[#0a0c10] text-zinc-100">
-      <div className="w-full grid h-14 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 px-4 sm:px-6 lg:px-8 max-w-[2200px] mx-auto">
+    <header ref={headerRef} className="sticky top-0 z-50 w-full transition-colors duration-200 border-b border-white/10 bg-[#0a0c10] text-zinc-100">
+      <div className="w-full grid h-14 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 lg:gap-4 px-4 sm:px-6 lg:px-8 max-w-[2200px] mx-auto">
         {/* Logo - Left */}
         <Link href={user ? '/client' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 rounded-md">
           <div className="rounded-md bg-white p-0.5 group-hover:scale-105 transition-transform">
@@ -216,7 +225,7 @@ export function Navbar() {
         </nav>
 
         {/* Right Side Buttons (Desktop) */}
-        <div className="hidden items-center justify-end space-x-2 md:flex">
+        <div className="hidden items-center justify-end space-x-2 md:flex shrink-0">
           {user && (
             <Button
               size="sm"
@@ -248,53 +257,44 @@ export function Navbar() {
           <ModeToggle />
 
           {user ? (
-            <div className="relative" ref={userMenuRef}>
-              <Button
-                variant="ghost"
-                className="relative h-9 w-9 rounded-full overflow-hidden border border-white/15 text-zinc-100 hover:bg-white/10"
-                onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-                aria-label="User menu"
-                aria-haspopup="true"
-                aria-expanded={isUserMenuOpen}
-                aria-controls="user-menu"
+            <DropdownMenu open={isUserMenuOpen} onOpenChange={setIsUserMenuOpen}>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  className="relative h-9 w-9 rounded-full overflow-hidden border border-white/15 text-zinc-100 hover:bg-white/10 p-0"
+                  aria-label="User menu"
+                >
+                  <span className="w-full h-full bg-zinc-800 flex items-center justify-center text-zinc-100 font-semibold">
+                    {user.email?.[0]?.toUpperCase() || 'U'}
+                  </span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                sideOffset={8}
+                className="w-56 bg-card border-border text-card-foreground"
               >
-                <span className="w-full h-full bg-zinc-800 flex items-center justify-center text-zinc-100 font-semibold">
-                  {user.email?.[0]?.toUpperCase() || 'U'}
-                </span>
-              </Button>
-
-              <AnimatePresence>
-                {isUserMenuOpen && (
-                  <m.div
-                    id="user-menu"
-                    initial={prefersReducedMotion ? false : { opacity: 0, y: 10, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 10, scale: 0.95 }}
-                    transition={{ duration: 0.1 }}
-                    className="absolute right-0 mt-2 w-56 bg-card border border-border rounded-md shadow-lg py-1 z-50 text-card-foreground"
-                  >
-                    <div className="px-3 py-2 border-b border-border">
-                      <p className="text-sm font-medium">My Account</p>
-                      <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-                    </div>
-                    <button
-                      type="button"
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2"
-                      onClick={() => router.push('/settings')}
-                    >
-                      <Settings size={14} aria-hidden="true" /> Settings
-                    </button>
-                    <button
-                      type="button"
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-red-500/10 text-red-500 flex items-center gap-2"
-                      onClick={handleLogout}
-                    >
-                      <LogOut size={14} aria-hidden="true" /> Log out
-                    </button>
-                  </m.div>
-                )}
-              </AnimatePresence>
-            </div>
+                <DropdownMenuLabel className="font-normal">
+                  <div className="flex flex-col space-y-0.5">
+                    <p className="text-sm font-medium">My Account</p>
+                    <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+                  </div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={() => router.push('/settings')}
+                  className="cursor-pointer gap-2"
+                >
+                  <Settings size={14} aria-hidden="true" /> Settings
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={handleLogout}
+                  className="cursor-pointer gap-2 text-red-500 focus:bg-red-500/10 focus:text-red-500"
+                >
+                  <LogOut size={14} aria-hidden="true" /> Log out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           ) : (
             <div className="flex items-center gap-2">
               <Button variant="ghost" size="sm" asChild className="text-zinc-200 hover:text-white hover:bg-white/10">
@@ -339,50 +339,54 @@ export function Navbar() {
       {user && (secondaryAuthLinks.length > 0 || tertiaryAuthLinks.length > 0) && (
         <div className="hidden md:block border-t border-white/10 bg-[#0a0c10]/90 backdrop-blur-md">
           <div className="w-full px-4 sm:px-6 lg:px-8 py-1 max-w-[2200px] mx-auto">
-            <nav aria-label="Infrastructure navigation" className="flex items-center justify-center gap-1 py-1">
-              <span className="text-[11px] uppercase tracking-wider text-zinc-400 font-bold mr-4 shrink-0">Infra</span>
-              {secondaryAuthLinks.map((link) => {
-                const Icon = link.icon;
-                const isActive = pathname === link.href;
-                return (
-                  <Link
-                    key={link.href}
-                    href={link.href}
-                    prefetch={false}
-                    className={`shrink-0 px-3 py-1 rounded-md text-xs font-semibold transition-colors flex items-center gap-2 ${
-                      isActive
-                        ? 'bg-emerald-500/15 text-emerald-400'
-                        : 'text-zinc-300 hover:text-white hover:bg-white/5'
-                    }`}
-                  >
-                    <Icon size={12} className={isActive ? 'text-emerald-400' : 'text-zinc-400'} />
-                    {link.label}
-                  </Link>
-                );
-              })}
+            <nav aria-label="Infrastructure navigation" className="overflow-x-auto scrollbar-hide py-1">
+              <div className="mx-auto flex w-max items-center gap-1">
+                <span className="text-[11px] uppercase tracking-wider text-zinc-400 font-bold mr-3 shrink-0">Infra</span>
+                {secondaryAuthLinks.map((link) => {
+                  const Icon = link.icon;
+                  const isActive = pathname === link.href;
+                  return (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      prefetch={false}
+                      className={`shrink-0 px-2.5 lg:px-3 py-1 rounded-md text-xs font-semibold transition-colors flex items-center gap-1.5 lg:gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
+                        isActive
+                          ? 'bg-emerald-500/15 text-emerald-400'
+                          : 'text-zinc-300 hover:text-white hover:bg-white/5'
+                      }`}
+                    >
+                      <Icon size={12} className={isActive ? 'text-emerald-400' : 'text-zinc-400'} />
+                      {link.label}
+                    </Link>
+                  );
+                })}
+              </div>
             </nav>
             <div className="border-t border-white/10 mx-auto max-w-2xl" />
-            <nav aria-label="Tools navigation" className="flex items-center justify-center gap-1 py-1">
-              <span className="text-[11px] uppercase tracking-wider text-zinc-400 font-bold mr-4 shrink-0">Tools</span>
-              {tertiaryAuthLinks.map((link) => {
-                const Icon = link.icon;
-                const isActive = pathname === link.href;
-                return (
-                  <Link
-                    key={link.href}
-                    href={link.href}
-                    prefetch={false}
-                    className={`shrink-0 px-3 py-1 rounded-md text-xs font-semibold transition-colors flex items-center gap-2 ${
-                      isActive
-                        ? 'bg-emerald-500/15 text-emerald-400'
-                        : 'text-zinc-300 hover:text-white hover:bg-white/5'
-                    }`}
-                  >
-                    <Icon size={12} className={isActive ? 'text-emerald-400' : 'text-zinc-400'} />
-                    {link.label}
-                  </Link>
-                );
-              })}
+            <nav aria-label="Tools navigation" className="overflow-x-auto scrollbar-hide py-1">
+              <div className="mx-auto flex w-max items-center gap-1">
+                <span className="text-[11px] uppercase tracking-wider text-zinc-400 font-bold mr-3 shrink-0">Tools</span>
+                {tertiaryAuthLinks.map((link) => {
+                  const Icon = link.icon;
+                  const isActive = pathname === link.href;
+                  return (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      prefetch={false}
+                      className={`shrink-0 px-2.5 lg:px-3 py-1 rounded-md text-xs font-semibold transition-colors flex items-center gap-1.5 lg:gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
+                        isActive
+                          ? 'bg-emerald-500/15 text-emerald-400'
+                          : 'text-zinc-300 hover:text-white hover:bg-white/5'
+                      }`}
+                    >
+                      <Icon size={12} className={isActive ? 'text-emerald-400' : 'text-zinc-400'} />
+                      {link.label}
+                    </Link>
+                  );
+                })}
+              </div>
             </nav>
           </div>
         </div>
@@ -401,7 +405,7 @@ export function Navbar() {
             <div className="p-4 space-y-4">
               {user ? (
                 <nav aria-label="Mobile dashboard navigation" className="flex flex-col space-y-1">
-                  {authLinks.map((link) => (
+                  {visibleAuthLinks.map((link) => (
                     <Link
                       key={link.href}
                       href={link.href}

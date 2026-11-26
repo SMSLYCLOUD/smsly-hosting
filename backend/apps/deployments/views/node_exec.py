@@ -56,22 +56,43 @@ def _verify_node_caller(request, container_name: str | None = None, require_priv
             pass
     user = getattr(request, "user", None)
     if user is not None and getattr(user, "is_authenticated", False):
-        if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):
+        api_token = getattr(request, "auth", None)
+        proj_scope = None
+        if api_token is not None and hasattr(api_token, "has_scope"):
+            required_scope = "write" if require_privileged else "read"
+            if not api_token.has_scope(required_scope):
+                return False, Response({"error": "Token lacks required scope."}, status=status.HTTP_403_FORBIDDEN)
+            if hasattr(api_token, "project_scope"):
+                proj_scope = api_token.project_scope()
+                if proj_scope is not None and (require_privileged or not container_name):
+                    return False, Response({"error": "Project-scoped tokens cannot perform node-wide operations."}, status=status.HTTP_403_FORBIDDEN)
+
+        is_privileged_user = getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)
+        if is_privileged_user and proj_scope is None:
             return True, None
         if require_privileged or not container_name:
             return False, Response({"error": "Unauthorized node caller."}, status=status.HTTP_401_UNAUTHORIZED)
         try:
             from apps.deployments.models import Service
-            owned = Service.objects.filter(owner=user).only("id", "name")
+            from apps.teams.permissions import get_team_q_filter
+
+            if is_privileged_user:
+                owned = Service.objects.filter(project_id__in=proj_scope).only("id", "name")
+            else:
+                owned = Service.objects.filter(get_team_q_filter(user, request=request)).distinct().only("id", "name")
+                if proj_scope is not None:
+                    owned = owned.filter(project_id__in=proj_scope)
+
             allowed: set[str] = set()
             for svc in owned:
                 if svc.name:
                     allowed.add(svc.name)
             try:
                 from apps.autoscaler.models.replica import ServiceReplica
-                for replica_name in ServiceReplica.objects.filter(
-                    service__owner=user,
-                ).exclude(status="DESTROYED").values_list("container_name", flat=True)[:200]:
+                replica_qs = ServiceReplica.objects.filter(
+                    service__in=owned,
+                ).exclude(status="DESTROYED")
+                for replica_name in replica_qs.values_list("container_name", flat=True)[:200]:
                     if replica_name:
                         allowed.add(str(replica_name))
             except Exception:
@@ -102,18 +123,59 @@ def _verify_node_caller(request, container_name: str | None = None, require_priv
     return False, Response({"error": "Unauthorized node caller."}, status=status.HTTP_401_UNAUTHORIZED)
 
 
+_PLATFORM_CONTAINER_PREFIXES = (
+    "smsly-hosting",
+    "smsly-spire",
+    "smsly-edge",
+    "smsly-caddy",
+    "smsly-traefik",
+    "smsly-loki",
+    "smsly-falco",
+    "smsly-crowdsec",
+    "smsly-appsec",
+    "smsly-cloudflare",
+    "smsly-shared-postgres",
+    "pgbouncer-tenants",
+    "socket-proxy",
+)
+
+
+def _is_foreign_or_platform_container(container, expected_name: str) -> bool:
+    cname = str(getattr(container, "name", "") or "").strip().lstrip("/")
+    if cname and cname != expected_name:
+        return True
+    norm = (cname or expected_name).lower()
+    if norm in _PLATFORM_CONTAINER_PREFIXES or norm.startswith(_PLATFORM_CONTAINER_PREFIXES):
+        return True
+    labels = getattr(container, "labels", None)
+    if not isinstance(labels, dict):
+        attrs_cfg = (getattr(container, "attrs", None) or {}).get("Config")
+        labels = attrs_cfg.get("Labels") if isinstance(attrs_cfg, dict) else None
+    if isinstance(labels, dict):
+        compose_proj = str(labels.get("com.docker.compose.project") or "").lower()
+        if compose_proj.startswith("smsly"):
+            return True
+    return False
+
+
 def _resolve_container(client, name: str):
+    if not name or not _CONTAINER_RE.match(name):
+        return None
+    norm = name.lower().lstrip("/")
+    if norm in _PLATFORM_CONTAINER_PREFIXES or norm.startswith(_PLATFORM_CONTAINER_PREFIXES):
+        return None
     try:
-        return client.containers.get(name)
+        container = client.containers.get(name)
+        if not _is_foreign_or_platform_container(container, name):
+            return container
+        return None
     except Exception:
         pass
     try:
         matches = client.containers.list(filters={"name": name})
         for c in matches:
-            if getattr(c, "name", "") == name:
+            if getattr(c, "name", "").lstrip("/") == name and not _is_foreign_or_platform_container(c, name):
                 return c
-        if matches:
-            return matches[0]
     except Exception:
         pass
     return None
@@ -336,6 +398,11 @@ class NodeExecViewSet(viewsets.ViewSet):
                 kwargs["aliases"] = [alias]
             net = client.networks.get(network_name)
             net.connect(container, **kwargs)
+            try:
+                from apps.deployments.services.mesh_dns import sync_dns_now
+                sync_dns_now(client=client)
+            except Exception:
+                pass
             return Response({"ok": True, "attached": True, "network": network_name})
         except Exception as exc:
             logger.debug("Node network attach failed for %s: %s", container_name, exc)
@@ -494,7 +561,11 @@ class NodeExecViewSet(viewsets.ViewSet):
                     else str(raw_sab or "").strip().lower() in {"1", "true", "yes", "on"}
                 )
             if "sablier_session" in data:
-                fields["sablier_session"] = str(data.get("sablier_session") or "").strip()[:16] or "10m"
+                from ..services.traefik_labels import normalize_sablier_session
+                fields["sablier_session"] = normalize_sablier_session(
+                    data.get("sablier_session"),
+                    default="10m",
+                )
             customs = data.get("custom_domains")
             if isinstance(customs, list):
                 fields["custom_domains"] = [str(d) for d in customs[:20]]
@@ -553,6 +624,7 @@ class NodeExecViewSet(viewsets.ViewSet):
                 return Response({"error": f"Override value too long: {key}."}, status=status.HTTP_400_BAD_REQUEST)
             overrides[key] = text
         dry_run = bool(data.get("dry_run", False))
+        include_stopped = bool(data.get("include_stopped", False))
         try:
             from apps.cloud.docker_client import get_docker_client
             client = get_docker_client()
@@ -563,6 +635,12 @@ class NodeExecViewSet(viewsets.ViewSet):
                 container.reload()
             except Exception:
                 pass
+            was_running = str(getattr(container, "status", "") or "").lower() == "running"
+            if not was_running and not include_stopped:
+                return Response(
+                    {"error": f"Container {name} is not running."},
+                    status=status.HTTP_409_CONFLICT,
+                )
             attrs = container.attrs or {}
             config = attrs.get("Config") or {}
             host_config = attrs.get("HostConfig") or {}
@@ -585,6 +663,18 @@ class NodeExecViewSet(viewsets.ViewSet):
             merged = dict(live_env)
             merged.update(overrides)
             labels = dict(config.get("Labels") or {})
+            node_svc = None
+            try:
+                from apps.deployments.models import Service
+                from apps.deployments.services.traefik_labels import (
+                    service_supports_sablier,
+                    sync_sablier_labels_on_dict,
+                )
+                node_svc = Service.objects.filter(name=name).first()
+                if node_svc is not None:
+                    sync_sablier_labels_on_dict(labels, node_svc)
+            except Exception:
+                node_svc = None
             restart_policy = host_config.get("RestartPolicy") or {"Name": "unless-stopped"}
             runtime = host_config.get("Runtime") or None
             volumes = []
@@ -610,15 +700,49 @@ class NodeExecViewSet(viewsets.ViewSet):
                 "labels": labels, "volumes": volumes or None,
                 "restart_policy": restart_policy, "detach": True,
             }
+            if config.get("Cmd"):
+                create_kwargs["command"] = config["Cmd"]
+            if config.get("Entrypoint"):
+                create_kwargs["entrypoint"] = config["Entrypoint"]
+            if config.get("WorkingDir"):
+                create_kwargs["working_dir"] = config["WorkingDir"]
+            if config.get("User"):
+                create_kwargs["user"] = config["User"]
+            if config.get("Healthcheck"):
+                create_kwargs["healthcheck"] = config["Healthcheck"]
+            if host_config.get("CapDrop"):
+                create_kwargs["cap_drop"] = host_config["CapDrop"]
+            if host_config.get("CapAdd"):
+                create_kwargs["cap_add"] = host_config["CapAdd"]
+            if host_config.get("SecurityOpt"):
+                create_kwargs["security_opt"] = host_config["SecurityOpt"]
+            if host_config.get("ReadonlyRootfs") is not None:
+                create_kwargs["read_only"] = bool(host_config["ReadonlyRootfs"])
+            if host_config.get("Tmpfs"):
+                create_kwargs["tmpfs"] = host_config["Tmpfs"]
+            if host_config.get("PidsLimit"):
+                create_kwargs["pids_limit"] = host_config["PidsLimit"]
+            if host_config.get("Memory"):
+                create_kwargs["mem_limit"] = host_config["Memory"]
+            if host_config.get("NanoCpus"):
+                create_kwargs["nano_cpus"] = host_config["NanoCpus"]
+            if host_config.get("Dns"):
+                create_kwargs["dns"] = host_config["Dns"]
+            if host_config.get("ExtraHosts"):
+                create_kwargs["extra_hosts"] = host_config["ExtraHosts"]
+            if host_config.get("Init") is not None:
+                create_kwargs["init"] = bool(host_config["Init"])
             if runtime:
                 create_kwargs["runtime"] = runtime
-            container.stop(timeout=15)
+            if was_running:
+                container.stop(timeout=15)
             container.rename(backup_name)
+            rollback_start = was_running or not bool(getattr(node_svc, "sablier_enabled", False))
             try:
                 new_container = client.containers.create(**create_kwargs)
                 new_container.start()
             except Exception as exc:
-                self._rollback_recreate(client, name, backup_name)
+                self._rollback_recreate(client, name, backup_name, start_backup=rollback_start)
                 return Response({"error": f"Replacement failed, rolled back: {_scrub_error(exc, 200)}"},
                                 status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             running = False
@@ -634,11 +758,28 @@ class NodeExecViewSet(viewsets.ViewSet):
                     break
                 _time.sleep(3)
             if not running:
-                self._rollback_recreate(client, name, backup_name)
+                self._rollback_recreate(client, name, backup_name, start_backup=rollback_start)
                 return Response({"error": "Replacement did not run — rolled back."},
                                 status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             try:
                 client.containers.get(backup_name).remove(force=True)
+            except Exception:
+                pass
+            try:
+                if (
+                    node_svc is not None
+                    and bool(getattr(node_svc, "sablier_enabled", False))
+                    and service_supports_sablier(node_svc)[0]
+                ):
+                    from apps.deployments.services.internal_wake import ensure_internal_wake_alias
+                    for net_name in nets:
+                        if net_name and net_name != "bridge":
+                            ensure_internal_wake_alias(name, net_name, client=client)
+            except Exception:
+                pass
+            try:
+                from apps.deployments.services.mesh_dns import sync_dns_now
+                sync_dns_now(client=client)
             except Exception:
                 pass
             return Response({"ok": True, "container": name,
@@ -648,7 +789,7 @@ class NodeExecViewSet(viewsets.ViewSet):
             logger.debug("Node container recreate failed for %s: %s", name, exc)
             return Response({"error": _scrub_error(exc, 200)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    def _rollback_recreate(self, client, name: str, backup_name: str) -> None:
+    def _rollback_recreate(self, client, name: str, backup_name: str, *, start_backup: bool = True) -> None:
         try:
             try:
                 doomed = client.containers.get(name)
@@ -657,9 +798,52 @@ class NodeExecViewSet(viewsets.ViewSet):
                 pass
             prev = client.containers.get(backup_name)
             prev.rename(name)
-            prev.start()
+            if start_backup:
+                prev.start()
+            try:
+                from apps.deployments.services.mesh_dns import sync_dns_now
+                sync_dns_now(client=client)
+            except Exception:
+                pass
         except Exception as exc:
             logger.error("Node recreate rollback failed for %s: %s", name, exc)
+
+    @action(detail=False, methods=["post"], url_path="containers/power")
+    def container_power(self, request):
+        """Start or stop a dedicated workload/addon container on this node."""
+        ok, err = _verify_node_caller(request, require_privileged=True)
+        if not ok:
+            return err
+        data = request.data if isinstance(request.data, dict) else {}
+        name = str(data.get("name", "") or "").strip()
+        power_action = str(data.get("action", "") or "").strip().lower()
+        if not name or not _CONTAINER_RE.match(name):
+            return Response({"error": "Valid container name is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if power_action not in ("start", "stop"):
+            return Response({"error": "action must be 'start' or 'stop'."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
+            container = _resolve_container(client, name)
+            if container is None:
+                return Response({"error": f"Container {name} not found on this node."}, status=status.HTTP_404_NOT_FOUND)
+            try:
+                container.reload()
+            except Exception:
+                pass
+            cur_status = str(getattr(container, "status", "") or "").lower()
+            if power_action == "start":
+                if cur_status == "running":
+                    return Response({"ok": True, "status": "already_running", "container": name})
+                container.start()
+                return Response({"ok": True, "status": "started", "container": name})
+            if cur_status != "running":
+                return Response({"ok": True, "status": "already_stopped", "container": name})
+            container.stop(timeout=30)
+            return Response({"ok": True, "status": "stopped", "container": name})
+        except Exception as exc:
+            logger.debug("Node container %s failed for %s: %s", power_action, name, exc)
+            return Response({"error": _scrub_error(exc, 200)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=False, methods=["post"], url_path="storage/test")
     def storage_test(self, request):

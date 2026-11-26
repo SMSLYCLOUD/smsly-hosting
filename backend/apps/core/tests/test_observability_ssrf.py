@@ -82,8 +82,8 @@ class QueryValidationUnitTests(TestCase):
         out = _scope_query_to_tenant(
             '{job="prometheus"}', ['svc-a', 'svc-b'],
         )
-        # The implementation escapes regex metachars in service names (e.g. `-`).
-        self.assertIn(r'compose_service=~"svc\-a|svc\-b"', out)
+        # _escape_logql_regex_literal preserves '-' (RE2 rejects over-escaped hyphens).
+        self.assertIn('compose_service=~"svc-a|svc-b"', out)
         self.assertIn('job="prometheus"', out)
 
     def test_scope_query_to_tenant_wraps_plain_query(self):
@@ -93,7 +93,7 @@ class QueryValidationUnitTests(TestCase):
             out.startswith('{'),
             f'Expected wrapped selector, got: {out!r}',
         )
-        self.assertIn(r'compose_service=~"svc\-a"', out)
+        self.assertIn('compose_service=~"svc-a"', out)
 
     def test_scope_query_to_tenant_rejects_when_user_has_no_services(self):
         with self.assertRaises(ValueError):

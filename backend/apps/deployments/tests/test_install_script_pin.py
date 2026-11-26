@@ -3,7 +3,7 @@
 import hashlib
 import os
 import tempfile
-from unittest.mock import mock_open, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 from django.test import SimpleTestCase
 
@@ -50,7 +50,7 @@ class InstallScriptVerificationTests(SimpleTestCase):
             side_effect=lambda k, d="": "" if k == "SMSLY_INSTALL_SCRIPT_SHA256" else d,
         ), patch(
             "apps.deployments.services.provisioner.requests.get",
-            return_value=mock_open(read_data="#!/bin/sh\necho hi\n")(),
+            return_value=MagicMock(text="#!/bin/sh\necho hi\n"),
         ):
             with self.assertRaises(ValueError) as ctx:
                 _load_install_script()
@@ -68,7 +68,7 @@ class InstallScriptVerificationTests(SimpleTestCase):
             side_effect=lambda k, d="": correct_sha if k == "SMSLY_INSTALL_SCRIPT_SHA256" else d,
         ), patch(
             "apps.deployments.services.provisioner.requests.get",
-            return_value=mock_open(read_data=script_content)(),
+            return_value=MagicMock(text=script_content),
         ):
             content, source = _load_install_script()
         self.assertEqual(content, script_content)
@@ -86,7 +86,7 @@ class InstallScriptVerificationTests(SimpleTestCase):
             side_effect=lambda k, d="": wrong_sha if k == "SMSLY_INSTALL_SCRIPT_SHA256" else d,
         ), patch(
             "apps.deployments.services.provisioner.requests.get",
-            return_value=mock_open(read_data=script_content)(),
+            return_value=MagicMock(text=script_content),
         ):
             with self.assertRaises(ValueError) as ctx:
                 _load_install_script()

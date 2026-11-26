@@ -3,27 +3,27 @@ import re
 
 from django.test import SimpleTestCase
 
-CLOUD_VIEWS = os.path.normpath(os.path.join(
+CLOUD_CODE_ANALYZER = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "..", "views.py",
+    "..", "services", "code_analyzer.py",
 ))
 CLOUD_CODE_ANALYSIS = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "..", "views_code_analysis.py",
+    "..", "views", "code_analysis.py",
 ))
 
 
 class OsWalkFollowlinksSourceTests(SimpleTestCase):
     def test_cloud_views_analyze_repo_uses_followlinks_false(self):
-        with open(CLOUD_VIEWS, encoding="utf-8") as fh:
+        with open(CLOUD_CODE_ANALYZER, encoding="utf-8") as fh:
             content = fh.read()
-        match = re.search(
-            r"def analyze_repo.*?os\.walk\(([^)]+)\)",
+        matches = re.findall(
+            r"os\.walk\(([^)]+)\)",
             content,
-            re.DOTALL,
         )
-        self.assertIsNotNone(match, "Could not find os.walk in analyze_repo")
-        self.assertIn("followlinks=False", match.group(1))
+        self.assertTrue(matches, "Could not find os.walk in code_analyzer")
+        for args in matches:
+            self.assertIn("followlinks=False", args)
 
     def test_code_analysis_analyze_codebase_uses_followlinks_false(self):
         with open(CLOUD_CODE_ANALYSIS, encoding="utf-8") as fh:
@@ -32,5 +32,5 @@ class OsWalkFollowlinksSourceTests(SimpleTestCase):
             r"os\.walk\(([^)]+)\)",
             content,
         )
-        self.assertIsNotNone(match, "Could not find os.walk in views_code_analysis")
+        self.assertIsNotNone(match, "Could not find os.walk in views/code_analysis.py")
         self.assertIn("followlinks=False", match.group(1))

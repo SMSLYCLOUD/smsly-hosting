@@ -61,9 +61,11 @@ class FixResult:
 
 def _collect_failure_context(deployment_id: str, logs: str, service=None) -> str:
     """Build a prompt context from deployment logs + Prometheus/Loki metrics."""
+    from apps.deployments.utils.log_scrub import mask_secrets_in_text
+    safe_logs = mask_secrets_in_text((logs or "")[:10000]) or ""
     context = f"""Deployment failed. Deployment ID: {deployment_id}
 Logs:
-{logs[:10000]}
+{safe_logs}
 """
     # ── Enrich with monitoring data if service is available ────────────────
     if service:
@@ -136,11 +138,19 @@ def _parse_jules_response(raw: str) -> dict[str, Any]:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
-        # Attempt to extract a JSON block from the raw text.
-        match = re.search(r"\{.*?\}", raw, re.DOTALL)
-        if match:
-            payload = json.loads(match.group())
-        else:
+        # Attempt to extract a nested JSON object from raw/markdown text.
+        decoder = json.JSONDecoder()
+        payload = None
+        for idx, ch in enumerate(raw):
+            if ch == "{":
+                try:
+                    parsed, _ = decoder.raw_decode(raw, idx)
+                    if isinstance(parsed, dict):
+                        payload = parsed
+                        break
+                except json.JSONDecodeError:
+                    continue
+        if payload is None:
             raise ValueError("Could not extract JSON fix from Jules response")
 
     # Basic schema validation
@@ -161,15 +171,39 @@ def _parse_jules_response(raw: str) -> dict[str, Any]:
     if set(payload["files_to_change"]) != set(payload["suggested_changes"].keys()):
         raise ValueError("Mismatch between 'files_to_change' and keys of 'suggested_changes'")
 
-    # Sanitize paths – disallow absolute paths and parent directory references
+    # Sanitize paths – disallow absolute paths, traversal, CI/git/env files
     safe_files = []
     for path in payload["files_to_change"]:
-        if os.path.isabs(path) or ".." in path.split(os.path.sep):
+        if _is_unsafe_jules_path(path):
             raise ValueError(f"Unsafe file path detected in Jules response: {path}")
         safe_files.append(path)
     payload["files_to_change"] = safe_files
 
     return payload
+
+
+_BLOCKED_PATH_PARTS = frozenset({
+    ".git",
+    ".github",
+    ".gitlab-ci.yml",
+    ".circleci",
+    ".husky",
+    ".ssh",
+    ".gnupg",
+    ".aws",
+})
+
+
+def _is_unsafe_jules_path(path: str) -> bool:
+    norm = str(path or "").replace("\\", "/").strip()
+    if not norm or os.path.isabs(path) or norm.startswith("/") or ":" in norm.split("/")[0]:
+        return True
+    parts = [p for p in norm.split("/") if p]
+    for part in parts:
+        lower = part.lower()
+        if part == ".." or lower in _BLOCKED_PATH_PARTS or lower.startswith(".env"):
+            return True
+    return False
 
 
 def _apply_fix_to_repo(
@@ -191,12 +225,22 @@ def _apply_fix_to_repo(
         if not repo_url:
             logger.error("Neither repo_path nor repo_url provided — cannot apply fix")
             return False
+        repo_url_str = str(repo_url or "").strip()
+        if repo_url_str.startswith("-") or repo_url_str.lower().startswith(("ext::", "fd::", "file://")):
+            logger.error("Rejected unsafe git repo URL")
+            return False
         repo_path = tempfile.mkdtemp(prefix="jules-fix-")
         _owns_tempdir = True
-        logger.info("Cloning %s into temp dir %s", repo_url, repo_path)
+        logger.info("Cloning %s into temp dir %s", repo_url_str, repo_path)
         try:
             subprocess.run(
-                ["git", "clone", "--depth", "1", repo_url, repo_path],
+                [
+                    "git",
+                    "-c", "core.hooksPath=/dev/null",
+                    "-c", "core.fsmonitor=false",
+                    "-c", "protocol.file.allow=never",
+                    "clone", "--depth", "1", "--", repo_url_str, repo_path,
+                ],
                 check=True, capture_output=True, text=True, timeout=120,
             )
         except subprocess.CalledProcessError as exc:
@@ -204,18 +248,24 @@ def _apply_fix_to_repo(
             shutil.rmtree(repo_path, ignore_errors=True)
             return False
 
-    original_cwd = os.getcwd()
+    repo_real = os.path.realpath(repo_path)
     try:
-        os.chdir(repo_path)
-
-        def _run_git(args: list[str]) -> subprocess.CompletedProcess:
+        def _run_git(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
             result = subprocess.run(
-                ["git", *args],
+                [
+                    "git",
+                    "-c", "core.hooksPath=/dev/null",
+                    "-c", "core.fsmonitor=false",
+                    "-c", "protocol.file.allow=never",
+                    *args,
+                ],
+                cwd=repo_path,
                 check=False,
                 capture_output=True,
                 text=True,
+                timeout=60,
             )
-            if result.returncode != 0:
+            if check and result.returncode != 0:
                 logger.error(
                     "Git command failed: git %s\nstdout: %s\nstderr: %s",
                     " ".join(args),
@@ -236,11 +286,17 @@ def _apply_fix_to_repo(
 
         # Write the suggested files
         total_bytes = 0
+        written_paths: list[str] = []
         for filepath, content in files_to_change.items():
-            full_path = os.path.join(repo_path, filepath)
+            if _is_unsafe_jules_path(filepath):
+                raise ValueError(f"Unsafe target path rejected: {filepath}")
+            full_path = os.path.realpath(os.path.join(repo_real, filepath))
+            if full_path != repo_real and not full_path.startswith(repo_real + os.sep):
+                raise ValueError(f"Unsafe target path outside repo: {filepath}")
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
             with open(full_path, "w", encoding="utf-8") as f:
                 f.write(content)
+            written_paths.append(os.path.relpath(full_path, repo_real))
             total_bytes += len(content.encode("utf-8"))
             if total_bytes > MAX_BYTES_PER_JULES_PR:
                 raise RuntimeError(
@@ -248,7 +304,8 @@ def _apply_fix_to_repo(
                     f"({total_bytes} > {MAX_BYTES_PER_JULES_PR})"
                 )
 
-        _run_git(["add", "."])
+        if written_paths:
+            _run_git(["add", "--", *written_paths])
         _run_git([
             "commit",
             "-m",
@@ -262,15 +319,14 @@ def _apply_fix_to_repo(
         # Attempt to clean up the branch if it was created
         try:
             # Detect the default branch instead of hardcoding 'main'
-            result = _run_git(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
-            default_branch = result.stdout.strip().replace("origin/", "") if result.returncode == 0 else "main"
+            result = _run_git(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], check=False)
+            default_branch = result.stdout.strip().replace("origin/", "") if result.returncode == 0 and result.stdout.strip() else "main"
             _run_git(["checkout", default_branch])
             _run_git(["branch", "-D", branch_name])
-        except Exception as exc:
-            logger.debug("Failed to cleanup branch %s: %s", branch_name, exc)
+        except Exception as cleanup_exc:
+            logger.debug("Failed to cleanup branch %s: %s", branch_name, cleanup_exc)
         return False
     finally:
-        os.chdir(original_cwd)
         if _owns_tempdir and os.path.exists(repo_path):
             shutil.rmtree(repo_path, ignore_errors=True)
 
@@ -308,6 +364,7 @@ def jules_fix_deployment_failure(
     logs: str,
     repo_path: str,
     repo_url: str,
+    explicit_opt_in: bool = False,
 ) -> dict[str, Any]:
     """
     React to a deployment failure, use Jules to fix it, open a PR.
@@ -317,6 +374,7 @@ def jules_fix_deployment_failure(
         logs: Raw deployment logs.
         repo_path: Local path to the git repository.
         repo_url: GitHub repo URL (e.g. "owner/repo").
+        explicit_opt_in: Explicit user/operator opt-in for running Jules fix.
 
     Returns:
         A dict with the fix result.
@@ -326,13 +384,29 @@ def jules_fix_deployment_failure(
     result = FixResult(success=False, deployment_id=deployment_id)
 
     try:
-        # Enrich context with Prometheus/Loki metrics
+        # Enrich context with Prometheus/Loki metrics & resolve service opt-in
         try:
             from apps.deployments.models import Deployment as DeployModel
             dep = DeployModel.objects.select_related('service').only('service').get(id=deployment_id)
             svc = dep.service
         except Exception:
             svc = None
+
+        service_opt_in = False
+        if svc is not None:
+            try:
+                service_opt_in = svc.env_vars.filter(
+                    key__in=("JULES_AUTO_FIX", "JULES_AUTO_FIX_ENABLED"),
+                    value__iexact="true",
+                ).exists()
+            except Exception:
+                service_opt_in = False
+
+        if not (explicit_opt_in or getattr(settings, "JULES_AUTO_FIX_ENABLED", False) or service_opt_in):
+            logger.info("Jules auto-fix skipped for deployment %s: opt-in required.", deployment_id)
+            result.error = "Jules auto-fix requires explicit opt-in."
+            return _json_safe(result, {})
+
         context = _collect_failure_context(deployment_id, logs, service=svc)
 
         jules_response = _ask_jules_for_fix(context)

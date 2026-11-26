@@ -36,7 +36,7 @@ class UserSubscriptionSerializer(serializers.ModelSerializer):
             'current_period_start', 'current_period_end',
             'stripe_subscription_id', 'trial_ends_at',
         ]
-        read_only_fields = ('user', 'status', 'current_period_start', 'current_period_end', 'stripe_subscription_id', 'trial_ends_at')
+        read_only_fields = ('user', 'plan', 'status', 'billing_cycle', 'current_period_start', 'current_period_end', 'stripe_subscription_id', 'trial_ends_at')
 
 class InvoiceSerializer(serializers.ModelSerializer):
     class Meta:

@@ -11,6 +11,7 @@ from drf_spectacular.views import (
 )
 
 from config.health import health_check, health_check_verbose, liveness_check, readiness_check
+from apps.core.views import ContactView
 from apps.domains.views.challenge import domain_challenge
 
 
@@ -241,8 +242,14 @@ def bootstrap_view(request, token):
                 from apps.deployments.services.provisioner.helpers.server_config import (
                     build_agent_lite_install_env,
                 )
-                _srv = ManagedServer.objects.filter(id=server_id).first()
+                _srv = ManagedServer.objects.select_related("owner").filter(id=server_id).first()
                 if _srv is not None:
+                    _owner = getattr(_srv, "owner", None)
+                    if not _owner or not (getattr(_owner, "is_staff", False) or getattr(_owner, "is_superuser", False)):
+                        return HttpResponse(
+                            "Lite-agent bootstrap requires a staff or superuser server owner",
+                            status=403,
+                        )
                     _lite_env, _ = build_agent_lite_install_env(_srv)
                     for _k in (
                         "MASTER_DB_USER", "MASTER_DB_PASSWORD",
@@ -409,6 +416,7 @@ urlpatterns = [
     # these paths first and 404 the frontend.
     path('api/v1/dashboard/overview/',
          include('apps.core.urls.dashboard_alias')),
+    path('api/v1/contact/', ContactView.as_view(), name='public-contact'),
     path('api/v1/system/health/',
          include('apps.core.urls.system_health_alias')),
     path('api/v1/system/resources/',

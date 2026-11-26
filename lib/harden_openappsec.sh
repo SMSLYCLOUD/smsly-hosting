@@ -118,7 +118,7 @@ _harden_openappsec_bootstrap() {
     local env_args=()
     [ -f "$INSTALL_DIR/.env" ] && env_args=(--env-file "$INSTALL_DIR/.env")
     # Explicit service list — never --remove-orphans on this stack (AGENTS.md #16).
-    if ! timeout 570 docker compose "${env_args[@]}" -f "$COMPOSE_FILE" \
+    if ! timeout 570 docker compose "${env_args[@]}" -f "$COMPOSE_FILE" --profile appsec \
             up -d appsec-agent appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db appsec-envoy 2>&1 | tail -5; then
         echo -e "${YELLOW}  ⚠ open-appsec docker compose up failed${NC}"
         return 1
@@ -160,9 +160,9 @@ _harden_openappsec_reconcile() {
     local env_args=()
     [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ] && env_args=(--env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env")
     local compose_file="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" stop --timeout 15 \
+    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" --profile appsec stop --timeout 15 \
         appsec-agent appsec-envoy appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db >/dev/null 2>&1 || true
-    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" rm -f \
+    timeout -k 5 60 docker compose "${env_args[@]}" -f "$compose_file" --profile appsec rm -f \
         appsec-agent appsec-envoy appsec-shared-storage appsec-smartsync appsec-tuning-svc appsec-db >/dev/null 2>&1 || true
     return 0
 }

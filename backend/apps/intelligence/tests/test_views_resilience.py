@@ -20,6 +20,8 @@ class AIResilienceViewTests(TestCase):
             username="airesilience",
             email="airesilience@test.com",
             password="testpass123",
+            is_superuser=True,
+            is_staff=True,
         )
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)

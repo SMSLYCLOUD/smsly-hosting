@@ -45,9 +45,13 @@ class TestEgressMirrorNginxConf(unittest.TestCase):
                 self.assertNotIn("0.0.0.0", s)
 
     def test_default_server_is_transparent(self):
-        # Non-dl-cdn traffic must pass through with its own Host intact.
+        # Non-dl-cdn traffic must pass through with its own Host intact on :80,
+        # while blocking empty/IP/private/internal Hosts against SSRF.
         self.assertIn("default_server", self.conf)
+        self.assertIn("proxy_pass http://$host:80$request_uri;", self.conf)
         self.assertIn("proxy_set_header Host $host;", self.conf)
+        for token in ("169\\.254", "::1", "fe80:", "localhost", "return 403;"):
+            self.assertIn(token, self.conf)
 
     def test_private_ranges_only(self):
         for net in ("127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"):
@@ -132,9 +136,52 @@ class TestEgressMirrorWiring(unittest.TestCase):
         # (it proxies TO port 80) — without an owner-uid exemption each
         # shimmed request re-enters the shim recursively until
         # worker_connections/FDs exhaust and everything 500s (live incident).
+        # Kernel OUTPUT filter rules also drop nginx access to private/metadata CIDRs.
         lib = _read(os.path.join(REPO, "lib", "egress_mirror.sh"))
         self.assertIn("--uid-owner", lib)
         self.assertIn("-j RETURN", lib)
+        self.assertIn("169.254.0.0/16", lib)
+        self.assertIn("100.64.0.0/10", lib)
+        self.assertIn("-j DROP", lib)
+        self.assertIn("iptables -I OUTPUT 3", lib)
+        self.assertNotIn("iptables -A OUTPUT -m owner", lib)
+
+    def test_unit_requires_nginx(self):
+        unit = _read(UNIT)
+        self.assertIn("After=network-online.target docker.service nginx.service", unit)
+        self.assertIn("Requires=nginx.service", unit)
+
+    def test_default_server_resolver_and_ssrf_regex(self):
+        conf = _read(NGINX_CONF)
+        default_blk = conf.split("default_server", 1)[1]
+        self.assertIn("resolver 127.0.0.53", default_blk)
+
+        patterns = re.findall(r'if \(\$host ~\* "([^"]+)"\)', default_blk)
+        self.assertGreaterEqual(len(patterns), 4)
+
+        def is_blocked(host):
+            return any(re.search(p, host, re.IGNORECASE) for p in patterns)
+
+        # Public FQDNs starting with 0. or 10. must NOT be blocked
+        self.assertFalse(is_blocked("0.pool.ntp.org"))
+        self.assertFalse(is_blocked("10.example.com"))
+        self.assertFalse(is_blocked("0.pool.ntp.org:80"))
+
+        # Dotted/decimal/hex/octal numeric IPv4 SSRF forms MUST be blocked
+        for bad in (
+            "0177.0.0.1",
+            "0x7f.0.0.1",
+            "2130706433",
+            "127.0.0.1",
+            "127.1",
+            "10.0.0.1",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "0.0.0.0",
+        ):
+            self.assertTrue(is_blocked(bad), f"Expected SSRF host {bad!r} to be blocked")
 
 
 if __name__ == "__main__":

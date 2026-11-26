@@ -407,3 +407,88 @@ class TestGvisorExtraHosts(TestCase):
         create_kwargs = client.containers.create.call_args[1]
         self.assertNotIn("runtime", create_kwargs)
         self.assertNotIn("extra_hosts", create_kwargs)
+
+    def test_sibling_project_services_resolve_and_prune_stale(self):
+        """Sibling services in the same project resolve cleanly while stale/dead/self entries are pruned."""
+        svc = _service()
+        svc.id = "svc-gw"
+        svc.name = "smsly-security-gateway"
+        svc.project_id = "proj-1"
+        sib_live = _service()
+        sib_live.id = "svc-be"
+        sib_live.name = "smsly-backend"
+        sib_live.project_id = "proj-1"
+        sib_dead = _service()
+        sib_dead.id = "svc-dead"
+        sib_dead.name = "smsly-stopped"
+        sib_dead.project_id = "proj-1"
+
+        backend_c = MagicMock()
+        backend_c.name = "smsly-backend"
+        backend_c.status = "running"
+        backend_c.attrs = {
+            "State": {"Status": "running"},
+            "NetworkSettings": {"Networks": {"smsly-net-96e85eee": {"IPAddress": "172.20.0.5"}}},
+        }
+
+        client = MagicMock()
+
+        def _get(ref):
+            if str(ref) == "smsly-backend":
+                return backend_c
+            raise Exception(f"NotFound: {ref}")
+
+        client.containers.get.side_effect = _get
+
+        mock_svc_qs = MagicMock()
+        mock_svc_qs.exclude.return_value = [sib_live, sib_dead]
+        with patch("apps.deployments.models.addons.Addon") as mock_addon_cls, \
+             patch("apps.deployments.models.core.Service") as mock_svc_cls:
+            mock_addon_cls.objects.filter.return_value.filter.return_value = []
+            mock_svc_cls.objects.filter.return_value = mock_svc_qs
+
+            hosts = _resolve_gvisor_extra_hosts(
+                svc,
+                {"smsly-net-96e85eee"},
+                client,
+                live=[
+                    "smsly-backend:172.20.0.99",
+                    "smsly-backend.default.internal:172.20.0.99",
+                    "smsly-stopped:172.20.0.88",
+                    "smsly-security-gateway:172.20.0.77",
+                ],
+            )
+        self.assertIn("smsly-backend:172.20.0.5", hosts)
+        self.assertIn("smsly-backend.default.internal:172.20.0.5", hosts)
+        self.assertNotIn("smsly-backend:172.20.0.99", hosts)
+        self.assertFalse(any(h.startswith("smsly-stopped:") for h in hosts))
+        self.assertFalse(any(h.startswith("smsly-security-gateway:") for h in hosts))
+
+    def test_include_siblings_false_strips_sibling_entries_keeps_addons(self):
+        """When CoreDNS resolv.conf handles siblings, static sibling /etc/hosts entries are stripped."""
+        svc = _service()
+        svc.id = "svc-gw"
+        svc.name = "smsly-security-gateway"
+        svc.project_id = "proj-1"
+        sib_live = _service()
+        sib_live.id = "svc-be"
+        sib_live.name = "smsly-backend"
+        sib_live.project_id = "proj-1"
+        old = _runsc_container()
+        client, _, _ = _client_with_addon(old, addon_ip="172.20.0.2")
+
+        mock_svc_qs = MagicMock()
+        mock_svc_qs.exclude.return_value = [sib_live]
+        with patch("apps.deployments.models.addons.Addon") as mock_addon_cls, \
+             patch("apps.deployments.models.core.Service") as mock_svc_cls:
+            mock_addon_cls.objects.filter.return_value.filter.return_value = [_addon_row()]
+            mock_svc_cls.objects.filter.return_value = mock_svc_qs
+
+            hosts = _resolve_gvisor_extra_hosts(
+                svc,
+                {"smsly-net-96e85eee"},
+                client,
+                live=["smsly-backend:172.20.0.99", "smsly-backend.default.internal:172.20.0.99"],
+                include_siblings=False,
+            )
+        self.assertEqual(hosts, ["redis-shared:172.20.0.2"])

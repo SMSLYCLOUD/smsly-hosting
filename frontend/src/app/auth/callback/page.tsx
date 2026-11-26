@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { clearAuthCookies } from "@/lib/auth-cookies";
 import { resetRedirectGuard } from "@/lib/paths";
@@ -34,22 +33,14 @@ async function fetchSessionToken(): Promise<{ token: string | null; unauthorized
 }
 
 function CallbackContent() {
-  const searchParams = useSearchParams();
-  const queryToken = searchParams.get("auth_token");
-
   useEffect(() => {
     let active = true;
 
     const completeAuth = async () => {
-      // Backward-compatible fallback only: older backends may still
-      // pass token in query. Newer backends set the HttpOnly cookie
-      // on /api/v1/accounts/<provider>/login/callback/ via Set-Cookie
-      // and the browser attaches it automatically; we do not need to
-      // read or store the token client-side.
-      const sessionResult = queryToken
-        ? { token: null, unauthorized: false, requires2fa: false }
-        : await fetchSessionToken();
-      const token = queryToken || sessionResult.token;
+      // Exchange the allauth session for the HttpOnly cookie and/or
+      // detect whether a 2FA challenge is required.
+      const sessionResult = await fetchSessionToken();
+      const token = sessionResult.token;
 
       if (!active) {
         return;
@@ -84,7 +75,7 @@ function CallbackContent() {
     return () => {
       active = false;
     };
-  }, [queryToken]);
+  }, []);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">

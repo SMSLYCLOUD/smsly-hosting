@@ -277,12 +277,14 @@ def _dispatch_webhook(user, title: str, message: str, metadata: dict, webhook_ur
     text = f"*[Grid]* {title}\n{message}"
 
     try:
-        if 'slack' in url:
+        from urllib.parse import urlparse
+        parsed_host = (urlparse(url).hostname or '').lower()
+        if parsed_host == 'hooks.slack.com' or parsed_host.endswith('.slack.com'):
             ok = send_slack_notification(text, url, user=user)
             result['provider'] = 'slack'
             if ok is False:
                 raise RuntimeError("Slack webhook delivery rejected or failed")
-        elif 'discord' in url:
+        elif parsed_host in ('discord.com', 'discordapp.com') or parsed_host.endswith(('.discord.com', '.discordapp.com')):
             ok = send_discord_notification(text, url, user=user)
             result['provider'] = 'discord'
             if ok is False:
@@ -754,17 +756,21 @@ def _rule_metric_value(metric_row, metric_type: str, service=None):
 
 
 def _render_rule_message(rule, value: float, service) -> str:
+    import re as _re
+
     template = (rule.message_template or '').strip()
     if template:
-        try:
-            return template.format(
-                metric=rule.metric,
-                value=f"{value:.1f}",
-                threshold=rule.threshold,
-                service=service.name,
-            )
-        except (KeyError, IndexError, ValueError) as exc:
-            logger.warning("Alert rule %s message template invalid: %s", rule.id, exc)
+        subs = {
+            'metric': str(rule.metric),
+            'value': f"{value:.1f}",
+            'threshold': str(rule.threshold),
+            'service': str(service.name),
+        }
+        return _re.sub(
+            r'\{(metric|value|threshold|service)\}',
+            lambda m: subs[m.group(1)],
+            template,
+        )
     return (
         f"Alert rule '{rule.name}' triggered for service '{service.name}': "
         f"{rule.metric} {rule.operator} {rule.threshold} (current: {value:.1f})."

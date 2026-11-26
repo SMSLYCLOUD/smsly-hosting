@@ -1,6 +1,8 @@
 """Shared upload validation helpers for file upload security."""
 import io
 import logging
+import stat
+import tarfile
 import zipfile
 
 from django.conf import settings
@@ -80,15 +82,30 @@ def validate_tar_magic(uploaded_file):
     return None
 
 
+def _is_unsafe_archive_path(raw_name: str) -> bool:
+    norm = (raw_name or '').replace('\\', '/')
+    if not norm or norm.startswith('/'):
+        return True
+    parts = [p for p in norm.split('/') if p not in ('', '.')]
+    if '..' in parts:
+        return True
+    if parts and ':' in parts[0]:
+        return True
+    return False
+
+
 def validate_zip_entries(uploaded_file):
-    """Check zip for path traversal entries. Returns (is_safe, error_msg)."""
+    """Check zip for path traversal and symlink entries. Returns (is_safe, error_msg)."""
     try:
         uploaded_file.seek(0)
         with zipfile.ZipFile(uploaded_file, 'r') as zf:
-            for name in zf.namelist():
-                # Check for path traversal
-                if name.startswith('/') or '..' in name.split('/') or name.startswith('..'):
+            for info in zf.infolist():
+                name = info.filename
+                if _is_unsafe_archive_path(name):
                     return False, f'Unsafe zip entry detected: {name}'
+                unix_mode = (info.external_attr >> 16) & 0o170000
+                if unix_mode == stat.S_IFLNK:
+                    return False, f'Unsafe symlink entry detected in zip: {name}'
         uploaded_file.seek(0)
         return True, None
     except zipfile.BadZipFile:
@@ -96,6 +113,35 @@ def validate_zip_entries(uploaded_file):
     except Exception as exc:
         logger.warning("Zip validation error: %s", exc)
         return False, f'Failed to validate zip: {exc}'
+
+
+def validate_tar_entries(uploaded_file, max_uncompressed=None):
+    """Check tar.gz/tgz for path traversal, special/symlink entries, and size bombs."""
+    if max_uncompressed is None:
+        max_uncompressed = getattr(settings, 'MAX_UNCOMPRESSED_UPLOAD_SIZE', DEFAULT_MAX_UNCOMPRESSED_SIZE)
+    try:
+        uploaded_file.seek(0)
+        total_uncompressed = 0
+        with tarfile.open(fileobj=uploaded_file, mode='r:gz') as tf:
+            for member in tf.getmembers():
+                if _is_unsafe_archive_path(member.name):
+                    uploaded_file.seek(0)
+                    return False, f'Unsafe tar entry detected: {member.name}'
+                if member.issym() or member.islnk() or member.isdev() or member.isfifo():
+                    uploaded_file.seek(0)
+                    return False, f'Unsafe link/device entry detected in archive: {member.name}'
+                total_uncompressed += max(0, member.size)
+                if total_uncompressed > max_uncompressed:
+                    uploaded_file.seek(0)
+                    max_mb = max_uncompressed / 1024 / 1024
+                    return False, f'Archive bomb detected: uncompressed size exceeds {max_mb:.0f}MB limit.'
+        uploaded_file.seek(0)
+        return True, None
+    except tarfile.TarError:
+        return False, 'Invalid tar.gz archive.'
+    except Exception as exc:
+        logger.warning("Tar validation error: %s", exc)
+        return False, f'Failed to validate tar.gz archive: {exc}'
 
 
 def validate_zip_no_bomb(uploaded_file, max_uncompressed=None):

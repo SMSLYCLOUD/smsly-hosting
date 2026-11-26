@@ -41,6 +41,17 @@ export function BillingTab() {
   }, [toast]);
 
   const currentPlan = plans.find((p) => p.id === subscription?.plan);
+  const monthlyCost = subscription?.billing_cycle === 'YEARLY'
+    ? (currentPlan?.price_yearly_usd || 0) / 12
+    : (currentPlan?.price_monthly_usd || 0);
+  const latestPendingInvoice = invoices.find((inv) => inv.status === 'DRAFT' || inv.status === 'SENT' || inv.status === 'OVERDUE');
+  const estimatedCost = latestPendingInvoice ? Number(latestPendingInvoice.total || 0) : monthlyCost;
+  const servicesLimit = currentPlan?.max_services && currentPlan.max_services > 0 ? currentPlan.max_services : null;
+  const storageLimit = currentPlan?.max_storage_gb && currentPlan.max_storage_gb > 0 ? currentPlan.max_storage_gb : null;
+  const cpuHoursLimit = currentPlan?.max_cpu_cores && currentPlan.max_cpu_cores > 0 ? currentPlan.max_cpu_cores * 730 : null;
+  const servicesPct = servicesLimit ? Math.min(100, ((usage?.active_services || 0) / servicesLimit) * 100) : 0;
+  const storagePct = storageLimit ? Math.min(100, ((usage?.storage_gb || 0) / storageLimit) * 100) : 0;
+  const cpuPct = cpuHoursLimit ? Math.min(100, ((usage?.cpu_hours || 0) / cpuHoursLimit) * 100) : 0;
 
   if (loading) {
     return (
@@ -93,10 +104,7 @@ export function BillingTab() {
               <div className="space-y-2">
                 <div className="text-sm font-medium">Monthly Cost</div>
                 <div className="text-2xl font-bold">
-                  $
-                  {subscription?.billing_cycle === 'YEARLY'
-                    ? (currentPlan?.price_yearly_usd || 0) / 12
-                    : currentPlan?.price_monthly_usd || 0}
+                  ${monthlyCost.toFixed(2)}
                   <span className="text-sm font-normal text-muted-foreground">/mo</span>
                 </div>
               </div>
@@ -116,13 +124,26 @@ export function BillingTab() {
             <CardDescription>Current billing period</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="text-4xl font-extrabold text-emerald-600 dark:text-emerald-400">$0.00</div>
+            <div className="text-4xl font-extrabold text-emerald-600 dark:text-emerald-400">
+              ${estimatedCost.toFixed(2)}
+            </div>
             <p className="text-xs text-muted-foreground mt-2">
               Includes base plan + usage overages.
             </p>
           </CardContent>
           <CardFooter>
-            <Button className="w-full">Manage Payment Method</Button>
+            <Button
+              type="button"
+              className="w-full"
+              onClick={() => {
+                toast({
+                  title: 'Payment method management',
+                  description: 'Use the Plans page or contact your billing administrator to update payment details.',
+                });
+              }}
+            >
+              Manage Payment Method
+            </Button>
           </CardFooter>
         </Card>
       </div>
@@ -138,36 +159,30 @@ export function BillingTab() {
             <div className="flex justify-between text-sm">
               <span>Services</span>
               <span>
-                {usage?.active_services || 0} / {currentPlan?.max_services || '∞'}
+                {usage?.active_services || 0} / {servicesLimit ?? '∞'}
               </span>
             </div>
-            <Progress
-              value={
-                ((usage?.active_services || 0) / (currentPlan?.max_services || 1)) * 100
-              }
-            />
+            <Progress value={servicesPct} />
           </div>
 
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span>Storage (GB)</span>
               <span>
-                {usage?.storage_gb || 0} / {currentPlan?.max_storage_gb || '∞'} GB
+                {usage?.storage_gb || 0} / {storageLimit ?? '∞'} GB
               </span>
             </div>
-            <Progress
-              value={
-                ((usage?.storage_gb || 0) / (currentPlan?.max_storage_gb || 1)) * 100
-              }
-            />
+            <Progress value={storagePct} />
           </div>
 
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span>CPU Hours</span>
-              <span>{usage?.cpu_hours?.toFixed(1) || 0} hrs</span>
+              <span>
+                {usage?.cpu_hours?.toFixed(1) || 0} / {cpuHoursLimit ? `${cpuHoursLimit.toFixed(0)} hrs` : '∞'}
+              </span>
             </div>
-            <Progress value={30} className="bg-slate-100 dark:bg-slate-800" />
+            <Progress value={cpuPct} className="bg-slate-100 dark:bg-slate-800" />
           </div>
         </CardContent>
       </Card>

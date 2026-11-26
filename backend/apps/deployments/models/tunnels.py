@@ -76,13 +76,20 @@ class ReservedSubdomain(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='reserved_subdomains')
-    subdomain = models.CharField(max_length=63, unique=True)  # type: ignore[var-annotated]
+    subdomain = models.CharField(max_length=63)  # type: ignore[var-annotated]
     created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
     released_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
     is_active = models.BooleanField(default=True)  # type: ignore[var-annotated]
 
     class Meta:
         ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['subdomain'],
+                condition=models.Q(is_active=True),
+                name='unique_active_reservedsubdomain_subdomain',
+            ),
+        ]
 
     def __str__(self):
         return f"{self.subdomain} (reserved by {self.owner})"

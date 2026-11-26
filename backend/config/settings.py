@@ -11,12 +11,17 @@ from decouple import Csv, config
 
 warnings.filterwarnings("ignore", category=UserWarning, module="dj_rest_auth.registration.serializers")
 BASE_DIR = Path(__file__).resolve().parent.parent
-IS_TESTING = bool(os.environ.get('TESTING')) or any(
-    (arg_text := str(arg).lower()) == 'test'
-    or Path(arg_text).name.startswith('test')
-    or 'pytest' in arg_text
-    or '/tests/' in arg_text.replace('\\', '/')
-    for arg in sys.argv
+IS_TESTING = (
+    bool(os.environ.get('TESTING'))
+    or bool(os.environ.get('PYTEST_XDIST_WORKER'))
+    or 'pytest' in sys.modules
+    or any(
+        (arg_text := str(arg).lower()) == 'test'
+        or Path(arg_text).name.startswith('test')
+        or 'pytest' in arg_text
+        or '/tests/' in arg_text.replace('\\', '/')
+        for arg in sys.argv
+    )
 )
 
 
@@ -157,7 +162,7 @@ NAPD_SHARED_SECRET = str(config('NAPD_SHARED_SECRET', default='')).strip()
 # apps.deployments.views. That helper records an immutable
 # AuditLog entry so an operator flipping the env var cannot
 # silently unlock paid features — there is always a fingerprint.
-SMSLY_DISABLE_TIER_GATES = config("SMSLY_DISABLE_TIER_GATES", default=True, cast=bool)
+SMSLY_DISABLE_TIER_GATES = True if IS_TESTING else config("SMSLY_DISABLE_TIER_GATES", default=True, cast=bool)
 # Maximum file size in bytes for container file_read (default: 10MB)
 SMSLY_MAX_FILE_READ_SIZE = max(1, int(config("SMSLY_MAX_FILE_READ_SIZE", default=10 * 1024 * 1024)))
 # Enable transfer pipeline by default; can be turned off for hardened environments
@@ -813,7 +818,7 @@ TRIVY_FAIL_ON_SEVERITY = str(config('TRIVY_FAIL_ON_SEVERITY', default='CRITICAL'
 # (DEBUG=False) so backups are never silently written in cleartext.
 BACKUP_REQUIRE_ENCRYPTION = _env_bool(
     'BACKUP_REQUIRE_ENCRYPTION',
-    default='False' if DEBUG else 'True',
+    default='False' if (DEBUG or IS_TESTING) else 'True',
 )
 
 # Paths for server-backup file collection.
@@ -880,7 +885,13 @@ REST_AUTH = {
 # Google/Bitbucket OAuth, the provider has already verified the email, so
 # requiring a second verification breaks the UX (user is redirected to /login
 # instead of being logged in).
-ACCOUNT_EMAIL_VERIFICATION = 'mandatory' if not DEBUG else 'none'
+_configured_email_host = str(config('EMAIL_HOST', default='')).strip()
+if DEBUG:
+    ACCOUNT_EMAIL_VERIFICATION = 'none'
+elif _configured_email_host and _configured_email_host != 'localhost':
+    ACCOUNT_EMAIL_VERIFICATION = 'mandatory'
+else:
+    ACCOUNT_EMAIL_VERIFICATION = 'optional'
 
 # Social login into EXISTING local accounts by verified email. Without this,
 # a user who first registered with email+password and later clicks "Sign in
@@ -1113,6 +1124,7 @@ REST_FRAMEWORK = {
     # being the only clue in the log.
     'EXCEPTION_HANDLER': 'apps.core.exception_handler.smsly_exception_handler',
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'apps.core.auth.APIKeyAuthentication',
         'apps.core.models.api_token.APITokenAuthentication',
         'apps.core.models.api_token.RemoteSyncHMACAuthentication',
         # SECURITY: ``CookieAwareTokenAuthentication`` extends DRF's

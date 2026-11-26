@@ -6,8 +6,7 @@ from rest_framework import permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from apps.core.auth import CookieAwareTokenAuthentication
-from rest_framework.authentication import TokenAuthentication
+from apps.teams.permissions import assert_can_write
 
 from .._helpers import (
     _generate_signed_download_url,
@@ -25,7 +24,7 @@ class DownloadActionsMixin:
     """DownloadActions actions for the viewset."""
 
 
-    @action(detail=True, methods=['get'], url_path='header', permission_classes=[permissions.IsAuthenticated], authentication_classes=[CookieAwareTokenAuthentication, TokenAuthentication])
+    @action(detail=True, methods=['get'], url_path='header', permission_classes=[permissions.IsAuthenticated])
     def header(self, request, pk=None):
         """Return the V2 backup header (key_id, fingerprint) so the
         operator can copy the key_id to a different master for the
@@ -50,7 +49,7 @@ class DownloadActionsMixin:
         return Response(info)
 
 
-    @action(detail=True, methods=['get'], url_path='download-key', permission_classes=[permissions.IsAuthenticated], authentication_classes=[CookieAwareTokenAuthentication, TokenAuthentication])
+    @action(detail=True, methods=['get'], url_path='download-key', permission_classes=[permissions.IsAuthenticated])
     def download_key(self, request, pk=None):
         """Download the V2 backup header as a .key.json file alongside
         the backup. The operator stores this file with the backup and
@@ -69,6 +68,7 @@ class DownloadActionsMixin:
         # the backup's key_id/fingerprint by UUID probing.
         if not self._user_can_access_service(request.user, getattr(backup, 'service', None)):
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+        assert_can_write(request.user, backup.service, action='download backup key')
         if not backup.file_path or not os.path.exists(backup.file_path):
             return Response({'error': 'Backup file not found'}, status=status.HTTP_404_NOT_FOUND)
         try:
@@ -104,7 +104,7 @@ class DownloadActionsMixin:
         return response
 
 
-    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated], authentication_classes=[CookieAwareTokenAuthentication, TokenAuthentication])
+    @action(detail=True, methods=['get'], permission_classes=[permissions.AllowAny])
     def download(self, request, pk=None):
         signed_value = request.query_params.get('signed')
         token_value = request.query_params.get('token')
@@ -115,13 +115,6 @@ class DownloadActionsMixin:
                 return Response({'error': 'Invalid or expired download link'}, status=status.HTTP_401_UNAUTHORIZED)
         elif not request.user.is_authenticated:
             return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
-        elif not request.user.is_superuser:
-            # Server backups contain the full platform state — only
-            # superusers may download them without a signed URL.
-            return Response(
-                {'error': 'Not found'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
 
         # Bypass get_queryset() which filters by request.user — signed/AllowAny
         # requests have an AnonymousUser that crashes the queryset filter.
@@ -129,15 +122,25 @@ class DownloadActionsMixin:
         if not backup:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Ownership gate: authenticated downloaders must own the backup's service.
-        # Signed URLs bypass this (already verified above). Without this, an
-        # authenticated user could brute-force UUIDs and download any backup.
+        # Ownership gate: authenticated downloaders must own the backup's service
+        # (or be superuser for server backups). Signed URLs bypass this (already
+        # verified above). Without this, an authenticated user could brute-force
+        # UUIDs and download any backup.
         if not signed_value and request.user.is_authenticated:
-            if not self._user_can_access_service(request.user, backup.service):
+            backup_service = getattr(backup, 'service', None)
+            if backup_service is None:
+                if not request.user.is_superuser:
+                    return Response(
+                        {'error': 'Not found'},
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
+            elif not self._user_can_access_service(request.user, backup_service):
                 return Response(
                     {'error': 'Not found'},
                     status=status.HTTP_404_NOT_FOUND,
                 )
+            else:
+                assert_can_write(request.user, backup_service, action='download backup')
 
         file_path = backup.file_path
 

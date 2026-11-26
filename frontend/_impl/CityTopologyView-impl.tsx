@@ -477,8 +477,6 @@ export function CityTopologyView({ data, loading, error }: { data: TopologyGraph
       for (let i = 0; i < 2; i++) {
         const carMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 });
         const car = new THREE.Mesh(carGeo, carMat);
-        const carLight = new THREE.PointLight(color, 1, 2);
-        car.add(carLight);
         
         trafficGroup.add(car);
         trafficCars.push({
@@ -490,9 +488,22 @@ export function CityTopologyView({ data, loading, error }: { data: TopologyGraph
       }
     });
 
-    // Animation loop
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+    // Animation loop (paused when user prefers reduced motion)
     let time = 0;
+    const renderOnControlChange = () => {
+      renderer.render(scene, camera);
+    };
+    if (prefersReducedMotion) {
+      controls.addEventListener('change', renderOnControlChange);
+      renderer.render(scene, camera);
+    }
+
     const animate = () => {
+      if (prefersReducedMotion) return;
       animFrameRef.current = requestAnimationFrame(animate);
       time += 0.005;
       controls.update();
@@ -524,7 +535,9 @@ export function CityTopologyView({ data, loading, error }: { data: TopologyGraph
 
       renderer.render(scene, camera);
     };
-    animate();
+    if (!prefersReducedMotion) {
+      animate();
+    }
 
     // ─── Click detection ───────────────
     const handleClick = (event: MouseEvent) => {
@@ -567,6 +580,7 @@ export function CityTopologyView({ data, loading, error }: { data: TopologyGraph
 
     return () => {
       cancelAnimationFrame(animFrameRef.current);
+      controls.removeEventListener('change', renderOnControlChange);
       container.removeEventListener('click', handleClick);
       window.removeEventListener('resize', handleResize);
       controls.dispose();

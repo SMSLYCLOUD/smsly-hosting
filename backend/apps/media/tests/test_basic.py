@@ -5,11 +5,17 @@ from apps.media.models import AttestationAuditLog
 
 class AttestationAuditLogTests(TestCase):
     def _make_server(self):
+        from django.contrib.auth import get_user_model
         from apps.deployments.models import ManagedServer
+        owner, _ = get_user_model().objects.get_or_create(
+            username="media-test-owner",
+            defaults={"email": "media-test@example.com"},
+        )
         return ManagedServer.objects.create(
             name="test-node",
             host="10.0.0.1",
             status="online",
+            owner=owner,
         )
 
     def test_create_audit_log(self):

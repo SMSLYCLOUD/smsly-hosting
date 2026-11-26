@@ -1,7 +1,8 @@
 [Unit]
 Description=Trulay Grid Cryptographic Controller & DB Point-of-Contact Gate (grid-cryptd)
-After=network-online.target docker.service
+After=network-online.target smsly-root-vault.service
 Wants=network-online.target
+Before=docker.service
 
 [Service]
 Type=simple
@@ -15,22 +16,17 @@ TimeoutStopSec=15s
 # Keep sub-master / per-service keys locked in RAM (never swapped or core-dumped)
 LimitMEMLOCK=infinity
 LimitCORE=0
-CapabilityBoundingSet=CAP_IPC_LOCK CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_IPC_LOCK CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_IPC_LOCK CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_CHOWN CAP_FOWNER CAP_MKNOD CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_SYS_RAWIO
+AmbientCapabilities=CAP_IPC_LOCK CAP_NET_BIND_SERVICE CAP_SYS_ADMIN
 
-# Filesystem & kernel hardening
+# Hardening without private mount-namespace isolation so LUKS2 mounts/umounts
+# created via scripts/smsly-volume-crypt.sh are visible to dockerd on the host.
 NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=yes
 RuntimeDirectory=smsly
+RuntimeDirectoryPreserve=yes
 RuntimeDirectoryMode=0750
-StateDirectory=smsly
+StateDirectory=smsly/keystore
 StateDirectoryMode=0700
-ReadWritePaths=/var/lib/smsly/keystore /var/lib/smsly/encrypted-volumes /run/smsly
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
 RestrictRealtime=yes
 
 [Install]

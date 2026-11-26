@@ -35,8 +35,27 @@ class LiveKitAdminService:
         self.api_secret = node.livekit_api_secret
 
     def _headers(self):
+        import jwt as pyjwt
+
+        now = int(time.time())
+        payload = {
+            "iss": self.api_key or "",
+            "nbf": now - 5,
+            "exp": now + 300,
+            "video": {
+                "roomCreate": True,
+                "roomList": True,
+                "roomRecord": True,
+                "roomAdmin": True,
+            },
+        }
+        token = pyjwt.encode(
+            payload,
+            self.api_secret or "",
+            algorithm="HS256",
+        )
         return {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
 

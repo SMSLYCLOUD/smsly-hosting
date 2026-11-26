@@ -34,11 +34,11 @@ router.register(r'admin/analytics', AnalyticsViewSet, basename='admin-analytics'
 router.register(r'invoices', InvoiceViewSet, basename='invoices')
 
 urlpatterns = [
+    path('invoices/', InvoicesView.as_view(), name='billing-invoices'),
     path('', include(router.urls)),
     path('summary/', BillingSummaryView.as_view(), name='billing-summary'),
     path('checkout/', CheckoutView.as_view(), name='billing-checkout'),
     path('portal/', PortalSessionView.as_view(), name='billing-portal'),
-    path('invoices/', InvoicesView.as_view(), name='billing-invoices'),
     path('webhook/', StripeWebhookView.as_view(), name='billing-webhook'),
     path('flutterwave/webhook/', FlutterwaveWebhookView.as_view(), name='billing-flutterwave-webhook'),
     path('cryptomus/webhook/', CryptomusWebhookView.as_view(), name='billing-cryptomus-webhook'),

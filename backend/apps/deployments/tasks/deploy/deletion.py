@@ -6,6 +6,7 @@ import shutil
 import docker
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
+from django.db.models import Q
 from django.utils import timezone
 from apps.addons.services.addon_provisioner import addon_provisioner
 
@@ -233,7 +234,7 @@ def _clear_orphaned_runtime_resources() -> dict:
         from apps.deployments.models import Deployment
         for dep in (
             Deployment.objects.exclude(status__in=["FAILED", "CANCELLED"])
-            .exclude(container_id__isnull=True)
+            .exclude(Q(container_id__isnull=True) & Q(green_container_id__isnull=True))
             .values_list("container_id", "green_container_id")
         ):
             for cid in dep:
@@ -287,6 +288,13 @@ def _clear_orphaned_runtime_resources() -> dict:
         _clear_directory_contents("/opt/smsly-cache"),
     ]
 
+    if removed:
+        try:
+            from apps.deployments.services.mesh_dns import sync_dns_now
+            sync_dns_now(client=client)
+        except Exception:
+            pass
+
     return {
         "removed": removed,
         "removed_count": len(removed),
@@ -307,15 +315,19 @@ def delete_service_task(self, service_id: str, force: bool = False):
     except Service.DoesNotExist:
         return
 
-    # A deleted service must not keep a canary split file (its router
-    # would reference vanished backends).
+    # A deleted service must not keep a canary or overflow split file (its
+    # router would reference vanished backends).
     try:
         from apps.deployments.services.traefik_manager.canary_file import (
             remove_canary_file,
         )
+        from apps.deployments.services.traefik_manager.overflow_file import (
+            remove_overflow_file,
+        )
         remove_canary_file(service)
+        remove_overflow_file(service)
     except Exception as exc:
-        logger.debug("Canary file cleanup on service delete failed: %s", exc)
+        logger.debug("Traefik dynamic file cleanup on service delete failed: %s", exc)
 
     success = False
 
@@ -328,6 +340,7 @@ def delete_service_task(self, service_id: str, force: bool = False):
         except Exception:
             active_server = getattr(service, 'server', None)
 
+        orchestrator = None
         if active_server and not active_server.is_primary:
             try:
                 logger.info("Decommissioning service %s on remote node %s", service.name, active_server.host)
@@ -354,33 +367,36 @@ def delete_service_task(self, service_id: str, force: bool = False):
             orchestrator = DeletionOrchestrator()
             success = orchestrator.delete_service_resources(service, force=force)
 
-            # 2b. Clean up addon runtime resources before DB cascade
-            for addon in service.addons.all():
-                server = getattr(addon.service, 'server', None)
-                if (server and not server.is_primary
-                        and not getattr(server, 'is_lite_agent', False)):
-                    container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
-                    ok = addon_provisioner.deprovision_remote(
-                        addon.coolify_uuid or container_name, server, container_name,
-                    )
-                elif orchestrator.docker_client:
+        # 2b. Clean up addon runtime resources (remote AND local) before DB cascade
+        for addon in service.addons.all():
+            server = getattr(addon.service, 'server', None)
+            if (server and not server.is_primary
+                    and not getattr(server, 'is_lite_agent', False)):
+                container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+                ok = addon_provisioner.deprovision_remote(
+                    addon.coolify_uuid or container_name, server, container_name,
+                )
+            else:
+                if orchestrator is None:
+                    orchestrator = DeletionOrchestrator()
+                if orchestrator.docker_client:
                     ok = orchestrator.delete_addon_resources(addon)
                 else:
                     ok = True
-                if not ok:
-                    logger.warning("Failed to clean up addon %s (%s) for service %s.",
-                                   addon.id, addon.addon_type, service.name)
-                    if not force:
-                        success = False
+            if not ok:
+                logger.warning("Failed to clean up addon %s (%s) for service %s.",
+                               addon.id, addon.addon_type, service.name)
+                if not force:
+                    success = False
 
-            # 3. Resilience: If force=True, we proceed regardless of resource cleanup success.
-            # This ensures the DB record is purged when the user explicitly requests a force-delete.
-            if force:
-                logger.info("Force-purging service %s from database after best-effort cleanup.", service.name)
-                success = True
-            elif not success and not service.server and not orchestrator.docker_client:
-                logger.warning("Docker client unavailable for service %s. Forcing database-only deletion.", service.name)
-                success = True
+        # 3. Resilience: If force=True, we proceed regardless of resource cleanup success.
+        # This ensures the DB record is purged when the user explicitly requests a force-delete.
+        if force:
+            logger.info("Force-purging service %s from database after best-effort cleanup.", service.name)
+            success = True
+        elif not success and not service.server and (orchestrator is None or not orchestrator.docker_client):
+            logger.warning("Docker client unavailable for service %s. Forcing database-only deletion.", service.name)
+            success = True
 
         if success:
             # Capture project reference before deleting the service.
@@ -424,7 +440,7 @@ def delete_service_task(self, service_id: str, force: bool = False):
             # to free VPS resources.
             if service_project:
                 try:
-                    from ..ollama import _cleanup_shared_ollama_if_unused
+                    from apps.deployments.tasks.ai.ollama import _cleanup_shared_ollama_if_unused
                     _cleanup_shared_ollama_if_unused(service_project)
                 except Exception as cleanup_exc:
                     logger.warning("Shared Ollama cleanup check failed for project %s: %s",

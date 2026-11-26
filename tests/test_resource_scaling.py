@@ -257,42 +257,42 @@ class TestDefaultsOn(unittest.TestCase):
         self.assertIn('"${OPENAPPSEC_ENABLED:-1}"', harden)
 
     def test_waf_default_is_size_aware(self):
-        # The shadow costs ~1-2GB real: on at >=8GB, off below, explicit
-        # operator values always win on both paths.
+        # The shadow costs ~1.5-2.2GB real: on at >=12GB (full tier), off
+        # below; explicit operator values always win on both paths.
         fresh = read("lib/fresh_config.sh")
         self.assertIn("OPENAPPSEC_ENABLED=$ENV_OPENAPPSEC_ENABLED", fresh)
         self.assertIn("ENV_OPENAPPSEC_ENABLED=", fresh)
-        self.assertIn("-ge 8192", fresh)
+        self.assertIn("-ge 12288", fresh)
         platform_env = read("lib/platform-env.sh")
         self.assertIn("OPENAPPSEC_ENABLED", platform_env)
-        self.assertIn("-ge 8192", platform_env)
+        self.assertIn("-ge 12288", platform_env)
 
     def test_waf_size_boundary_behavior(self):
-        # The literal above is not enough: `-gt 8192` passes a grep for
-        # 8192 yet flips every exact-8GB host (shadow costs ~1-2GB).
+        # The literal above is not enough: `-gt 12288` passes a grep for
+        # 12288 yet flips every exact-12GB host (shadow costs ~1.5-2.2GB).
         # Extract the operator from each implementation and evaluate the
         # boundary pair through it.
         import operator as _op
         ops = {"-ge": _op.ge, "-gt": _op.gt,
                "-le": _op.le, "-lt": _op.lt}
         waf_lines = {
-            # The WAF decision lives on these lines (other -ge 8192
+            # The WAF decision lives on these lines (other threshold
             # comparisons — frontend build tiers, sizing ladder — have
             # different semantics and their own pins).
             "lib/fresh_config.sh": [
                 ln for ln in read("lib/fresh_config.sh").splitlines()
-                if "OPENAPPSEC_ENABLED" in ln and "8192" in ln],
+                if "OPENAPPSEC_ENABLED" in ln and "12288" in ln],
             "lib/platform-env.sh": [
                 ln for ln in read("lib/platform-env.sh").splitlines()
-                if "_waf_ram_mb" in ln and re.search(r"-(ge|gt|le|lt)\s+8192", ln)],
+                if "_waf_ram_mb" in ln and re.search(r"-(ge|gt|le|lt)\s+12288", ln)],
         }
         for rel, lines in waf_lines.items():
             self.assertEqual(len(lines), 1, "%s: one WAF size line" % rel)
-            m = re.search(r"-(ge|gt|le|lt)\s+8192", lines[0])
+            m = re.search(r"-(ge|gt|le|lt)\s+12288", lines[0])
             self.assertIsNotNone(m, "%s: comparison operator found" % rel)
             decide = ops["-" + m.group(1)]
-            self.assertFalse(decide(8191, 8192), "%s: 8191MB must disable WAF" % rel)
-            self.assertTrue(decide(8192, 8192), "%s: 8192MB must enable WAF" % rel)
+            self.assertFalse(decide(12287, 12288), "%s: 12287MB must disable WAF" % rel)
+            self.assertTrue(decide(12288, 12288), "%s: 12288MB must enable WAF" % rel)
 
     def test_explicit_off_switch_survives(self):
         # Default-on must not strand operators who opt out: reconcile
@@ -305,7 +305,7 @@ class TestDefaultsOn(unittest.TestCase):
         for rel in ("docker-compose.prod.yml",
                     "infrastructure/docker/docker-compose.observability.yml"):
             content = read(rel)
-            self.assertIn("${GRAFANA_ANON_ENABLED:-true}", content, rel)
+            self.assertIn("${GRAFANA_ANON_ENABLED:-false}", content, rel)
 
     def test_security_layers_default_on(self):
         platform_env = read("lib/platform-env.sh")
@@ -354,6 +354,68 @@ class TestHostMemoryTuning(unittest.TestCase):
         self.assertIn("docker-compose.node.yml", monitor)
         self.assertIn("docker-compose.agent-lite.yml", monitor)
         self.assertIn("config --services", monitor)
+
+
+class TestRuntimeDiet(unittest.TestCase):
+    """Regression: runtime CPU/RAM/disk/fork optimizations (Pass 2)."""
+
+    def test_gunicorn_cow_preload_and_post_fork(self):
+        cfg = read("backend/gunicorn.conf.py")
+        self.assertIn("preload_app", cfg)
+        self.assertIn("SMSLY_DEFER_POST_FORK", cfg)
+        self.assertIn("def post_fork(", cfg)
+        self.assertIn("max_requests", cfg)
+        apps_py = read("backend/apps/deployments/apps.py")
+        self.assertIn("SMSLY_DEFER_POST_FORK", apps_py)
+        dockerfile = read("backend/Dockerfile")
+        self.assertIn("/app/gunicorn.conf.py", dockerfile)
+        compose = read("docker-compose.prod.yml")
+        backend_block = compose[compose.index("\n  backend:"):compose.index("\n  celery:")]
+        self.assertIn("-c /app/gunicorn.conf.py", backend_block)
+
+    def test_python_malloc_arenas_and_celery_fast_idle_zero(self):
+        compose = read("docker-compose.prod.yml")
+        self.assertGreaterEqual(compose.count('MALLOC_ARENA_MAX: "${MALLOC_ARENA_MAX:-2}"'), 5)
+        self.assertIn("--autoscale=${CELERY_FAST_AUTOSCALE:-2,0}", compose)
+
+    def test_rabbitmq_beam_and_healthcheck_diet(self):
+        compose = read("docker-compose.prod.yml")
+        rmq = compose[compose.index("\n  rabbitmq:"):compose.index("\n  caddy:")]
+        self.assertIn("RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS", rmq)
+        self.assertIn("+S 2:2 +sbwt none", rmq)
+        self.assertIn("management_agent.disable_metrics_collector = true", rmq)
+        self.assertIn("interval: 30s", rmq)
+
+    def test_cadvisor_metric_pruning_keeps_container_labels(self):
+        for rel in (
+            "docker-compose.prod.yml",
+            "infrastructure/docker/docker-compose.observability.yml",
+            "infrastructure/docker/docker-compose.node.yml",
+        ):
+            text = read(rel)
+            cad = text[text.index("\n  cadvisor:"):]
+            nxt = re.search(r"\n  [a-zA-Z0-9_-]+:\n", cad[12:])
+            cad = cad[:12 + nxt.start()] if nxt else cad
+            self.assertIn("--disable_metrics=", cad, rel)
+            self.assertNotIn("--store_container_labels=false", cad, rel)
+
+    def test_frontend_v8_cap_and_loki_bridge_poll(self):
+        compose = read("docker-compose.prod.yml")
+        self.assertIn('--max-old-space-size=${FRONTEND_MAX_OLD_SPACE_MB:-256}', compose)
+        self.assertIn('${LOKI_BRIDGE_POLL_INTERVAL:-10}', compose)
+        bridge = read("infrastructure/monitoring/loki-log-bridge.py")
+        self.assertIn('os.environ.get("POLL_INTERVAL", "10")', bridge)
+
+    def test_wal_parameterized_and_archive_pruned(self):
+        compose = read("docker-compose.prod.yml")
+        self.assertIn("wal_keep_size=${PG_WAL_KEEP_SIZE:-1GB}", compose)
+        integrity = read("scripts/verify_platform_integrity.sh")
+        self.assertIn("find /var/lib/postgresql/archive", integrity)
+        self.assertIn("-delete", integrity)
+        for rel in ("lib/fresh_config.sh", "lib/platform-env.sh", ".env.example"):
+            text = read(rel)
+            self.assertIn("PG_WAL_KEEP_SIZE", text, rel)
+            self.assertIn("CELERY_AUTOSCALE", text, rel)
 
 
 if __name__ == "__main__":

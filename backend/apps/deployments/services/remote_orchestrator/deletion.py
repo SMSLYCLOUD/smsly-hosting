@@ -134,7 +134,8 @@ fi
 exit 0
 """.strip()
 
-        ssh = SSHClient(
+        import apps.deployments.services.remote_orchestrator as _ro_pkg
+        ssh = _ro_pkg.SSHClient(
             ip=self.server.host,
             key_content=self.server.ssh_key,
             key_passphrase=self.server.ssh_key_passphrase,

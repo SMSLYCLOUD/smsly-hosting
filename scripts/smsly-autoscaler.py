@@ -529,8 +529,9 @@ class AutoscalerAPIHandler(BaseHTTPRequestHandler):
                 stats = LATEST_STATE.get('stats', {})
                 decisions = LATEST_STATE.get('decisions', [])
                 demand_scores = LATEST_STATE.get('demand_scores', {})
+                groups = LATEST_STATE.get('groups', SERVICE_GROUPS)
 
-                for name, config in SERVICE_GROUPS.items():
+                for name, config in groups.items():
                     s = stats.get(name)
                     if not s:
                         continue
@@ -549,12 +550,12 @@ class AutoscalerAPIHandler(BaseHTTPRequestHandler):
                         'net_rx_mb': s.net_rx_mb,
                         'net_tx_mb': s.net_tx_mb,
                         'pids': s.pids,
-                        'current_workers': last_decision.current_workers if last_decision else 0,
+                        'current_workers': last_decision.current_workers if last_decision else (1 if config.get('type') == 'paas' else 0),
                         'last_action': last_decision.action if last_decision else 'none',
                         'last_action_at': last_decision.timestamp if last_decision else None
                     }
 
-                total_used = sum(s.memory_mb for s in stats.values() if s.name in SERVICE_GROUPS)
+                total_used = sum(s.memory_mb for s in stats.values() if s.name in groups)
 
                 response = {
                     "status": "running",
@@ -700,19 +701,49 @@ def run_once():
         RUN_LOCK.release()
 
 
+def _discover_effective_groups(stats: dict[str, ContainerStats]) -> dict[str, dict]:
+    """Merge static SERVICE_GROUPS with live ``managed_by=smsly-hosting`` containers.
+
+    Dynamically discovered PaaS containers get read-only ``type='paas'`` so
+    status/budget views stay accurate without colliding with PaaS VPA limits.
+    """
+    groups = {k: dict(v) for k, v in SERVICE_GROUPS.items()}
+    try:
+        res = subprocess.run(
+            ['docker', 'ps', '--filter', 'label=managed_by=smsly-hosting', '--format', '{{.Names}}'],
+            capture_output=True, text=True, timeout=10,
+        )
+        if res.returncode == 0:
+            for line in res.stdout.splitlines():
+                cname = line.strip()
+                if cname and cname in stats and cname not in groups:
+                    groups[cname] = {
+                        'type': 'paas',
+                        'app': cname,
+                        'priority': 1,
+                        'min_workers': 1,
+                        'max_workers': 1,
+                    }
+    except Exception:
+        pass
+    return groups
+
+
 def _run_once_implementation():
     stats = get_docker_stats()
     if not stats:
         logger.warning("No container stats available — skipping cycle")
         return
 
+    effective_groups = _discover_effective_groups(stats)
     # Filter to managed containers only
-    managed = {k: v for k, v in stats.items() if k in SERVICE_GROUPS}
+    managed = {k: v for k, v in stats.items() if k in effective_groups}
     if not managed:
         logger.debug("No managed containers running — skipping cycle")
         # Still record history even if empty
 
-    # Calculate demand and make decisions
+    # Calculate demand and make decisions (legacy worker-pool containers only;
+    # PaaS containers are tracked in stats/budget telemetry without VPA clash).
     demand_scores = calculate_demand_scores(stats)
     decisions = make_scaling_decisions(stats, demand_scores)
 
@@ -730,7 +761,8 @@ def _run_once_implementation():
         'timestamp': now_iso,
         'stats': stats,
         'demand_scores': demand_scores,
-        'decisions': decisions
+        'decisions': decisions,
+        'groups': effective_groups,
     }
 
     with HISTORY_LOCK:

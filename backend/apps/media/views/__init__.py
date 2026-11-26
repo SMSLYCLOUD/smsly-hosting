@@ -3,7 +3,7 @@ import logging
 
 from django.core.cache import cache
 from django.utils import timezone
-from rest_framework import viewsets, status
+from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
@@ -49,6 +49,7 @@ class MediaNodeProfileViewSet(viewsets.ModelViewSet):
 
     queryset = MediaNodeProfile.objects.select_related("server").all()
     serializer_class = MediaNodeProfileSerializer
+    permission_classes = [permissions.IsAdminUser]
 
     @action(detail=True, methods=["get"])
     def health(self, request, pk=None):
@@ -81,6 +82,7 @@ class MediaRoomViewSet(viewsets.ModelViewSet):
     """Rooms nested under media nodes."""
 
     serializer_class = MediaRoomSerializer
+    permission_classes = [permissions.IsAdminUser]
 
     def get_queryset(self):
         qs = MediaRoom.objects.select_related("node__server").all()
@@ -90,7 +92,7 @@ class MediaRoomViewSet(viewsets.ModelViewSet):
         return qs
 
     @action(detail=True, methods=["post"])
-    def egress_start(self, request, pk=None, _node_pk=None):
+    def egress_start(self, request, pk=None, node_pk=None):
         """Start recording via LiveKit Egress."""
         from ..services.livekit_admin import LiveKitAdminService
 
@@ -109,7 +111,7 @@ class MediaRoomViewSet(viewsets.ModelViewSet):
         })
 
     @action(detail=True, methods=["post"])
-    def egress_stop(self, request, pk=None, _node_pk=None):
+    def egress_stop(self, request, pk=None, node_pk=None):
         """Stop recording."""
         from ..services.livekit_admin import LiveKitAdminService
 
@@ -132,6 +134,7 @@ class MediaParticipantViewSet(viewsets.ModelViewSet):
     """Participants nested under rooms."""
 
     serializer_class = MediaParticipantSerializer
+    permission_classes = [permissions.IsAdminUser]
 
     def get_queryset(self):
         qs = MediaParticipant.objects.select_related("room").all()
@@ -146,6 +149,7 @@ class AttestationProfileViewSet(viewsets.ModelViewSet):
 
     queryset = AttestationProfile.objects.select_related("server").all()
     serializer_class = AttestationProfileSerializer
+    permission_classes = [permissions.IsAdminUser]
     http_method_names = ["get", "head", "options"]
 
 
@@ -154,11 +158,14 @@ class AttestationAuditLogViewSet(viewsets.ModelViewSet):
 
     queryset = AttestationAuditLog.objects.select_related("server").all()
     serializer_class = AttestationAuditLogSerializer
+    permission_classes = [permissions.IsAdminUser]
     http_method_names = ["get", "head", "options"]
 
 
 class MediaCapacityView(viewsets.ViewSet):
     """Global capacity overview and best-node routing."""
+
+    permission_classes = [permissions.IsAdminUser]
 
     @action(detail=False, methods=["get"])
     def best_node(self, request):
@@ -210,23 +217,32 @@ class MediaNodeRegistrationView(viewsets.ViewSet):
     )
     def register(self, request):
         """Register a new media node with the control plane."""
+        import hashlib
+        import hmac as hmac_mod
+        import time
+        from django.conf import settings as dj_settings
         from apps.deployments.models.servers import ManagedServer
 
         data = request.data if isinstance(request.data, dict) else {}
-        node_id = data.get("node_id", "").strip()
-        host = data.get("host", "").strip()
-        gateway_secret = data.get("gateway_secret", "").strip()
+        node_id = str(data.get("node_id", "") or "").strip()
+        host = str(data.get("host", "") or "").strip()
 
-        if not node_id or not host or not gateway_secret:
+        if not node_id or not host:
             return Response(
-                {"error": "node_id, host, and gateway_secret are required"},
+                {"error": "node_id and host are required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Verify HMAC — the node signs with its gateway_secret
-        from apps.deployments.services.agent_registrar_auth import (
-            compute_agent_hmac,
-        )
+        livekit_host = str(data.get("livekit_host", "127.0.0.1") or "127.0.0.1").strip()
+        if livekit_host and livekit_host not in ("127.0.0.1", "localhost"):
+            from apps.core.validators import validate_ssrf
+            try:
+                validate_ssrf(f"http://{livekit_host}:7880")
+            except Exception as exc:
+                return Response(
+                    {"error": f"Invalid livekit_host: {exc}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         signature = str(request.headers.get("X-Gateway-Signature-V2", "") or "").strip()
         timestamp = str(request.headers.get("X-Request-Timestamp", "") or "").strip()
@@ -238,10 +254,6 @@ class MediaNodeRegistrationView(viewsets.ViewSet):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        import hashlib
-        import hmac as hmac_mod
-        import time
-
         try:
             req_ts = int(timestamp)
         except (TypeError, ValueError):
@@ -250,6 +262,27 @@ class MediaNodeRegistrationView(viewsets.ViewSet):
         if abs(int(time.time()) - req_ts) > 60:
             return Response({"error": "timestamp expired"}, status=status.HTTP_401_UNAUTHORIZED)
 
+        existing = ManagedServer.objects.filter(id=node_id).first()
+        if existing is not None:
+            if existing.node_type != "media":
+                return Response(
+                    {"error": "node_id belongs to a non-media server"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            signing_secret = str(existing.gateway_secret or "").strip()
+            if not signing_secret:
+                return Response(
+                    {"error": "server gateway_secret is not configured"},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+        else:
+            signing_secret = str(getattr(dj_settings, "GATEWAY_SECRET", "") or "").strip()
+            if not signing_secret:
+                return Response(
+                    {"error": "control-plane GATEWAY_SECRET is not configured"},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+
         body_hash = hashlib.sha256(request.body or b"").hexdigest()
         # NOTE: this path string intentionally differs from the mounted URL
         # (/api/v1/media/media-nodes/register/). Installers sign this legacy
@@ -257,37 +290,41 @@ class MediaNodeRegistrationView(viewsets.ViewSet):
         # matching installer update.
         payload_str = f"POST|/api/v1/media-nodes/register/|{timestamp}|{nonce}|{body_hash}"
         expected = hmac_mod.new(
-            gateway_secret.encode(), payload_str.encode(), hashlib.sha256
+            signing_secret.encode(), payload_str.encode(), hashlib.sha256
         ).hexdigest()
 
         if not hmac_mod.compare_digest(expected, signature):
             logger.warning("Media node registration HMAC mismatch from %s", host)
             return Response({"error": "invalid signature"}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # Create or update ManagedServer
-        server, created = ManagedServer.objects.get_or_create(
-            id=node_id,
-            defaults={
-                "name": f"media-{node_id[:8]}",
-                "host": host,
-                "wg_address": data.get("wg_address", ""),
-                "node_type": "media",
-                "owner": None,
-                "gateway_secret": gateway_secret,
-                "provision_status": ManagedServer.ProvisionStatus.DONE,
-                "status": ManagedServer.Status.ONLINE,
-            },
-        )
+        nonce_key = f"media_register_nonce:{node_id}:{nonce}"
+        try:
+            if not cache.add(nonce_key, "1", timeout=120):
+                return Response({"error": "replayed nonce"}, status=status.HTTP_401_UNAUTHORIZED)
+        except Exception:
+            return Response({"error": "replay protection unavailable"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-        if not created:
-            # Update existing node
+        if existing is None:
+            new_secret = str(data.get("gateway_secret", "") or "").strip() or signing_secret
+            server = ManagedServer.objects.create(
+                id=node_id,
+                name=f"media-{node_id[:8]}",
+                host=host,
+                wg_address=data.get("wg_address", ""),
+                node_type="media",
+                owner=None,
+                gateway_secret=new_secret,
+                provision_status=ManagedServer.ProvisionStatus.DONE,
+                status=ManagedServer.Status.ONLINE,
+            )
+        else:
+            server = existing
             server.host = host
             server.wg_address = data.get("wg_address", server.wg_address)
-            server.gateway_secret = gateway_secret
             server.status = ManagedServer.Status.ONLINE
             server.provision_status = ManagedServer.ProvisionStatus.DONE
             server.save(update_fields=[
-                "host", "wg_address", "gateway_secret",
+                "host", "wg_address",
                 "status", "provision_status", "updated_at",
             ])
 

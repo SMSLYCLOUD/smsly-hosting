@@ -1,19 +1,50 @@
 """Generic /api/v1/domains/ ViewSet.
 
 Operates on the ``apps.domains.models.Domain`` model so the frontend's
-``/domains`` page can list, create, update, and delete custom domains
+``/domains`` page can list, create, retrieve, and delete custom domains
 across all services owned by the requesting user.
 """
 import logging
 
 from django.db import IntegrityError
-from rest_framework import permissions, serializers, status, viewsets
+from rest_framework import mixins, permissions, serializers, status, viewsets
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
 from ..models import Domain, DomainStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _find_domain_conflict(domain_name: str, exclude_service_id=None):
+    """Return a conflicting Service if *domain_name* is already assigned elsewhere."""
+    from apps.deployments.models.core import Service
+
+    qs = Service.objects.all()
+    if exclude_service_id is not None:
+        qs = qs.exclude(id=exclude_service_id)
+
+    public_conflict = qs.filter(public_domain=domain_name).only("id", "name").first()
+    if public_conflict:
+        return public_conflict
+
+    dom_qs = Domain.objects.filter(domain_name=domain_name)
+    if exclude_service_id is not None:
+        dom_qs = dom_qs.exclude(service_id=exclude_service_id)
+    existing_dom = dom_qs.select_related("service").first()
+    if existing_dom and existing_dom.service_id:
+        return existing_dom.service
+
+    normalized = str(domain_name or "").strip().lower()
+    if normalized:
+        for other in qs.only("id", "name", "custom_domains", "host_aliases").iterator():
+            for item in (other.custom_domains or []):
+                if isinstance(item, str) and item.strip().lower() == normalized:
+                    return other
+            for entry in (other.host_aliases or []):
+                if isinstance(entry, dict) and str(entry.get("host") or "").strip().lower() == normalized:
+                    return other
+    return None
 
 
 class GlobalDomainSerializer(serializers.ModelSerializer):
@@ -40,6 +71,7 @@ class GlobalDomainSerializer(serializers.ModelSerializer):
             'verified',
             'created_at',
         ]
+        read_only_fields = ['id', 'status', 'verified', 'created_at']
 
     def get_service(self, obj):
         return str(obj.service_id) if obj.service_id else None
@@ -60,28 +92,39 @@ class GlobalDomainSerializer(serializers.ModelSerializer):
         return obj.dns_expected or ''
 
 
-class GlobalDomainViewSet(viewsets.ModelViewSet):
+class GlobalDomainViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
     """Generic /api/v1/domains/ endpoint.
 
-    Supports list/create/retrieve/update/destroy on the global Domain
-    model, scoped to the requesting user. Creates require a service_id
-    that the user owns.
+    Supports list/create/retrieve/destroy on the global Domain model,
+    scoped to the requesting user. Creates require a service_id that the
+    user has write access to. PUT/PATCH are disabled to prevent status
+    or verification tampering.
     """
     serializer_class = GlobalDomainSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        from django.db.models import Q
+        from apps.teams.permissions import get_team_q_filter
+
         user = self.request.user
         if user.is_superuser:
             return Domain.objects.all().select_related('service').order_by('-created_at')
         return Domain.objects.filter(
-            Q(service__owner=user) | Q(service__project__team__members__user=user)
+            get_team_q_filter(user, prefix="service__")
         ).select_related('service').distinct().order_by('-created_at')
 
     def create(self, request, *args, **kwargs):
         from ..utils import normalize_domain
         from apps.deployments.models.core import Service
+        from apps.deployments.views._helpers import _is_platform_owned_domain
+        from apps.teams.permissions import assert_can_write
+
         try:
             domain_name = normalize_domain(
                 request.data.get('name') or request.data.get('domain_name') or ''
@@ -97,17 +140,33 @@ class GlobalDomainViewSet(viewsets.ModelViewSet):
                 {'error': 'A target service is required.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        service = Service.objects.filter(id=service_id).first()
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        try:
+            service = Service.objects.filter(id=service_id).first()
+        except (DjangoValidationError, ValueError):
+            return Response(
+                {'error': 'Invalid service ID.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if not service:
             return Response(
                 {'error': 'Service not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        if not (request.user.is_superuser
-                or service.owner_id == request.user.id
-                or (service.project_id and service.project.team_id
-                    and service.project.team.members.filter(user=request.user).exists())):
-            raise PermissionDenied("You do not have access to this service.")
+        assert_can_write(request.user, service)
+
+        if _is_platform_owned_domain(domain_name):
+            return Response(
+                {'error': 'This domain belongs to the platform and cannot be claimed as a custom domain.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        conflict = _find_domain_conflict(domain_name, exclude_service_id=service.id)
+        if conflict:
+            return Response(
+                {'error': f'Domain {domain_name} is already assigned to service "{conflict.name}".'},
+                status=status.HTTP_409_CONFLICT,
+            )
 
         try:
             domain, created = Domain.objects.get_or_create(
@@ -126,6 +185,15 @@ class GlobalDomainViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_409_CONFLICT,
             )
 
+        custom_domains = [
+            d for d in (service.custom_domains or [])
+            if isinstance(d, str) and d.strip()
+        ]
+        if domain_name not in custom_domains:
+            custom_domains.append(domain_name)
+            service.custom_domains = custom_domains
+            service.save(update_fields=['custom_domains'])
+
         if created:
             try:
                 from ..tasks import verify_dns_and_provision_ssl_task
@@ -137,15 +205,10 @@ class GlobalDomainViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
-        from apps.deployments.models.core import Service
-        from django.db.models import Q
-        if not (request.user.is_superuser
-                or (instance.service_id
-                    and (Service.objects.filter(
-                        Q(id=instance.service_id),
-                        Q(owner=request.user)
-                        | Q(project__team__members__user=request.user),
-                    ).exists()))):
+        if instance.service_id:
+            from apps.teams.permissions import assert_can_delete
+            assert_can_delete(request.user, instance.service)
+        elif not request.user.is_superuser:
             raise PermissionDenied("You do not have access to this domain.")
         domain_name = instance.domain_name
         service = instance.service

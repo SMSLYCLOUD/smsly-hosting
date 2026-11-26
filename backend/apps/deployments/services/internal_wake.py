@@ -68,13 +68,17 @@ def service_has_mesh_sidecar(service) -> bool:
         if not svc_id:
             return False
         return MtlsConfig.objects.filter(
-            service_id=svc_id, sidecar_enabled=True,
+            service_id=svc_id, enabled=True, sidecar_enabled=True,
         ).exists()
     except Exception:
         return False
 
 
-def ensure_internal_wake_alias(service_name: str, network_name: str) -> bool:
+def ensure_internal_wake_alias(
+    service_name: str,
+    network_name: str,
+    client=None,
+) -> bool:
     """Give Traefik a ``<service>.internal`` DNS alias on a network.
 
     Makes the internal wake hostname resolvable to Traefik from every
@@ -83,18 +87,17 @@ def ensure_internal_wake_alias(service_name: str, network_name: str) -> bool:
     alias — Docker has no in-place alias update). Best-effort: never
     raises, returns whether the alias resolves afterwards.
     """
-    import subprocess
-
     host = internal_wake_host(service_name)
     net = str(network_name or "").strip()
     if not host or not net:
         return False
-    try:
-        import docker as _docker
-        client = _docker.from_env(timeout=10)
-    except Exception as exc:
-        logger.debug("internal-wake alias skipped (no docker): %s", exc)
-        return False
+    if client is None:
+        try:
+            import docker as _docker
+            client = _docker.from_env(timeout=10)
+        except Exception as exc:
+            logger.debug("internal-wake alias skipped (no docker): %s", exc)
+            return False
     target = None
     for candidate in TRAEFIK_ALIAS_CANDIDATES:
         try:
@@ -113,25 +116,96 @@ def ensure_internal_wake_alias(service_name: str, network_name: str) -> bool:
         aliases = list(entry.get("Aliases") or [])
         if host in aliases:
             return True
+        prev_aliases = list(aliases)
+        recreated = False
         if net in nets:
             # Endpoint exists without our alias: recreate it with the
             # alias added (preserving existing aliases).
             try:
                 client.networks.get(net).disconnect(target, force=True)
+                recreated = True
             except Exception as exc:
                 logger.debug("internal-wake disconnect skipped: %s", exc)
                 return False
             aliases.append(host)
         else:
             aliases = [host]
-        client.networks.get(net).connect(
-            target, aliases=list(dict.fromkeys(aliases)),
-        )
+        try:
+            client.networks.get(net).connect(
+                target, aliases=list(dict.fromkeys(aliases)),
+            )
+        except Exception as exc:
+            if recreated:
+                try:
+                    client.networks.get(net).connect(
+                        target, aliases=list(dict.fromkeys(prev_aliases)) if prev_aliases else None,
+                    )
+                except Exception:
+                    pass
+            raise exc
         logger.info("internal-wake: alias %s -> traefik on %s", host, net)
         return True
     except Exception as exc:
         logger.debug("internal-wake alias failed for %s on %s: %s", host, net, exc)
         return False
+
+
+def ensure_remote_internal_wake_alias(ssh, service_name: str, network_name: str) -> bool:
+    """Attach ``<service>.internal`` DNS alias to Traefik on a remote node via SSH."""
+    import json
+    import shlex
+
+    host = internal_wake_host(service_name)
+    net = str(network_name or "").strip()
+    if ssh is None or not host or not net:
+        return False
+    q_net = shlex.quote(net)
+    for candidate in TRAEFIK_ALIAS_CANDIDATES:
+        q_c = shlex.quote(candidate)
+        try:
+            out, _, rc = ssh.exec_command(
+                f"docker inspect {q_c} --format '{{{{json .NetworkSettings.Networks}}}}'",
+                raise_on_error=False,
+                timeout=15,
+            )
+        except Exception:
+            continue
+        if rc != 0 or not (out or "").strip():
+            continue
+        try:
+            nets = json.loads(out.strip()) or {}
+        except ValueError:
+            continue
+        entry = nets.get(net) or {}
+        prev_aliases = [str(a) for a in (entry.get("Aliases") or []) if str(a or "").strip()]
+        if host in prev_aliases:
+            return True
+        new_aliases = list(dict.fromkeys([*prev_aliases, host]))
+        alias_flags = " ".join(f"--alias {shlex.quote(a)}" for a in new_aliases)
+        if net in nets:
+            cmd = (
+                f"docker network disconnect -f {q_net} {q_c} && "
+                f"docker network connect {alias_flags} {q_net} {q_c}"
+            )
+        else:
+            cmd = f"docker network connect {alias_flags} {q_net} {q_c}"
+        try:
+            _, err, conn_rc = ssh.exec_command(cmd, raise_on_error=False, timeout=15)
+            if conn_rc == 0:
+                logger.info("internal-wake(remote): alias %s -> %s on %s", host, candidate, net)
+                return True
+            if net in nets and prev_aliases:
+                restore_flags = " ".join(f"--alias {shlex.quote(a)}" for a in prev_aliases)
+                ssh.exec_command(
+                    f"docker network connect {restore_flags} {q_net} {q_c}",
+                    raise_on_error=False,
+                    timeout=10,
+                )
+            logger.debug("Remote internal-wake alias failed for %s: %s", host, err)
+        except Exception as exc:
+            logger.debug("Remote internal-wake alias error for %s: %s", host, exc)
+        return False
+    return False
 
 
 def _local_sablier_siblings(exclude_service) -> set[str]:
