@@ -89,7 +89,7 @@ jobs:
         DATABASE_URL: postgres://smsly_admin:test_password@localhost:5432/smsly_hosting
         DJANGO_SETTINGS_MODULE: config.settings
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
+      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
       if: always()
       with:
         file: backend/coverage.xml
