@@ -334,7 +334,7 @@ class OrganizationViewSet(viewsets.ModelViewSet):
 
 
 class OrganizationSSOViewSet(viewsets.ModelViewSet):
-    queryset = OrganizationSSO.objects.all()
+    queryset = OrganizationSSO.objects.all().order_by('-created_at', 'id')
     serializer_class = OrganizationSSOSerializer
     permission_classes = [permissions.IsAuthenticated]
 

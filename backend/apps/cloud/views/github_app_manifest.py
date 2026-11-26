@@ -156,6 +156,10 @@ def _build_manifest(base_url: str, webhook_secret: str) -> dict:
     }
 
 
+def _is_platform_admin(user) -> bool:
+    return bool(user and getattr(user, "is_authenticated", False) and (user.is_staff or user.is_superuser))
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def github_app_manifest_url(request) -> Response:
@@ -167,7 +171,7 @@ def github_app_manifest_url(request) -> Response:
     to our ``redirect_url`` with a one-time ``code``. Admin-only:
     creating the platform's GitHub App is an operator action.
     """
-    if not request.user.is_superuser:
+    if not _is_platform_admin(request.user):
         return Response({"error": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
 
     base_url = _platform_base_url(request)
@@ -229,7 +233,7 @@ def github_app_manifest_setup(request):
         return Response({"error": "Missing manifest code from GitHub."},
                         status=status.HTTP_400_BAD_REQUEST)
 
-    if not request.user.is_superuser:
+    if not _is_platform_admin(request.user):
         return Response({"error": "Admin access required."},
                         status=status.HTTP_403_FORBIDDEN)
 
@@ -415,7 +419,7 @@ def github_app_import(request):
     anything is stored, then saved exactly like the manifest flow.
     Admin-only.
     """
-    if not request.user.is_superuser:
+    if not _is_platform_admin(request.user):
         return Response({"error": "Admin access required."},
                         status=status.HTTP_403_FORBIDDEN)
 

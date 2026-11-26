@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Webhook, Loader2, Check, Copy, Eye, EyeOff } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
-import api from "@/lib/api";
+import api, { systemApi } from "@/lib/api";
 
 interface WebhookConfig {
   github_webhook_secret_set: boolean;
@@ -38,8 +38,8 @@ export function WebhookConfigCard({ provider }: { provider?: string }) {
   const fetchConfig = async () => {
     setLoading(true);
     try {
-      const res = await api.get("/system/domain-config/");
-      setConfig(res.data);
+      const data = await systemApi.getDomainConfig();
+      setConfig(data);
     } catch (e) {
       console.error("Failed to fetch webhook config", e);
     } finally {
@@ -79,7 +79,7 @@ export function WebhookConfigCard({ provider }: { provider?: string }) {
         return;
       }
 
-      await api.put("/system/domain-config/", payload);
+      await systemApi.updateDomainConfig(payload);
       toast({ title: "Webhook secrets saved", description: "Git provider webhook secrets updated." });
       setGithubSecret("");
       setGitlabSecret("");

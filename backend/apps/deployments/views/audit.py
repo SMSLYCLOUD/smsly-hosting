@@ -38,12 +38,10 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
                 Service.objects.filter(get_accessible_q(user)).values_list("id", "name")
             )
             target_candidates: list[str] = []
-            for sid, sname in accessible:
-                if sname:
-                    target_candidates.extend([sname, f"Service:{sname}", f"Service: {sname}"])
+            for sid, _sname in accessible:
                 if sid:
                     uid = str(sid)
-                    target_candidates.extend([uid, f"Service:{uid}", f"Service: {uid}"])
+                    target_candidates.extend([uid, f"Service:{uid}", f"Service: {uid}", f"service:{uid}"])
             qs = AuditLog.objects.filter(
                 Q(actor=username) | Q(target__in=target_candidates)
             )

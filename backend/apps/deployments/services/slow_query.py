@@ -6,6 +6,27 @@ from django.db import connection
 logger = logging.getLogger(__name__)
 
 
+def check_pg_stat_statements_status() -> tuple[bool, str | None]:
+    """Check whether pg_stat_statements is installed and queryable."""
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
+            cursor.execute("SELECT 1 FROM pg_stat_statements LIMIT 1")
+            cursor.fetchone()
+        return True, None
+    except Exception as exc:
+        msg = str(exc).strip()
+        if "shared_preload_libraries" in msg:
+            reason = (
+                "pg_stat_statements is not loaded in PostgreSQL shared_preload_libraries. "
+                "Add 'pg_stat_statements' to shared_preload_libraries and restart PostgreSQL."
+            )
+        else:
+            reason = f"pg_stat_statements is unavailable: {msg or type(exc).__name__}"
+        logger.warning("pg_stat_statements check failed: %s", exc)
+        return False, reason
+
+
 def fetch_slow_queries(min_duration_ms: float = 100, limit: int = 50) -> list:
     """Query pg_stat_statements for slow queries, ordered by mean_time desc."""
     try:

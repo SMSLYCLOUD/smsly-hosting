@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Github, Loader2, Link as LinkIcon, GitBranch, GitMerge, Package, ExternalLink, Trash2, Chrome } from "lucide-react";
 import api from "@/lib/api";
+import { usePermissions } from "@/hooks/usePermissions";
 import { getSafeRedirectUrl, safeAssignUrl } from "@/lib/paths";
 
 type GitConnection = {
@@ -37,6 +38,8 @@ interface GitIntegrationCardProps {
 }
 
 export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
+  const { isStaff, isSuperuser } = usePermissions();
+  const isAdmin = isStaff || isSuperuser;
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [data, setData] = useState<GitConnection | null>(null);
@@ -390,6 +393,7 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
                     </p>
                   )
                 ) : (
+                  isAdmin ? (
                   <div className="space-y-3">
                     <p className="text-xs text-muted-foreground">
                       Create the platform&apos;s GitHub App in one click — GitHub
@@ -492,6 +496,11 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
                       </div>
                     )}
                   </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground italic">
+                      The platform GitHub App has not been configured yet. Ask a platform administrator to set it up.
+                    </p>
+                  )
                 )}
               </div>
             )}

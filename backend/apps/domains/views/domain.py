@@ -258,7 +258,9 @@ class DomainConfigView(GenericAPIView):
                     )
                 config.crowdsec_cf_action = action
             if 'crowdsec_cf_api_token' in data:
-                config.crowdsec_cf_api_token = str(data.get('crowdsec_cf_api_token') or '').strip()
+                val = str(data.get('crowdsec_cf_api_token') or '').strip()
+                if val or data.get('clear_crowdsec_cf_api_token') is True:
+                    config.crowdsec_cf_api_token = val
             if 'crowdsec_auto_unblock_after_hours' in data:
                 try:
                     hours = int(data.get('crowdsec_auto_unblock_after_hours'))
@@ -282,7 +284,8 @@ class DomainConfigView(GenericAPIView):
             for _secret_field in ('github_webhook_secret', 'gitlab_webhook_secret', 'bitbucket_webhook_secret'):
                 if _secret_field in data:
                     val = str(data.get(_secret_field) or '').strip()
-                    setattr(config, _secret_field, val)
+                    if val or data.get(f'clear_{_secret_field}') is True:
+                        setattr(config, _secret_field, val)
             if 'server_ip' in data:
                 config.server_ip = str(data.get('server_ip') or '').strip() or None
             if 'max_concurrent_builds' in data:
@@ -349,7 +352,9 @@ class DomainConfigView(GenericAPIView):
                 if _field in data:
                     setattr(config, _field, str(data.get(_field) or '').strip()[:300])
             if 'smsly_internal_api_key' in data:
-                config.smsly_internal_api_key = str(data.get('smsly_internal_api_key') or '').strip()
+                val = str(data.get('smsly_internal_api_key') or '').strip()
+                if val or data.get('clear_smsly_internal_api_key') is True:
+                    config.smsly_internal_api_key = val
             # Alerting
             for _field in ('alert_phone_number', 'critical_alert_phone'):
                 if _field in data:
@@ -378,7 +383,9 @@ class DomainConfigView(GenericAPIView):
                 config.infisical_service_token = str(data.get('infisical_service_token') or '').strip()
             # Observability
             if 'sentry_dsn' in data:
-                config.sentry_dsn = str(data.get('sentry_dsn') or '').strip()[:300]
+                val = str(data.get('sentry_dsn') or '').strip()[:300]
+                if val or data.get('clear_sentry_dsn') is True:
+                    config.sentry_dsn = val
             if 'sentry_traces_sample_rate' in data:
                 try:
                     config.sentry_traces_sample_rate = max(0.0, min(1.0, float(data['sentry_traces_sample_rate'])))
@@ -401,9 +408,13 @@ class DomainConfigView(GenericAPIView):
                 config.mapbox_token = str(data.get('mapbox_token') or '').strip()
             # CrowdSec
             if 'crowdsec_bouncer_key' in data:
-                config.crowdsec_bouncer_key = str(data.get('crowdsec_bouncer_key') or '').strip()
+                val = str(data.get('crowdsec_bouncer_key') or '').strip()
+                if val or data.get('clear_crowdsec_bouncer_key') is True:
+                    config.crowdsec_bouncer_key = val
             if 'crowdsec_enroll_key' in data:
-                config.crowdsec_enroll_key = str(data.get('crowdsec_enroll_key') or '').strip()
+                val = str(data.get('crowdsec_enroll_key') or '').strip()
+                if val or data.get('clear_crowdsec_enroll_key') is True:
+                    config.crowdsec_enroll_key = val
             # Deploy Pipeline
             if 'auto_review_hours' in data:
                 try:
@@ -461,7 +472,9 @@ class DomainConfigView(GenericAPIView):
                 except (TypeError, ValueError):
                     pass
             if 'smtp_password' in data:
-                config.smtp_password = str(data.get('smtp_password') or '').strip()
+                val = str(data.get('smtp_password') or '').strip()
+                if val or data.get('clear_smtp_password') is True:
+                    config.smtp_password = val
             if 'smtp_use_tls' in data:
                 config.smtp_use_tls = _parse_bool(data.get('smtp_use_tls'))
 

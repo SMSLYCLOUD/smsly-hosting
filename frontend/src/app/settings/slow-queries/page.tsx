@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Database, Clock, Hash, Zap, RefreshCcw, Trash2, BarChart3 } from "lucide-react";
+import { Loader2, Database, Clock, Hash, Zap, RefreshCcw, Trash2, BarChart3, AlertTriangle } from "lucide-react";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/use-toast";
 import api from "@/lib/api";
@@ -46,6 +46,8 @@ export default function SlowQueriesPage() {
   const [loading, setLoading] = useState(true);
   const [minMs, setMinMs] = useState("100");
   const [resetting, setResetting] = useState(false);
+  const [extensionAvailable, setExtensionAvailable] = useState<boolean>(true);
+  const [extensionWarning, setExtensionWarning] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -53,6 +55,8 @@ export default function SlowQueriesPage() {
       const res = await api.get(`/slow-queries/?min_ms=${minMs}&limit=50`);
       setQueries(res.data.queries || []);
       setStats(res.data.stats || null);
+      setExtensionAvailable(res.data.extension_available !== false);
+      setExtensionWarning(res.data.warning || null);
     } catch (err: any) {
       toast({
         title: "Failed to load slow queries",
@@ -109,6 +113,23 @@ export default function SlowQueriesPage() {
             <Button variant="outline" size="sm" onClick={handleReset} disabled={resetting}><Trash2 className="w-3 h-3 mr-1" />{resetting ? "..." : "Reset"}</Button>
           </div>
         </div>
+
+        {/* Extension warning */}
+        {!loading && !extensionAvailable && (
+          <Card className="border-amber-500/40 bg-amber-500/5">
+            <CardContent className="p-4 flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-amber-600 dark:text-amber-400">
+                  PostgreSQL query statistics are unavailable
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {extensionWarning || "pg_stat_statements is not loaded in PostgreSQL shared_preload_libraries."}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Stats */}
         {stats && (

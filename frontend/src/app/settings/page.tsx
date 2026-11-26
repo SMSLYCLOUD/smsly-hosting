@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Suspense, useEffect } from "react";
+import React, { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Settings as SettingsIcon, Users, Cloud, Globe,
@@ -14,6 +14,7 @@ import { Separator } from "@/components/ui/separator";
 
 import { ProfileTab } from "@/components/settings/ProfileTab";
 import { ApiKeysTab } from "@/components/settings/ApiKeysTab";
+import { PreferencesTab } from "@/components/settings/PreferencesTab";
 import { AlertsTab } from "@/components/settings/AlertsTab";
 import { TeamsTab } from "@/components/settings/TeamsTab";
 import { OrganizationsTab } from "@/components/settings/OrganizationsTab";
@@ -112,15 +113,20 @@ function SettingsContent() {
   const visibleSections = SETTINGS_SECTIONS.filter(
     (section) => isAdmin || !ADMIN_ONLY_TABS.has(section.value)
   );
-  const requestedTab = searchParams.get("tab") || "account";
-  const defaultTab = visibleSections.some((section) => section.value === requestedTab)
-    ? requestedTab
+  const rawTab = searchParams.get("tab") || "account";
+  const mappedTab = rawTab === "mtls" ? "platform" : rawTab;
+  const resolvedTab = visibleSections.some((section) => section.value === mappedTab)
+    ? mappedTab
     : "account";
+  const [activeTab, setActiveTab] = useState(resolvedTab);
   const githubAppStatus = searchParams.get("github_app");
 
+  useEffect(() => {
+    setActiveTab(resolvedTab);
+  }, [resolvedTab]);
+
   // Show a one-time success toast when returning from GitHub App install/creation
-  // (backend redirects to /settings/integrations?github_app=connected → here as ?tab=git&github_app=connected).
-  // This was missing — the user landed back with no feedback and the card still showed "Not configured" until refresh.
+  // (backend redirects to /settings?tab=git&github_app=connected).
   useEffect(() => {
     if (!githubAppStatus) return;
     // Lazy import to avoid adding useToast to deps
@@ -148,7 +154,7 @@ function SettingsContent() {
           backHref="/dashboard"
         />
 
-        <Tabs defaultValue={defaultTab} className="space-y-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <div className="card-enterprise p-1">
             <TabsList className={`h-auto w-full flex overflow-x-auto xl:grid ${isAdmin ? "xl:grid-cols-10" : "xl:grid-cols-7"} gap-1 bg-transparent p-0`}>
               {visibleSections.map((section) => {
@@ -177,6 +183,8 @@ function SettingsContent() {
               <Separator />
               <ApiKeysTab />
               <Separator />
+              <PreferencesTab />
+              <Separator />
               <PrivacyTab />
             </div>
           </TabsContent>
@@ -197,8 +205,12 @@ function SettingsContent() {
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-foreground">GitHub</h3>
                 <GitIntegrationCard provider="github" />
-                <WebhookConfigCard provider="github" />
-                <OAuthTab provider="github" />
+                {isAdmin && (
+                  <>
+                    <WebhookConfigCard provider="github" />
+                    <OAuthTab provider="github" />
+                  </>
+                )}
               </div>
               <Separator />
 
@@ -206,8 +218,12 @@ function SettingsContent() {
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-foreground">GitLab</h3>
                 <GitIntegrationCard provider="gitlab" />
-                <WebhookConfigCard provider="gitlab" />
-                <OAuthTab provider="gitlab" />
+                {isAdmin && (
+                  <>
+                    <WebhookConfigCard provider="gitlab" />
+                    <OAuthTab provider="gitlab" />
+                  </>
+                )}
               </div>
               <Separator />
 
@@ -215,8 +231,12 @@ function SettingsContent() {
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-foreground">Bitbucket</h3>
                 <GitIntegrationCard provider="bitbucket" />
-                <WebhookConfigCard provider="bitbucket" />
-                <OAuthTab provider="bitbucket" />
+                {isAdmin && (
+                  <>
+                    <WebhookConfigCard provider="bitbucket" />
+                    <OAuthTab provider="bitbucket" />
+                  </>
+                )}
               </div>
               <Separator />
 
@@ -224,7 +244,7 @@ function SettingsContent() {
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-foreground">Google</h3>
                 <GitIntegrationCard provider="google" />
-                <OAuthTab provider="google" />
+                {isAdmin && <OAuthTab provider="google" />}
               </div>
             </div>
           </TabsContent>
@@ -282,19 +302,31 @@ function SettingsContent() {
           <TabsContent value="storage">
             <div className="space-y-8">
               <CloudStorageTab />
-              <Separator />
-              <BackupKeysTab />
+              {isSuperuser && (
+                <>
+                  <Separator />
+                  <BackupKeysTab />
+                </>
+              )}
             </div>
           </TabsContent>
 
           {/* Operations */}
           <TabsContent value="ops">
             <div className="space-y-8">
-              <AlertsTab />
-              <Separator />
+              {isAdmin && (
+                <>
+                  <AlertsTab />
+                  <Separator />
+                </>
+              )}
               <AuditLogsTab />
-              <Separator />
-              <MaintenanceTab />
+              {isAdmin && (
+                <>
+                  <Separator />
+                  <MaintenanceTab />
+                </>
+              )}
             </div>
           </TabsContent>
 

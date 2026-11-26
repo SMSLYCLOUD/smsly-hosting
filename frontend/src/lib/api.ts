@@ -158,7 +158,54 @@ const PROXY_BYPASS_PREFIXES = [
   '/deployments/',
   '/addons/',
   '/mcp/',
+  '/preferences/',
+  '/api-keys/',
+  '/devices/',
+  '/oauth/',
+  '/integrations/',
+  '/platform-config/',
+  '/notifications/',
+  '/resource-alerts/',
+  '/audit-logs/',
+  '/billing/',
+  '/database-replicas/',
+  '/slow-queries/',
+  '/mtls/',
+  '/crowdsec/',
+  '/security/',
+  '/autoscaler/',
+  '/registry-credentials/',
+  '/registry-scopes/',
+  '/network-scopes/',
+  '/backups/',
+  '/server/backups/',
+  '/admin/',
+  '/observability/',
 ];
+
+const _sharedGetCache = new Map<string, { expiresAt: number; promise: Promise<any> }>();
+
+function dedupedGet<T = any>(url: string, ttlMs: number = 3000): Promise<T> {
+  const now = Date.now();
+  const cached = _sharedGetCache.get(url);
+  if (cached && cached.expiresAt > now) {
+    return cached.promise;
+  }
+  const promise = api.get<T>(url).then((res) => res.data).catch((err) => {
+    _sharedGetCache.delete(url);
+    throw err;
+  });
+  _sharedGetCache.set(url, { expiresAt: now + ttlMs, promise });
+  return promise;
+}
+
+export function invalidateSharedGetCache(url?: string) {
+  if (url) {
+    _sharedGetCache.delete(url);
+  } else {
+    _sharedGetCache.clear();
+  }
+}
 
 // Sub-paths under /services/ that must always hit the local controller
 // (deploy, deploy list, previews, etc.)
@@ -1327,15 +1374,15 @@ export const systemApi = {
     return response.data;
   },
   getDomainConfig: async () => {
-    const response = await api.get('/system/domain-config/');
-    return response.data;
+    return dedupedGet('/system/domain-config/');
   },
   updateDomainConfig: async (data: Record<string, unknown>) => {
     const response = await api.put('/system/domain-config/', data);
+    invalidateSharedGetCache('/system/domain-config/');
     return response.data;
   },
   toggleDbHa: async (enabled: boolean) => {
-    const response = await api.post('/system/db-ha-toggle/', { enabled });
+    const response = await api.post('/system/db-ha-toggle/', { enabled }, { timeout: 180000 });
     return response.data;
   },
   beatHeal: async (): Promise<{ status: string; actions?: string[]; message?: string; error?: string }> => {
@@ -1419,7 +1466,8 @@ export const aiApi = {
       system_prompt: systemPrompt,
     }, {
       _skipRemoteProxy: true,
-    });
+      timeout: 95000,
+    } as AxiosRequestConfigProxy);
     return response.data;
   },
 
@@ -2111,6 +2159,11 @@ export const billingApi = {
 
   cancelSubscription: async (): Promise<{ status: string; message?: string }> => {
     const res = await api.post('/billing/subscription/cancel/');
+    return res.data;
+  },
+
+  createPortalSession: async (returnUrl?: string): Promise<{ url: string }> => {
+    const res = await api.post('/billing/portal/', returnUrl ? { return_url: returnUrl } : {});
     return res.data;
   },
 
@@ -3171,7 +3224,8 @@ export interface DatabaseReplicaCreateInput {
 }
 
 export interface DatabaseReplicaTestResult {
-  ok: boolean;
+  ok?: boolean;
+  reachable?: boolean;
   error: string;
   lag_seconds: number | null;
   endpoint: string;
@@ -3297,6 +3351,17 @@ export const organizationsApi = {
     const response = await api.delete(`/organizations/sso/${id}/`);
     return response.data;
   }
+};
+
+export const oauthApi = {
+  getStatus: async () => dedupedGet('/oauth/status/'),
+  getCredentials: async () => dedupedGet('/oauth/credentials/'),
+  saveCredentials: async (payload: Record<string, unknown>) => {
+    const res = await api.post('/oauth/credentials/', payload);
+    invalidateSharedGetCache('/oauth/status/');
+    invalidateSharedGetCache('/oauth/credentials/');
+    return res.data;
+  },
 };
 
 export const notificationsApi = {

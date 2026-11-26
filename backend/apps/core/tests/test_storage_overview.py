@@ -33,6 +33,14 @@ class PlatformStorageOverviewTests(TestCase):
 
     @patch("shutil.disk_usage", return_value=(100 * (1024 ** 3), 40 * (1024 ** 3), 60 * (1024 ** 3)))
     @patch("docker.from_env")
+    def test_non_admin_get_forbidden(self, mock_docker_env, mock_disk):
+        request = self.factory.get("/api/v1/system/storage-overview/")
+        force_authenticate(request, user=self.user)
+        response = self.view(request)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    @patch("shutil.disk_usage", return_value=(100 * (1024 ** 3), 40 * (1024 ** 3), 60 * (1024 ** 3)))
+    @patch("docker.from_env")
     def test_authenticated_get_with_docker_metrics(self, mock_docker_env, mock_disk):
         mock_client = MagicMock()
         mock_docker_env.return_value = mock_client
@@ -53,7 +61,7 @@ class PlatformStorageOverviewTests(TestCase):
         }
 
         request = self.factory.get("/api/v1/system/storage-overview/")
-        force_authenticate(request, user=self.user)
+        force_authenticate(request, user=self.admin)
         response = self.view(request)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -87,7 +95,7 @@ class PlatformStorageOverviewTests(TestCase):
     @patch("docker.from_env", side_effect=Exception("Docker daemon socket not found"))
     def test_authenticated_get_fails_soft_when_docker_offline(self, mock_docker_env):
         request = self.factory.get("/api/v1/system/storage-overview/")
-        force_authenticate(request, user=self.user)
+        force_authenticate(request, user=self.admin)
         response = self.view(request)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)

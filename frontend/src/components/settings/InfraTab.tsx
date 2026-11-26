@@ -213,9 +213,9 @@ export function InfraTab() {
           <Table>
             <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Value</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
             <TableBody>
-              <TableRow><TableCell className="font-mono">ENGINE</TableCell><TableCell className="truncate max-w-[300px]">{systemConfig.DATABASE_ENGINE}</TableCell><TableCell><Badge variant="outline">Info</Badge></TableCell></TableRow>
-              <TableRow><TableCell className="font-mono">DATABASE</TableCell><TableCell>{systemConfig.DATABASE_NAME}</TableCell><TableCell><Badge variant="outline">Info</Badge></TableCell></TableRow>
-              <TableRow><TableCell className="font-mono">HOST</TableCell><TableCell>{systemConfig.DATABASE_HOST}</TableCell><TableCell><Badge variant="outline">Info</Badge></TableCell></TableRow>
+              <TableRow><TableCell className="font-mono">ENGINE</TableCell><TableCell className="truncate max-w-[300px]">{systemConfig.DATABASE_ENGINE_TYPE || systemConfig.DATABASE_ENGINE || "PostgreSQL"}</TableCell><TableCell><Badge variant="outline">Info</Badge></TableCell></TableRow>
+              <TableRow><TableCell className="font-mono">CONNECTION</TableCell><TableCell>{systemConfig.DATABASE_CONFIGURED === false ? "Not configured" : (systemConfig.DATABASE_NAME || "Managed Pool")}</TableCell><TableCell><Badge variant={systemConfig.DATABASE_CONFIGURED === false ? "destructive" : "default"}>{systemConfig.DATABASE_CONFIGURED === false ? "Missing" : "Connected"}</Badge></TableCell></TableRow>
+              <TableRow><TableCell className="font-mono">ROUTER</TableCell><TableCell>{systemConfig.DATABASE_HOST || (systemConfig.DB_HA_ENABLED ? "pgcat (primary + replica)" : "pgcat / primary")}</TableCell><TableCell><Badge variant="outline">Info</Badge></TableCell></TableRow>
               <TableRow>
                 <TableCell className="font-mono">HA MODE</TableCell>
                 <TableCell>{systemConfig.DB_HA_ENABLED ? 'Primary + Replica' : 'Primary Only'}</TableCell>

@@ -79,3 +79,35 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             'teams': teams_out,
             'orgs': orgs_out,
         }
+
+    def validate_email(self, value: str) -> str:
+        email = (value or '').strip()
+        if not email:
+            return email
+        qs = User.objects.filter(email__iexact=email)
+        if self.instance is not None:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("A user with this email address already exists.")
+        return email
+
+    def update(self, instance, validated_data):
+        old_email = (getattr(instance, 'email', '') or '').strip().lower()
+        user = super().update(instance, validated_data)
+        new_email = (getattr(user, 'email', '') or '').strip()
+        if 'email' in validated_data and new_email and new_email.lower() != old_email:
+            try:
+                from allauth.account.models import EmailAddress
+                EmailAddress.objects.filter(user=user, primary=True).update(primary=False)
+                EmailAddress.objects.update_or_create(
+                    user=user,
+                    email__iexact=new_email,
+                    defaults={
+                        'email': new_email,
+                        'primary': True,
+                        'verified': False,
+                    },
+                )
+            except Exception as exc:
+                logger.debug("Failed to sync allauth EmailAddress on profile update: %s", exc)
+        return user

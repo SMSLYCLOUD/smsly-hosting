@@ -1,5 +1,7 @@
+from django.core.exceptions import ValidationError as DjValidationError
 from rest_framework import serializers
 
+from apps.core.validators import validate_ssrf
 from ..models import Region
 from ..models.registry import RegistryCredential
 from ..services.registry_validation import all_allowed_registry_hosts as _all_allowed_registry_hosts
@@ -44,6 +46,26 @@ class RegistryCredentialSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             'password': {'write_only': True},
         }
+
+    def validate_registry_url(self, value: str) -> str:
+        url = (value or '').strip()
+        if not url:
+            return url
+        request = self.context.get('request')
+        is_admin = bool(
+            request
+            and getattr(request, 'user', None)
+            and (request.user.is_staff or request.user.is_superuser)
+        )
+        if '://' in url and url.lower().startswith('http://') and not is_admin:
+            raise serializers.ValidationError('Registry URL must use https:// for tenant registries.')
+        if not is_admin:
+            check_target = url if '://' in url else f'https://{url}'
+            try:
+                validate_ssrf(check_target, fail_closed_dns=False)
+            except DjValidationError as exc:
+                raise serializers.ValidationError(str(exc))
+        return url
 
 
 class RegionSerializer(serializers.ModelSerializer):

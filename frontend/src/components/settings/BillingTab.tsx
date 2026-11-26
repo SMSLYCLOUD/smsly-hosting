@@ -8,6 +8,7 @@ import { Download, Loader2, CreditCard } from 'lucide-react';
 import { billingApi, UserSubscription, Invoice, UsageSummary, PricingPlan } from '@/lib/api';
 import { useToast } from '@/components/ui/use-toast';
 import { Progress } from '@/components/ui/progress';
+import { safeAssignUrl } from '@/lib/paths';
 
 export function BillingTab() {
   const { toast } = useToast();
@@ -16,6 +17,31 @@ export function BillingTab() {
   const [usage, setUsage] = React.useState<UsageSummary | null>(null);
   const [plans, setPlans] = React.useState<PricingPlan[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const [portalLoading, setPortalLoading] = React.useState(false);
+
+  const handleOpenPortal = async () => {
+    setPortalLoading(true);
+    try {
+      const returnUrl = typeof window !== 'undefined' ? window.location.href : undefined;
+      const res = await billingApi.createPortalSession(returnUrl);
+      if (res?.url && safeAssignUrl(res.url)) {
+        return;
+      }
+      toast({
+        title: 'Portal unavailable',
+        description: 'Billing portal URL was not returned. Configure Stripe billing credentials first.',
+        variant: 'destructive',
+      });
+    } catch (err: any) {
+      toast({
+        title: 'Could not open billing portal',
+        description: err?.response?.data?.error || err?.message || 'Configure Stripe payment settings or contact your administrator.',
+        variant: 'destructive',
+      });
+    } finally {
+      setPortalLoading(false);
+    }
+  };
 
   React.useEffect(() => {
     async function load() {
@@ -135,13 +161,10 @@ export function BillingTab() {
             <Button
               type="button"
               className="w-full"
-              onClick={() => {
-                toast({
-                  title: 'Payment method management',
-                  description: 'Use the Plans page or contact your billing administrator to update payment details.',
-                });
-              }}
+              disabled={portalLoading}
+              onClick={handleOpenPortal}
             >
+              {portalLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Manage Payment Method
             </Button>
           </CardFooter>

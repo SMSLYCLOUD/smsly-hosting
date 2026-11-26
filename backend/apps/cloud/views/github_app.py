@@ -333,8 +333,11 @@ def github_app_callback(request) -> Response:
 
     # For browser redirects (GET from GitHub), redirect to frontend settings
     if request.method == "GET":
-        frontend_url = getattr(dj_settings, "FRONTEND_URL", "https://grid.smsly.cloud")
-        return HttpResponseRedirect(f"{frontend_url.rstrip('/')}/settings/integrations?github_app=connected")
+        from apps.cloud.views.github_app_manifest import _platform_base_url
+        frontend_url = _platform_base_url(request)
+        if frontend_url:
+            return HttpResponseRedirect(f"{frontend_url.rstrip('/')}/settings?tab=git&github_app=connected")
+        return HttpResponseRedirect("/settings?tab=git&github_app=connected")
 
     return Response(result, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 

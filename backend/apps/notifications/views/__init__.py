@@ -62,12 +62,39 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
         self.get_queryset().update(read=True)
         return Response({'status': 'ok'})
 
+class IsPlatformAdmin(permissions.BasePermission):
+    """Allow Django staff or superusers."""
+
+    def has_permission(self, request, view):
+        user = getattr(request, 'user', None)
+        return bool(user and user.is_authenticated and (user.is_staff or user.is_superuser))
+
+
+_DEFAULT_PREFERENCE_EVENTS = (
+    ('deploy_success', ['in_app', 'email']),
+    ('deploy_failed', ['in_app', 'email']),
+    ('health_alert', ['in_app', 'email']),
+    ('ssl_expiring', ['in_app', 'email']),
+    ('backup_completed', ['in_app']),
+)
+
+
 class NotificationPreferenceViewSet(viewsets.ModelViewSet):
     serializer_class = NotificationPreferenceSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         return NotificationPreference.objects.filter(user=self.request.user).order_by('id')
+
+    def list(self, request, *args, **kwargs):
+        if not NotificationPreference.objects.filter(user=request.user).exists():
+            for event_type, default_channels in _DEFAULT_PREFERENCE_EVENTS:
+                NotificationPreference.objects.get_or_create(
+                    user=request.user,
+                    event_type=event_type,
+                    defaults={'channels': list(default_channels)},
+                )
+        return super().list(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         obj, _created = NotificationPreference.objects.update_or_create(
@@ -81,8 +108,8 @@ class NotificationPreferenceViewSet(viewsets.ModelViewSet):
 class NotificationChannelViewSet(viewsets.ModelViewSet):
     """CRUD for notification delivery channels (email, Slack, SMS, webhook)."""
     serializer_class = NotificationChannelSerializer
-    permission_classes = [permissions.IsAdminUser]
-    queryset = NotificationChannel.objects.all()
+    permission_classes = [IsPlatformAdmin]
+    queryset = NotificationChannel.objects.all().order_by('name', 'id')
 
     @action(detail=True, methods=['post'])
     def test(self, request, pk=None):
@@ -142,8 +169,8 @@ class NotificationChannelViewSet(viewsets.ModelViewSet):
 class AlertRuleViewSet(viewsets.ModelViewSet):
     """CRUD for platform-wide alert rules."""
     serializer_class = AlertRuleSerializer
-    permission_classes = [permissions.IsAdminUser]
-    queryset = AlertRule.objects.all()
+    permission_classes = [IsPlatformAdmin]
+    queryset = AlertRule.objects.all().order_by('name', 'id')
 
     @action(detail=True, methods=['post'])
     def toggle(self, request, pk=None):
@@ -155,7 +182,7 @@ class AlertRuleViewSet(viewsets.ModelViewSet):
 
 
 @api_view(['POST'])
-@perms([permissions.IsAdminUser])
+@perms([IsPlatformAdmin])
 def test_smtp(request):
     """Send a test email using the current SMTP configuration."""
     from apps.deployments.models.core import PlatformConfig

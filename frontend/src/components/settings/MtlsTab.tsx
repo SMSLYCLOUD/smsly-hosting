@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   Loader2,
   Shield,
@@ -27,6 +28,7 @@ type Tab = "services" | "policies";
 
 export function MtlsTab() {
   const { toast } = useToast();
+  const confirm = useConfirm();
   const [activeTab, setActiveTab] = useState<Tab>("services");
   const [loading, setLoading] = useState(true);
   const [health, setHealth] = useState<MtlsHealth | undefined>(undefined);
@@ -126,7 +128,7 @@ export function MtlsTab() {
   const handleDeploySpire = async (scope: "platform" | "ecosystem") => {
     setDeploying(scope);
     try {
-      const res = await api.post("/mtls/spire/deploy/", { scope });
+      const res = await api.post("/mtls/spire/deploy/", { scope }, { timeout: 240000 });
       toast({
         title: "SPIRE Deployed",
         description: scope === "platform"
@@ -142,12 +144,18 @@ export function MtlsTab() {
   };
 
   const handleUndeploySpire = async (scope: "platform" | "ecosystem") => {
-    if (!confirm(scope === "platform"
-      ? "Stop platform SPIRE infrastructure? Platform mTLS will be disabled."
-      : "Stop ecosystem SPIRE infrastructure? Ecosystem mTLS will be disabled. All user services will lose SPIFFE identity.")) return;
+    const confirmed = await confirm({
+      title: scope === "platform" ? "Stop Platform SPIRE?" : "Stop Ecosystem SPIRE?",
+      message: scope === "platform"
+        ? "Stop platform SPIRE infrastructure? Platform mTLS will be disabled."
+        : "Stop ecosystem SPIRE infrastructure? Ecosystem mTLS will be disabled. All user services will lose SPIFFE identity.",
+      variant: "destructive",
+      confirmText: "Stop SPIRE",
+    });
+    if (!confirmed) return;
     setDeploying(scope);
     try {
-      await api.post("/mtls/spire/undeploy/", { scope });
+      await api.post("/mtls/spire/undeploy/", { scope }, { timeout: 240000 });
       toast({ title: "SPIRE Stopped", description: `${scope} SPIRE infrastructure has been stopped.` });
       fetchData();
     } catch (e: any) {
@@ -196,7 +204,13 @@ export function MtlsTab() {
   };
 
   const deletePolicy = async (id: number) => {
-    if (!confirm("Delete this policy?")) return;
+    const confirmed = await confirm({
+      title: "Delete Authorization Policy?",
+      message: "Remove this SPIFFE mTLS authorization policy?",
+      variant: "destructive",
+      confirmText: "Delete Policy",
+    });
+    if (!confirmed) return;
     setMutating(true);
     try {
       await api.delete(`/mtls/policies/${id}/`);

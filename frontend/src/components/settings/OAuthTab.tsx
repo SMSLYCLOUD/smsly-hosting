@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Check, Eye, EyeOff, Github } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
-import api from "@/lib/api";
+import { oauthApi } from "@/lib/api";
 
 interface OAuthStatus {
   github: boolean;
@@ -55,8 +55,8 @@ export function OAuthTab({ provider }: { provider?: string }) {
 
   const fetchStatus = async () => {
     try {
-      const res = await api.get("/oauth/status/");
-      setStatus(res.data);
+      const data = await oauthApi.getStatus();
+      setStatus(data);
     } catch (err) {
       const statusCode = (err as any)?.response?.status;
       if (statusCode === 403) setIsAdmin(false);
@@ -66,13 +66,13 @@ export function OAuthTab({ provider }: { provider?: string }) {
 
   const fetchCreds = async () => {
     try {
-      const res = await api.get("/oauth/credentials/");
-      setCreds(res.data);
+      const data = await oauthApi.getCredentials();
+      setCreds(data);
       setIsAdmin(true);
-      if (res.data.github?.client_id) setGithubClientId(res.data.github.client_id);
-      if (res.data.google?.client_id) setGoogleClientId(res.data.google.client_id);
-      if (res.data.gitlab?.client_id) setGitlabClientId(res.data.gitlab.client_id);
-      if (res.data.bitbucket?.client_id) setBitbucketClientId(res.data.bitbucket.client_id);
+      if (data.github?.client_id) setGithubClientId(data.github.client_id);
+      if (data.google?.client_id) setGoogleClientId(data.google.client_id);
+      if (data.gitlab?.client_id) setGitlabClientId(data.gitlab.client_id);
+      if (data.bitbucket?.client_id) setBitbucketClientId(data.bitbucket.client_id);
     } catch (err) {
       console.error("Failed to fetch OAuth credentials (admin-only)", err);
     } finally {
@@ -104,7 +104,7 @@ export function OAuthTab({ provider }: { provider?: string }) {
           break;
       }
 
-      await api.post("/oauth/credentials/", payload);
+      await oauthApi.saveCredentials(payload);
       const names: Record<string, string> = { github: "GitHub", google: "Google", gitlab: "GitLab", bitbucket: "Bitbucket" };
       toast({ title: `${names[provider]} OAuth saved`, description: "Credentials updated." });
       fetchStatus();

@@ -9,10 +9,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useToast } from "@/components/ui/use-toast";
 import { Loader2, Shield, Key, Smartphone, Trash2, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { usePermissions } from "@/hooks/usePermissions";
 import api from "@/lib/api";
 
 export function SecurityTab() {
   const { toast } = useToast();
+  const { isSuperuser } = usePermissions();
   const [loading, setLoading] = useState(true);
   const [devices, setDevices] = useState<any[]>([]);
   const [recoveryPhrase, setRecoveryPhrase] = useState<string | null>(null);
@@ -141,7 +143,8 @@ export function SecurityTab() {
       setRecoveryPhrase(res.data.phrase);
       toast({ title: "Recovery phrase generated. Please save it securely!" });
     } catch (err: any) {
-      toast({ title: "Failed to generate phrase", description: err.message, variant: "destructive" });
+      const detail = err?.response?.data?.detail || err?.response?.data?.error || err.message || "Failed to generate recovery phrase.";
+      toast({ title: "Failed to generate phrase", description: detail, variant: "destructive" });
     }
   };
 
@@ -276,25 +279,27 @@ export function SecurityTab() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Key className="h-5 w-5" /> Recovery Phrase
-          </CardTitle>
-          <CardDescription>Generate a 12-word BIP39 recovery phrase as a last resort login method.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {recoveryPhrase ? (
-            <div className="p-4 bg-secondary rounded-lg border font-mono text-center tracking-wide">
-              {recoveryPhrase}
-            </div>
-          ) : (
-            <Button onClick={handleGenerateRecovery} variant="outline">
-              Generate Recovery Phrase
-            </Button>
-          )}
-        </CardContent>
-      </Card>
+      {isSuperuser && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Key className="h-5 w-5" /> Recovery Phrase
+            </CardTitle>
+            <CardDescription>Generate a single-use 12-word BIP39 emergency recovery phrase for superuser access.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {recoveryPhrase ? (
+              <div className="p-4 bg-secondary rounded-lg border font-mono text-center tracking-wide">
+                {recoveryPhrase}
+              </div>
+            ) : (
+              <Button onClick={handleGenerateRecovery} variant="outline">
+                Generate Recovery Phrase
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

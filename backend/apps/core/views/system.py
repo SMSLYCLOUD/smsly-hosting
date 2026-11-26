@@ -127,6 +127,10 @@ def _storage_docker_client():
     return docker.from_env(timeout=25)
 
 
+def _is_platform_admin(user) -> bool:
+    return bool(user and getattr(user, 'is_authenticated', False) and (user.is_staff or user.is_superuser))
+
+
 class SystemConfigView(GenericAPIView):
     """
     Expose safe server configuration to the frontend.
@@ -190,17 +194,14 @@ class SystemConfigView(GenericAPIView):
             or request.query_params.get("task_id")
         )
         if task_id:
+            if not _is_platform_admin(request.user):
+                return Response({'error': 'Admin privileges required.'}, status=status.HTTP_403_FORBIDDEN)
             return self._maintenance_task_response(task_id)
 
-        infra_health = self._get_infra_health()
-
-        safe_data = {
+        public_data = {
             'VERSION': '3.0.0',
             'DOMAIN': getattr(settings, 'DOMAIN', 'localhost'),
-            'safe_update_available': os.path.exists('/opt/smsly-hosting/scripts/safe-update.sh'),
             'MAPBOX_TOKEN': PlatformConfig.get_config_value('mapbox_token'),
-            **self._get_storage_metrics(),
-            **infra_health,
             # Trulay promos: readable by every authenticated user (the
             # banner needs the kill-switch + items). Fail-closed: banner
             # hidden when the row/columns are missing (migration pending).
@@ -211,11 +212,19 @@ class SystemConfigView(GenericAPIView):
             **self._get_public_build_flags(),
         }
 
-        if not request.user.is_superuser:
-            return Response(safe_data)
+        if not _is_platform_admin(request.user):
+            return Response(public_data)
+
+        infra_health = self._get_infra_health()
+        admin_meta = {
+            **public_data,
+            'safe_update_available': os.path.exists('/opt/smsly-hosting/scripts/safe-update.sh'),
+            **self._get_storage_metrics(),
+            **infra_health,
+        }
 
         return Response({
-            **safe_data,
+            **admin_meta,
             # General
             'DEBUG': settings.DEBUG,
             'TIME_ZONE': settings.TIME_ZONE,
@@ -419,7 +428,7 @@ class SystemConfigView(GenericAPIView):
         }
 
     def patch(self, request):
-        if not request.user.is_superuser:
+        if not _is_platform_admin(request.user):
             return Response({'error': 'Admin only'}, status=403)
         data = request.data
         pc, _ = PlatformConfig.objects.get_or_create(pk=1)
@@ -1050,7 +1059,7 @@ class SystemConfigView(GenericAPIView):
 
     def post(self, request):
         """Queue a maintenance task via the API."""
-        if not (request.user and request.user.is_authenticated and request.user.is_staff):
+        if not _is_platform_admin(request.user):
             return Response(
                 {"error": "Admin privileges are required for maintenance actions."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -1457,8 +1466,9 @@ class DatabaseHaToggleView(GenericAPIView):
 
     def _run_compose(self, args, timeout=150):
         import subprocess
+        project_name = os.environ.get('COMPOSE_PROJECT_NAME', 'smsly-hosting') or 'smsly-hosting'
         cmd = [
-            'docker', 'compose', '-f', self.COMPOSE_FILE,
+            'docker', 'compose', '-p', project_name, '-f', self.COMPOSE_FILE,
         ] + args
         try:
             result = subprocess.run(
@@ -1484,7 +1494,21 @@ class DatabaseHaToggleView(GenericAPIView):
         if result.get('error'):
             return result
 
-        self._update_env('DB_REPLICA_HOSTS', 'postgres-replica:5432')
+        try:
+            from apps.deployments.services.database_replica_service import (
+                active_replica_endpoints,
+                sync_pgcat_config,
+            )
+            endpoints = active_replica_endpoints()
+        except Exception:
+            endpoints = []
+        if 'postgres-replica:5432' not in endpoints:
+            endpoints = ['postgres-replica:5432', *endpoints]
+        self._update_env('DB_REPLICA_HOSTS', ','.join(endpoints))
+        try:
+            sync_pgcat_config(trigger_reload=True)
+        except Exception:
+            pass
 
         pgcat_result = self._run_compose(['restart', 'pgcat'], timeout=30)
         if pgcat_result.get('error'):
@@ -1497,7 +1521,19 @@ class DatabaseHaToggleView(GenericAPIView):
             '--profile', 'local-ha-replica', 'stop', '--timeout', '15', 'postgres-replica',
         ], timeout=30)
 
-        self._update_env('DB_REPLICA_HOSTS', '')
+        try:
+            from apps.deployments.services.database_replica_service import (
+                active_replica_endpoints,
+                sync_pgcat_config,
+            )
+            remaining = [ep for ep in active_replica_endpoints() if ep != 'postgres-replica:5432']
+        except Exception:
+            remaining = []
+        self._update_env('DB_REPLICA_HOSTS', ','.join(remaining))
+        try:
+            sync_pgcat_config(trigger_reload=True)
+        except Exception:
+            pass
 
         pgcat_result = self._run_compose(['restart', 'pgcat'], timeout=30)
         if pgcat_result.get('error'):
@@ -1543,10 +1579,11 @@ class PlatformStorageOverviewView(GenericAPIView):
     def get(self, request):
         from django.utils import timezone
 
+        if not _is_platform_admin(request.user):
+            return Response({"error": "Admin privileges required."}, status=status.HTTP_403_FORBIDDEN)
+
         server_id = (request.query_params.get("server") or "").strip()
         if server_id:
-            if not (request.user and request.user.is_authenticated and (request.user.is_staff or request.user.is_superuser)):
-                return Response({"error": "Admin privileges required."}, status=status.HTTP_403_FORBIDDEN)
             node_payload = self._remote_storage_overview(server_id)
             if node_payload is not None:
                 return Response(node_payload)
@@ -1607,7 +1644,7 @@ class PlatformStorageOverviewView(GenericAPIView):
             return None
 
     def post(self, request):
-        if not (request.user and request.user.is_authenticated and request.user.is_staff):
+        if not _is_platform_admin(request.user):
             return Response({"error": "Admin privileges required"}, status=status.HTTP_403_FORBIDDEN)
 
         action = str(request.data.get("action") or "").strip().lower()

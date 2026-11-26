@@ -22,6 +22,6 @@ router.register(r'rules', AlertRuleViewSet, basename='alert-rule')
 router.register(r'', NotificationViewSet, basename='notification')
 
 urlpatterns = [
-    path('', include(router.urls)),
     path('test-smtp/', test_smtp, name='test-smtp'),
+    path('', include(router.urls)),
 ]

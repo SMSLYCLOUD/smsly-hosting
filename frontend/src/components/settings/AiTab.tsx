@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,7 @@ export function AiTab() {
   const [testResult, setTestResult] = useState<{ response: string; provider: string; mode: string } | null>(null);
   const [testingPrompt, setTestingPrompt] = useState(false);
   const [fetchingModels, setFetchingModels] = useState<string | null>(null);
+  const autoFetchedProvidersRef = useRef<Set<string>>(new Set());
 
   const fetchAIConfig = useCallback(async () => {
     try {
@@ -61,11 +62,13 @@ export function AiTab() {
         });
         return next;
       });
-      // Auto-fetch models for configured providers
+      // Auto-fetch model options once per configured provider (silently,
+      // without overwriting an already-configured or user-selected model).
       aiData.providers
-        .filter((p: any) => p.configured)
+        .filter((p: any) => p.configured && !autoFetchedProvidersRef.current.has(p.id))
         .forEach((p: any) => {
-          handleFetchModels(p.id);
+          autoFetchedProvidersRef.current.add(p.id);
+          handleFetchModels(p.id, true);
         });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- handleFetchModels is stable; only re-run when aiData changes
@@ -97,19 +100,35 @@ export function AiTab() {
     }
   };
 
-  const handleFetchModels = async (providerId: string) => {
+  const handleFetchModels = async (providerId: string, silent: boolean = false) => {
     setFetchingModels(providerId);
     try {
       const result = await aiApi.fetchModels(providerId, aiKeys[providerId], aiUrls[providerId]);
       if (result.models && result.models.length > 0) {
-        setAiModels(prev => ({ ...prev, [providerId]: result.models[0] }));
         setModelOptions(prev => ({ ...prev, [providerId]: result.models }));
-        toast({ title: `${providerId} models loaded`, description: `Found ${result.models.length} models. First one selected.` });
-      } else {
+        let autoSelected = false;
+        setAiModels(prev => {
+          if (prev[providerId]) {
+            return prev;
+          }
+          autoSelected = true;
+          return { ...prev, [providerId]: result.models[0] };
+        });
+        if (!silent) {
+          toast({
+            title: `${providerId} models loaded`,
+            description: autoSelected
+              ? `Found ${result.models.length} models. Selected ${result.models[0]}.`
+              : `Found ${result.models.length} models.`,
+          });
+        }
+      } else if (!silent) {
         toast({ title: "No models found", description: "The provider returned no models. Check your API key and base URL.", variant: "destructive" });
       }
     } catch (err: any) {
-      toast({ title: "Fetch failed", description: err?.response?.data?.error || err.message || "Could not fetch models.", variant: "destructive" });
+      if (!silent) {
+        toast({ title: "Fetch failed", description: err?.response?.data?.error || err.message || "Could not fetch models.", variant: "destructive" });
+      }
     } finally {
       setFetchingModels(null);
     }

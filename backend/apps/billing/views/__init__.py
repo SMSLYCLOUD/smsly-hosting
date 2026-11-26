@@ -716,7 +716,7 @@ class SubscriptionViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated, CanViewBilling]
 
     def get_queryset(self):
-        return self.queryset.filter(user=self.request.user).select_related('plan')
+        return self.queryset.filter(user=self.request.user).select_related('plan').order_by('-current_period_end', 'id')
 
     @action(detail=False, methods=['POST'])
     def subscribe(self, request):

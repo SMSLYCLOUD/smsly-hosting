@@ -3,8 +3,10 @@ Serializers for ScopedRegistry.
 """
 
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError as DjValidationError
 from rest_framework import serializers
 
+from apps.core.validators import validate_ssrf
 from apps.deployments.models.registry_scope import ScopedRegistry
 
 
@@ -41,6 +43,26 @@ class ScopedRegistrySerializer(serializers.ModelSerializer):
         extra_kwargs = {
             "password": {"write_only": True},
         }
+
+    def validate_registry_url(self, value: str) -> str:
+        url = (value or "").strip()
+        if not url:
+            return url
+        request = self.context.get("request")
+        is_admin = bool(
+            request
+            and getattr(request, "user", None)
+            and (request.user.is_staff or request.user.is_superuser)
+        )
+        # Non-admin tenants cannot point scoped registries at loopback,
+        # RFC1918, cloud metadata, or internal Docker hostnames.
+        if not is_admin:
+            check_target = url if "://" in url else f"https://{url}"
+            try:
+                validate_ssrf(check_target, fail_closed_dns=False)
+            except DjValidationError as exc:
+                raise serializers.ValidationError(str(exc))
+        return url
 
     def create(self, validated_data):
         scope_type = validated_data.pop("scope_type")

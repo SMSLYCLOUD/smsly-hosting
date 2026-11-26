@@ -7,6 +7,7 @@ import { Card } from '@/components/ui/card';
 import { AlertCircle, CheckCircle, Clock, RefreshCw, Terminal, RotateCcw, Play, Loader2 } from 'lucide-react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { toast } from '@/components/ui/use-toast';
+import api from '@/lib/api';
 
 interface PlatformUpdate {
     id: string;
@@ -26,15 +27,6 @@ interface PlatformUpdate {
     initiated_by: string;
 }
 
-function getHeaders(): Record<string, string> {
-    return { 'Content-Type': 'application/json' };
-}
-
-function apiUrl(path: string) {
-    const base = typeof window !== 'undefined' ? `${window.location.origin}/api/v1` : '/api/v1';
-    return `${base}${path}`;
-}
-
 export default function UpdatesPage() {
     const confirm = useConfirm();
     const [updates, setUpdates] = useState<PlatformUpdate[]>([]);
@@ -46,34 +38,23 @@ export default function UpdatesPage() {
 
     const fetchUpdates = async () => {
         try {
-            const res = await fetch(apiUrl('/platform-updates/'), {
-                credentials: 'include',
-                headers: getHeaders(),
-            });
-            if (res.ok) {
-                setIsBackendReachable(true);
-                const data = await res.json();
-                const list: PlatformUpdate[] = Array.isArray(data) ? data : (data?.results || []);
-                setUpdates(list);
+            const res = await api.get('/platform-updates/');
+            setIsBackendReachable(true);
+            const data = res.data;
+            const list: PlatformUpdate[] = Array.isArray(data) ? data : (data?.results || []);
+            setUpdates(list);
 
-                // Normalize status to uppercase for comparison — backend
-                // returns UPPERCASE (PENDING, PULLING, etc.) but a future
-                // schema change could introduce lowercase. Be defensive.
-                const inProgress = list.find((u: any) =>
-                    ['PENDING', 'PULLING', 'BACKING_UP', 'MIGRATING',
-                     'RESTARTING', 'HEALTH_CHECK', 'ROLLING_BACK'].includes(
-                        String(u.status).toUpperCase()
-                    )
-                );
-                isPollingRef.current = Boolean(inProgress);
-            } else {
-                if (isPollingRef.current && (res.status === 502 || res.status === 503)) {
-                     setIsBackendReachable(false);
-                }
-            }
-        } catch (e) {
+            const inProgress = list.find((u: any) =>
+                ['PENDING', 'PULLING', 'BACKING_UP', 'MIGRATING',
+                 'RESTARTING', 'HEALTH_CHECK', 'ROLLING_BACK'].includes(
+                    String(u.status).toUpperCase()
+                )
+            );
+            isPollingRef.current = Boolean(inProgress);
+        } catch (e: any) {
             console.error("Failed to fetch updates:", e);
-            if (isPollingRef.current) {
+            const status = e?.response?.status;
+            if (isPollingRef.current && (!status || status === 502 || status === 503)) {
                 setIsBackendReachable(false);
             }
         } finally {
@@ -98,20 +79,15 @@ export default function UpdatesPage() {
 
         setTriggering(true);
         try {
-            const res = await fetch(apiUrl('/platform-updates/trigger/'), {
-                method: 'POST',
-                credentials: 'include',
-                headers: getHeaders(),
+            await api.post('/platform-updates/trigger/');
+            toast({ title: 'Update started' });
+            fetchUpdates();
+        } catch (e: any) {
+            toast({
+                title: 'Failed to start update',
+                description: e?.response?.data?.error || e?.response?.data?.detail || e?.message,
+                variant: 'destructive',
             });
-            if (res.ok) {
-                toast({ title: 'Update started' });
-                fetchUpdates();
-            } else {
-                const data = await res.json().catch(() => ({}));
-                toast({ title: 'Failed to start update', description: data.error, variant: 'destructive' });
-            }
-        } catch (e) {
-            toast({ title: 'Request failed', variant: 'destructive' });
         } finally {
             setTriggering(false);
         }
@@ -126,20 +102,15 @@ export default function UpdatesPage() {
         })) return;
 
         try {
-            const res = await fetch(apiUrl(`/platform-updates/${id}/rollback/`), {
-                method: 'POST',
-                credentials: 'include',
-                headers: getHeaders(),
+            await api.post(`/platform-updates/${id}/rollback/`);
+            toast({ title: 'Rollback started' });
+            fetchUpdates();
+        } catch (e: any) {
+            toast({
+                title: 'Rollback failed',
+                description: e?.response?.data?.error || e?.response?.data?.detail || e?.message,
+                variant: 'destructive',
             });
-            if (res.ok) {
-                toast({ title: 'Rollback started' });
-                fetchUpdates();
-            } else {
-                const data = await res.json().catch(() => ({}));
-                toast({ title: 'Rollback failed', description: data.error, variant: 'destructive' });
-            }
-        } catch (e) {
-            toast({ title: 'Request failed', variant: 'destructive' });
         }
     };
 

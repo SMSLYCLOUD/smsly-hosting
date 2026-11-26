@@ -11,6 +11,7 @@ import {
     DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/use-toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import {
     Database, RefreshCw, Loader2, Trash2, Plus, Power, CheckCircle2,
     AlertCircle, XCircle, Server, Network, Save, Lock, ExternalLink,
@@ -262,6 +263,7 @@ export function ReplicaRow({
     onDeleted: (id: string) => void;
 }) {
     const { toast } = useToast();
+    const confirm = useConfirm();
     const [busy, setBusy] = useState<'test' | 'delete' | 'toggle' | null>(null);
     const [editingPassword, setEditingPassword] = useState(false);
     const [newPassword, setNewPassword] = useState('');
@@ -270,12 +272,13 @@ export function ReplicaRow({
         setBusy('test');
         try {
             const result = await databaseReplicasApi.test(replica.id);
+            const isOk = Boolean(result.ok ?? result.reachable);
             toast({
-                title: result.ok ? 'Connection OK' : 'Connection failed',
-                description: result.ok
+                title: isOk ? 'Connection OK' : 'Connection failed',
+                description: isOk
                     ? `TCP reachable at ${result.endpoint}`
-                    : result.error.slice(0, 200),
-                variant: result.ok ? 'default' : 'destructive',
+                    : (result.error || 'Connection test failed.').slice(0, 200),
+                variant: isOk ? 'default' : 'destructive',
             });
         } catch (err: any) {
             toast({ title: 'Test failed', description: err?.message, variant: 'destructive' });
@@ -285,7 +288,13 @@ export function ReplicaRow({
     };
 
     const remove = async () => {
-        if (!confirm(`Remove replica "${replica.name}"?`)) return;
+        const ok = await confirm({
+            title: 'Remove replica?',
+            message: `Remove read replica "${replica.name}" from the database pool?`,
+            variant: 'destructive',
+            confirmText: 'Remove Replica',
+        });
+        if (!ok) return;
         setBusy('delete');
         try {
             await databaseReplicasApi.remove(replica.id);

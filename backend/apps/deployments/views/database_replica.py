@@ -168,6 +168,7 @@ class DatabaseReplicaViewSet(viewsets.ModelViewSet):
         ok, err, lag = svc.test_connection(replica)
         return Response(
             {
+                "ok": ok,
                 "reachable": ok,
                 "error": err,
                 "lag_seconds": lag,

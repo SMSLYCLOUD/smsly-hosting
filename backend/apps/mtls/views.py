@@ -444,7 +444,7 @@ def mtls_spire_deploy(request):
     Accepts {"scope": "platform"} or {"scope": "ecosystem"} or {"scope": "both"} (default).
     Admin only.
     """
-    if not request.user.is_superuser:
+    if not (request.user.is_staff or request.user.is_superuser):
         return Response({"detail": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
 
     from apps.deployments.models import PlatformConfig
@@ -557,7 +557,7 @@ def mtls_spire_undeploy(request):
     Accepts {"scope": "platform"} or {"scope": "ecosystem"} or {"scope": "both"} (default).
     Admin only.
     """
-    if not request.user.is_superuser:
+    if not (request.user.is_staff or request.user.is_superuser):
         return Response({"detail": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
 
     from apps.deployments.models import PlatformConfig
@@ -620,7 +620,7 @@ def mtls_health(request):
     Returns platform-wide mTLS health status including both
     platform and ecosystem SPIRE servers. Admin only.
     """
-    if not request.user.is_superuser:
+    if not (request.user.is_staff or request.user.is_superuser):
         return Response({"detail": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
 
     def _check_spire(container, socket_path):

@@ -20,7 +20,7 @@ from rest_framework.decorators import (
     permission_classes,
     throttle_classes,
 )
-from rest_framework.permissions import IsAdminUser, IsAuthenticated
+from rest_framework.permissions import BasePermission, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
 from apps.core.auth import (
@@ -222,9 +222,19 @@ def _record_usage(user, provider_name: str, model: str, usage: dict,
     }
 
 
+class IsPlatformAdmin(BasePermission):
+    """Allow Django staff or superusers."""
+
+    def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        return bool(
+            user and user.is_authenticated and (user.is_staff or user.is_superuser)
+        )
+
+
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
-@permission_classes([IsAuthenticated, IsAdminUser])
+@permission_classes([IsAuthenticated, IsPlatformAdmin])
 def ai_providers_status(request):
     """
     Return all AI providers with config status, model, and balance.
@@ -311,7 +321,7 @@ def ai_providers_status(request):
 
 @extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
 @api_view(["POST"])
-@permission_classes([IsAdminUser])
+@permission_classes([IsPlatformAdmin])
 def ai_providers_update(request):
     """
     Update AI provider settings (admin only).
@@ -395,7 +405,7 @@ def ai_providers_update(request):
 
 @extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
 @api_view(["POST"])
-@permission_classes([IsAdminUser])
+@permission_classes([IsPlatformAdmin])
 def ai_provider_fetch_models(request):
     """
     Fetch available models from an OpenAI-compatible provider.
@@ -405,6 +415,10 @@ def ai_provider_fetch_models(request):
 
     Returns { "models": ["gpt-4o", "gpt-4o-mini", ...] }
     """
+    import urllib.parse
+    from django.core.exceptions import ValidationError as _DjValidationError
+    from apps.core.validators import validate_ssrf
+
     provider_id = request.data.get("provider_id", "")
     api_key = request.data.get("api_key", "")
     base_url = request.data.get("base_url", "")
@@ -419,14 +433,57 @@ def ai_provider_fetch_models(request):
         return Response({"error": f"Unknown provider: {provider_id}"}, status=status.HTTP_400_BAD_REQUEST)
 
     instance = provider_cls()
-    resolved_base_url = base_url or getattr(instance, "base_url", "") or getattr(instance, "BASE_URL", "")
-    resolved_api_key = api_key or getattr(instance, "api_key", "")
+    stored_base_url = (getattr(instance, "base_url", "") or getattr(instance, "BASE_URL", "") or "").strip()
+    supplied_base_url = str(base_url or "").strip()
+    supplied_api_key = str(api_key or "").strip()
+
+    # SECURITY (C-1): Refuse to forward stored credentials to an unsaved or
+    # overridden base_url unless the caller supplies an API key explicitly.
+    if (
+        supplied_base_url
+        and supplied_base_url.rstrip("/") != stored_base_url.rstrip("/")
+        and not supplied_api_key
+    ):
+        return Response(
+            {"error": "Provide the API key explicitly when testing a custom or unsaved Base URL."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    resolved_base_url = supplied_base_url or stored_base_url
+    resolved_api_key = supplied_api_key or getattr(instance, "api_key", "")
 
     if not resolved_base_url:
         return Response(
             {"error": f"No base URL for {provider_id}. Set one in the Base URL field or via environment variable."},
             status=status.HTTP_400_BAD_REQUEST,
         )
+
+    parsed_url = urllib.parse.urlparse(resolved_base_url)
+    if (parsed_url.scheme or "").lower() not in ("http", "https") or not parsed_url.hostname:
+        return Response(
+            {"error": "Base URL must be a valid http:// or https:// URL."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    hostname_lower = parsed_url.hostname.lower().strip("[]")
+    if hostname_lower in {"169.254.169.254", "100.100.100.200", "metadata.google.internal", "metadata.goog"}:
+        return Response(
+            {"error": "Metadata addresses are not permitted for AI provider URLs."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    allow_local_llm = (
+        provider_id == "localllm"
+        and os.environ.get("ALLOW_LOCAL_LLM_LOOPBACK", "").strip().lower() in ("1", "true", "yes")
+    )
+    if not allow_local_llm:
+        try:
+            validate_ssrf(resolved_base_url, fail_closed_dns=True)
+        except _DjValidationError as exc:
+            return Response(
+                {"error": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     import requests as _requests
 
@@ -435,7 +492,13 @@ def ai_provider_fetch_models(request):
             f"{resolved_base_url.rstrip('/')}/models",
             headers={"Authorization": f"Bearer {resolved_api_key}"},
             timeout=15,
+            allow_redirects=False,
         )
+        if 300 <= resp.status_code < 400:
+            return Response(
+                {"error": "Provider URL returned a redirect; redirects are not permitted."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         resp.raise_for_status()
         data = resp.json()
         models = [m.get("id", "") for m in data.get("data", []) if m.get("id")]
@@ -493,31 +556,33 @@ def ai_test_prompt(request):
         import concurrent.futures
         import os as _os
 
-        deadline = int(_os.environ.get("AI_TEST_TIMEOUT_SECONDS", "90"))
+        deadline = int(_os.environ.get("AI_TEST_TIMEOUT_SECONDS", "60"))
 
         def _run():
             return _cached_ask(prompt, system_prompt=system_prompt, cache_bypass=True)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(_run)
-            try:
-                response, provider_name = future.result(timeout=deadline)
-            except concurrent.futures.TimeoutError:
-                # The worker thread keeps running in the background (it
-                # cannot be force-killed in Python); its result is
-                # discarded. The circuit breaker will have recorded any
-                # connection-level failures along the way.
-                return Response(
-                    {
-                        "error": (
-                            f"AI providers did not respond within {deadline}s. "
-                            "One or more configured providers appear stalled or "
-                            "unreachable — check provider status in Settings > AI."
-                        ),
-                        "code": "ai_test_timeout",
-                    },
-                    status=status.HTTP_504_GATEWAY_TIMEOUT,
-                )
+        # Do NOT use `with ThreadPoolExecutor(...)` here: `__exit__` calls
+        # `shutdown(wait=True)`, which blocks the HTTP handler until a hung
+        # provider socket finishes even after `future.result(timeout=...)` raises.
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(_run)
+        try:
+            response, provider_name = future.result(timeout=deadline)
+        except concurrent.futures.TimeoutError:
+            pool.shutdown(wait=False, cancel_futures=True)
+            return Response(
+                {
+                    "error": (
+                        f"AI providers did not respond within {deadline}s. "
+                        "One or more configured providers appear stalled or "
+                        "unreachable — check provider status in Settings > AI."
+                    ),
+                    "code": "ai_test_timeout",
+                },
+                status=status.HTTP_504_GATEWAY_TIMEOUT,
+            )
+        else:
+            pool.shutdown(wait=False)
 
         mode = "senate_committee" if len(configured) >= 2 else ("solo" if len(configured) == 1 else "unconfigured")
         # SECURITY (Batch G): pass prompt + response so the spend
