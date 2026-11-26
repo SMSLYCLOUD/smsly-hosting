@@ -13,7 +13,9 @@ _GITHUB_API_BASE = "https://api.github.com"
 
 
 def _extract_owner_repo(repo_url: str) -> tuple[str, str]:
-    repo_url = repo_url.rstrip(".git").rstrip("/")
+    repo_url = repo_url.rstrip("/")
+    if repo_url.lower().endswith(".git"):
+        repo_url = repo_url[:-4]
     # Handle SSH URLs like git@github.com:owner/repo
     if ":" in repo_url and "/" not in repo_url.split(":")[0]:
         after_colon = repo_url.split(":", 1)[1]

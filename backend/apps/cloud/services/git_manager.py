@@ -110,6 +110,7 @@ class GitManager:
 
         env = os.environ.copy()
         env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_ALLOW_PROTOCOL"] = "https:ssh"
         askpass_path = None
         clone_url = repo_url
 
@@ -139,7 +140,9 @@ class GitManager:
             clone_opts = [
                 "-c", "http.followRedirects=false",
                 "-c", "protocol.file.allow=never",
-                "-c", "protocol.allow=https,ssh",
+                "-c", "protocol.allow=never",
+                "-c", "protocol.https.allow=always",
+                "-c", "protocol.ssh.allow=always",
             ]
             if commit_hash:
                 git.Repo.clone_from(clone_url, repo_dir, branch=branch, env=env, multi_options=clone_opts)
@@ -171,12 +174,15 @@ class GitManager:
                     os.makedirs(repo_dir, exist_ok=True)
                     fallback_env = os.environ.copy()
                     fallback_env["GIT_TERMINAL_PROMPT"] = "0"
+                    fallback_env["GIT_ALLOW_PROTOCOL"] = "https:ssh"
                     fallback_env.pop("GIT_ASKPASS", None)
                     fallback_env.pop("SMSLY_GIT_PASSWORD", None)
                     clone_opts = [
                         "-c", "http.followRedirects=false",
                         "-c", "protocol.file.allow=never",
-                        "-c", "protocol.allow=https,ssh",
+                        "-c", "protocol.allow=never",
+                        "-c", "protocol.https.allow=always",
+                        "-c", "protocol.ssh.allow=always",
                     ]
                     if commit_hash:
                         git.Repo.clone_from(

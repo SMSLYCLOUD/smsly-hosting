@@ -39,9 +39,10 @@ class DeploymentMixin:
                     from urllib.parse import urlparse as _up
                     from apps.deployments.utils import get_github_token_for_repo
                     _parsed = _up(str(getattr(_svc, "repository_url", "") or ""))
-                    _full = "/".join(
-                        (_parsed.path or "").lstrip("/").rstrip(".git").split("/")[:2]
-                    )
+                    _parts = [p for p in (_parsed.path or "").strip("/").split("/") if p][:2]
+                    if len(_parts) == 2 and _parts[1].lower().endswith(".git"):
+                        _parts[1] = _parts[1][:-4]
+                    _full = "/".join(_parts)
                     _gtok = get_github_token_for_repo(
                         getattr(_svc, "owner", None), _full)
                 except Exception:

@@ -196,26 +196,15 @@ class GitHubAppService:
         The token is scoped to a single repository with only the permissions
         the App was granted (Contents: read-only in our case).
         """
-        # Step A: resolve repo name to its numeric ID. The
-        # ``/access_tokens`` endpoint requires ``repositories`` to be a list
-        # of integer IDs, not names. If we pass names, GitHub returns
-        # 422 "There is at least one repository that does not exist or is
-        # not accessible to the parent installation."
-        repo_id = self._resolve_repo_id(installation_id, repo_name, headers)
-        if not repo_id:
-            logger.warning(
-                "GitHubAppService: repository %s not accessible in installation %s — refusing unscoped token.",
-                repo_name,
-                installation_id,
-            )
-            return None
-        payload: dict = {"repositories": [repo_id]}
-
+        # GitHub REST API expects repository names (strings) in "repositories",
+        # or numeric IDs in "repository_ids". Request by name first in 1 call;
+        # fall back to resolving the numeric ID (paginated) on 422.
+        url = f"{_GH_API}/app/installations/{installation_id}/access_tokens"
         try:
             resp = requests.post(
-                f"{_GH_API}/app/installations/{installation_id}/access_tokens",
+                url,
                 headers=headers,
-                json=payload,
+                json={"repositories": [repo_name]},
                 timeout=10,
             )
         except requests.Timeout:
@@ -224,6 +213,29 @@ class GitHubAppService:
                 installation_id,
             )
             return None
+
+        if resp.status_code == 422:
+            repo_id = self._resolve_repo_id(installation_id, repo_name, headers)
+            if not repo_id:
+                logger.warning(
+                    "GitHubAppService: repository %s not accessible in installation %s — refusing unscoped token.",
+                    repo_name,
+                    installation_id,
+                )
+                return None
+            try:
+                resp = requests.post(
+                    url,
+                    headers=headers,
+                    json={"repository_ids": [repo_id]},
+                    timeout=10,
+                )
+            except requests.Timeout:
+                logger.error(
+                    "GitHubAppService: timeout creating installation token for installation %s",
+                    installation_id,
+                )
+                return None
 
         if resp.status_code == 201:
             token = resp.json().get("token")
@@ -250,16 +262,9 @@ class GitHubAppService:
         """Look up the numeric ID of a repo via the installation's repo list.
 
         ``GET /installation/repositories`` requires an INSTALLATION token —
-        calling it with the App JWT returns 401 (exactly what the old code
-        did, so repo-scoped tokens silently degraded to bare installation
-        tokens). We mint a short-lived bare installation token here purely
-        for the listing, then the caller re-uses the JWT to mint the
-        repo-scoped token.
-
-        Returns None if the repo isn't in this installation's accessible
-        set — the caller will fall back to a bare installation token
-        which still works for public repos and for "all repositories"
-        installations.
+        calling it with the App JWT returns 401. We mint a short-lived bare
+        installation token here purely for the listing, paginate across pages,
+        then the caller re-uses the JWT to mint the repo-scoped token.
         """
         # Mint a listing token (JWT cannot call /installation/repositories).
         try:
@@ -291,31 +296,34 @@ class GitHubAppService:
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
-        try:
-            resp = requests.get(
-                f"{_GH_API}/installation/repositories",
-                headers=listing_headers,
-                params={"per_page": 100},
-                timeout=10,
-            )
-        except requests.Timeout:
-            logger.warning("GitHubAppService: timeout listing installation repos")
-            return None
-        except Exception as exc:
-            logger.warning("GitHubAppService: list installation repos failed: %s", exc)
-            return None
+        for page in range(1, 11):
+            try:
+                resp = requests.get(
+                    f"{_GH_API}/installation/repositories",
+                    headers=listing_headers,
+                    params={"per_page": 100, "page": page},
+                    timeout=10,
+                )
+            except requests.Timeout:
+                logger.warning("GitHubAppService: timeout listing installation repos")
+                return None
+            except Exception as exc:
+                logger.warning("GitHubAppService: list installation repos failed: %s", exc)
+                return None
 
-        if resp.status_code != 200:
-            logger.warning(
-                "GitHubAppService: list installation repos returned status %s",
-                resp.status_code,
-            )
-            return None
+            if resp.status_code != 200:
+                logger.warning(
+                    "GitHubAppService: list installation repos returned status %s",
+                    resp.status_code,
+                )
+                return None
 
-        repos = (resp.json() or {}).get("repositories", [])
-        for r in repos:
-            if (r.get("name") or "").lower() == repo_name.lower():
-                return r.get("id")
+            repos = (resp.json() or {}).get("repositories", [])
+            for r in repos:
+                if (r.get("name") or "").lower() == repo_name.lower():
+                    return r.get("id")
+            if len(repos) < 100:
+                break
         return None
 
     # ── GitHub Deployments API ───────────────────────────────────────────────

@@ -78,9 +78,10 @@ class CloneMixin:
                             "GitHub credentials resolved for private repo access...\n"
                         )
                     else:
-                        repo_full_name = "/".join(
-                            (parsed.path or "").lstrip("/").rstrip(".git").split("/")[:2]
-                        )
+                        _path_parts = [p for p in (parsed.path or "").strip("/").split("/") if p][:2]
+                        if len(_path_parts) == 2 and _path_parts[1].lower().endswith(".git"):
+                            _path_parts[1] = _path_parts[1][:-4]
+                        repo_full_name = "/".join(_path_parts)
                         from apps.deployments.utils import get_github_token_for_repo
                         allow_unscoped = getattr(self.service, "managed_by", "") in ("ECOSYSTEM", "PLATFORM")
                         repo_token = get_github_token_for_repo(
@@ -172,7 +173,7 @@ class CloneMixin:
         #   * If the clone fails, the stale temp dir is cleaned up, not target_dir.
         tmp_path = Path(tempfile.mkdtemp(dir=str(parent), prefix=f".clone_tmp_{build_path.name}_"))
 
-        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ALLOW_PROTOCOL": "https:ssh"}
         askpass_path = None
 
         if token:
@@ -228,7 +229,9 @@ class CloneMixin:
             "git", "clone",
             "-c", "http.followRedirects=false",
             "-c", "protocol.file.allow=never",
-            "-c", "protocol.allow=https,ssh",
+            "-c", "protocol.allow=never",
+            "-c", "protocol.https.allow=always",
+            "-c", "protocol.ssh.allow=always",
             "--branch", branch, "--single-branch", "--", remote_url, str(tmp_path)
         ]
         try:
