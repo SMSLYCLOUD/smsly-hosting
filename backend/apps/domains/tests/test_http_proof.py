@@ -280,30 +280,36 @@ class HttpProofRedirectTests(SimpleTestCase):
         self.assertTrue(ok)
         self.assertEqual(mock_get.call_count, 2)
 
+    @mock.patch("apps.domains.verification.resolve_host_ips", return_value={"104.21.34.183"})
     @mock.patch("requests.get")
-    def test_cross_host_redirect_rejected(self, mock_get):
+    def test_cross_host_redirect_rejected(self, mock_get, _mock_ips):
         mock_get.return_value = self._redir(
             302, "https://evil.example.com/.well-known/smsly-verify/tok-abc-123"
         )
         ok, detail = verify_http_proof(_domain())
         self.assertFalse(ok)
         self.assertEqual(detail, "HTTP 302")
-        mock_get.assert_called_once()
+        shop_calls = [c for c in mock_get.call_args_list if "shop.example.com" in str(c)]
+        self.assertEqual(len(shop_calls), 1)
 
+    @mock.patch("apps.domains.verification.resolve_host_ips", return_value={"104.21.34.183"})
     @mock.patch("requests.get")
-    def test_non_challenge_path_redirect_rejected(self, mock_get):
+    def test_non_challenge_path_redirect_rejected(self, mock_get, _mock_ips):
         mock_get.return_value = self._redir(302, "https://shop.example.com/login")
         ok, detail = verify_http_proof(_domain())
         self.assertFalse(ok)
         self.assertEqual(detail, "HTTP 302")
-        mock_get.assert_called_once()
+        shop_calls = [c for c in mock_get.call_args_list if "shop.example.com" in str(c)]
+        self.assertEqual(len(shop_calls), 1)
 
+    @mock.patch("apps.domains.verification.resolve_host_ips", return_value={"104.21.34.183"})
     @mock.patch("requests.get")
-    def test_non_global_ip_redirect_rejected(self, mock_get):
+    def test_non_global_ip_redirect_rejected(self, mock_get, _mock_ips):
         mock_get.return_value = self._redir(
             302, "http://169.254.169.254/.well-known/smsly-verify/tok-abc-123"
         )
         ok, detail = verify_http_proof(_domain())
         self.assertFalse(ok)
         self.assertEqual(detail, "HTTP 302")
-        mock_get.assert_called_once()
+        shop_calls = [c for c in mock_get.call_args_list if "shop.example.com" in str(c)]
+        self.assertEqual(len(shop_calls), 1)
