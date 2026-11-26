@@ -2839,21 +2839,44 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 # Auto-generated safe fallback (reason: $reason)
 {
     on_demand_tls {
-        ask http://backend:8000/api/v1/services/check-domain/
+        ask http://host.docker.internal:8971/ask?secret={env.CADDY_ASK_SECRET}
     }
 }
 
 ${domain_block_label} {
-    reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     encode gzip
     log {
         output file /var/log/caddy/access.log
+    }
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+    handle /ws/* {
+        reverse_proxy backend:8000
+    }
+    handle /health* {
+        reverse_proxy backend:8000
+    }
+    handle /auth/* {
+        reverse_proxy backend:8000
+    }
+    handle /admin/* {
+        reverse_proxy backend:8000
+    }
+    handle /static/* {
+        reverse_proxy backend:8000
+    }
+    handle /media/* {
+        reverse_proxy backend:8000
+    }
+    handle {
+        reverse_proxy frontend:3000
     }
 }
 
 ${safe_ip} {
     tls internal
-    redir http://${safe_ip}{uri} 308
+    redir http://${safe_ip}{uri} 307
 }
 
 :80 {
@@ -2870,7 +2893,7 @@ ${safe_ip} {
         not host *.local
         header_regexp host .+
     }
-    redir @redirectable https://{host}{uri} 308
+    redir @redirectable https://{host}{uri} 307
     handle {
         reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
@@ -19006,21 +19029,44 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 # Auto-generated safe fallback (reason: $reason)
 {
     on_demand_tls {
-        ask http://backend:8000/api/v1/services/check-domain/
+        ask http://host.docker.internal:8971/ask?secret={env.CADDY_ASK_SECRET}
     }
 }
 
 ${domain_block_label} {
-    reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     encode gzip
     log {
         output file /var/log/caddy/access.log
+    }
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+    handle /ws/* {
+        reverse_proxy backend:8000
+    }
+    handle /health* {
+        reverse_proxy backend:8000
+    }
+    handle /auth/* {
+        reverse_proxy backend:8000
+    }
+    handle /admin/* {
+        reverse_proxy backend:8000
+    }
+    handle /static/* {
+        reverse_proxy backend:8000
+    }
+    handle /media/* {
+        reverse_proxy backend:8000
+    }
+    handle {
+        reverse_proxy frontend:3000
     }
 }
 
 ${safe_ip} {
     tls internal
-    redir http://${safe_ip}{uri} 308
+    redir http://${safe_ip}{uri} 307
 }
 
 :80 {
@@ -19037,7 +19083,7 @@ ${safe_ip} {
         not host *.local
         header_regexp host .+
     }
-    redir @redirectable https://{host}{uri} 308
+    redir @redirectable https://{host}{uri} 307
     handle {
         reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
@@ -22622,21 +22668,44 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 # Auto-generated safe fallback (reason: $reason)
 {
     on_demand_tls {
-        ask http://backend:8000/api/v1/services/check-domain/
+        ask http://host.docker.internal:8971/ask?secret={env.CADDY_ASK_SECRET}
     }
 }
 
 ${domain_block_label} {
-    reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     encode gzip
     log {
         output file /var/log/caddy/access.log
+    }
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+    handle /ws/* {
+        reverse_proxy backend:8000
+    }
+    handle /health* {
+        reverse_proxy backend:8000
+    }
+    handle /auth/* {
+        reverse_proxy backend:8000
+    }
+    handle /admin/* {
+        reverse_proxy backend:8000
+    }
+    handle /static/* {
+        reverse_proxy backend:8000
+    }
+    handle /media/* {
+        reverse_proxy backend:8000
+    }
+    handle {
+        reverse_proxy frontend:3000
     }
 }
 
 ${safe_ip} {
     tls internal
-    redir http://${safe_ip}{uri} 308
+    redir http://${safe_ip}{uri} 307
 }
 
 :80 {
@@ -22653,7 +22722,7 @@ ${safe_ip} {
         not host *.local
         header_regexp host .+
     }
-    redir @redirectable https://{host}{uri} 308
+    redir @redirectable https://{host}{uri} 307
     handle {
         reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
@@ -25096,21 +25165,44 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 # Auto-generated safe fallback (reason: $reason)
 {
     on_demand_tls {
-        ask http://backend:8000/api/v1/services/check-domain/
+        ask http://host.docker.internal:8971/ask?secret={env.CADDY_ASK_SECRET}
     }
 }
 
 ${domain_block_label} {
-    reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     encode gzip
     log {
         output file /var/log/caddy/access.log
+    }
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+    handle /ws/* {
+        reverse_proxy backend:8000
+    }
+    handle /health* {
+        reverse_proxy backend:8000
+    }
+    handle /auth/* {
+        reverse_proxy backend:8000
+    }
+    handle /admin/* {
+        reverse_proxy backend:8000
+    }
+    handle /static/* {
+        reverse_proxy backend:8000
+    }
+    handle /media/* {
+        reverse_proxy backend:8000
+    }
+    handle {
+        reverse_proxy frontend:3000
     }
 }
 
 ${safe_ip} {
     tls internal
-    redir http://${safe_ip}{uri} 308
+    redir http://${safe_ip}{uri} 307
 }
 
 :80 {
@@ -25127,7 +25219,7 @@ ${safe_ip} {
         not host *.local
         header_regexp host .+
     }
-    redir @redirectable https://{host}{uri} 308
+    redir @redirectable https://{host}{uri} 307
     handle {
         reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
@@ -34550,21 +34642,44 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 # Auto-generated safe fallback (reason: $reason)
 {
     on_demand_tls {
-        ask http://backend:8000/api/v1/services/check-domain/
+        ask http://host.docker.internal:8971/ask?secret={env.CADDY_ASK_SECRET}
     }
 }
 
 ${domain_block_label} {
-    reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     encode gzip
     log {
         output file /var/log/caddy/access.log
+    }
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+    handle /ws/* {
+        reverse_proxy backend:8000
+    }
+    handle /health* {
+        reverse_proxy backend:8000
+    }
+    handle /auth/* {
+        reverse_proxy backend:8000
+    }
+    handle /admin/* {
+        reverse_proxy backend:8000
+    }
+    handle /static/* {
+        reverse_proxy backend:8000
+    }
+    handle /media/* {
+        reverse_proxy backend:8000
+    }
+    handle {
+        reverse_proxy frontend:3000
     }
 }
 
 ${safe_ip} {
     tls internal
-    redir http://${safe_ip}{uri} 308
+    redir http://${safe_ip}{uri} 307
 }
 
 :80 {
@@ -34581,7 +34696,7 @@ ${safe_ip} {
         not host *.local
         header_regexp host .+
     }
-    redir @redirectable https://{host}{uri} 308
+    redir @redirectable https://{host}{uri} 307
     handle {
         reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }

@@ -847,6 +847,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'apps.permissions.middleware.PermissionAuditMiddleware',
     'apps.core.middleware.security.SecurityMiddleware',  # Zero Trust HMAC V2
+    'apps.core.middleware.trailing_slash.ApiTrailingSlashNormalizeMiddleware',  # Avoid 308<->301 API loops
     'apps.core.middleware.security.ApiContentSecurityPolicyMiddleware',  # CSP for API responses
     'apps.core.middleware.ratelimit.RateLimitMiddleware', # App-layer Rate Limiting
     'apps.core.middleware.device_trust.DeviceTrustMiddleware', # [Beta] Device trust enforcement
