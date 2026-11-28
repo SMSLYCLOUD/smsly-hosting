@@ -11,11 +11,19 @@ from urllib.parse import urlparse, urlunparse
 logger = logging.getLogger(__name__)
 
 
-def __getattr__(name: str):
-    if name == "git":
+def _get_git():
+    """Import git lazily while preserving module-level patchability."""
+    mod = globals().get("git")
+    if mod is None:
         import git as _git
         globals()["git"] = _git
         return _git
+    return mod
+
+
+def __getattr__(name: str):
+    if name == "git":
+        return _get_git()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -119,6 +127,7 @@ class GitManager:
         env["GIT_ALLOW_PROTOCOL"] = "https:ssh"
         askpass_path = None
         clone_url = repo_url
+        _git = _get_git()
 
         try:
             if token:
@@ -151,15 +160,15 @@ class GitManager:
                 "-c", "protocol.ssh.allow=always",
             ]
             if commit_hash:
-                git.Repo.clone_from(clone_url, repo_dir, branch=branch, env=env, multi_options=clone_opts)
-                repo = git.Repo(repo_dir)
+                _git.Repo.clone_from(clone_url, repo_dir, branch=branch, env=env, multi_options=clone_opts)
+                repo = _git.Repo(repo_dir)
                 repo.git.checkout(commit_hash)
             else:
-                git.Repo.clone_from(clone_url, repo_dir, branch=branch, depth=1, env=env, multi_options=clone_opts)
+                _git.Repo.clone_from(clone_url, repo_dir, branch=branch, depth=1, env=env, multi_options=clone_opts)
             _sanitize_repo_symlinks(repo_dir)
             return repo_dir
 
-        except git.GitCommandError as e:
+        except _git.GitCommandError as e:
             msg = str(e)
             if token:
                 msg = msg.replace(token, "<redacted>")
@@ -191,17 +200,17 @@ class GitManager:
                         "-c", "protocol.ssh.allow=always",
                     ]
                     if commit_hash:
-                        git.Repo.clone_from(
+                        _git.Repo.clone_from(
                             repo_url,
                             repo_dir,
                             branch=branch,
                             env=fallback_env,
                             multi_options=clone_opts,
                         )
-                        repo = git.Repo(repo_dir)
+                        repo = _git.Repo(repo_dir)
                         repo.git.checkout(commit_hash)
                     else:
-                        git.Repo.clone_from(
+                        _git.Repo.clone_from(
                             repo_url,
                             repo_dir,
                             branch=branch,
@@ -215,7 +224,7 @@ class GitManager:
                         _sanitize_url(repo_url),
                     )
                     return repo_dir
-                except git.GitCommandError as fallback_error:
+                except _git.GitCommandError as fallback_error:
                     fallback_msg = str(fallback_error)
                     logger.error("Anonymous clone fallback failed: %s", fallback_msg)
                     raise RuntimeError(

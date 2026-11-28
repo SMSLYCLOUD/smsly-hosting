@@ -17,11 +17,19 @@ from .exceptions import BuildError
 logger = logging.getLogger(__name__)
 
 
-def __getattr__(name: str):
-    if name == "git":
+def _get_git():
+    """Import git lazily while preserving module-level patchability."""
+    mod = globals().get("git")
+    if mod is None:
         import git as _git
         globals()["git"] = _git
         return _git
+    return mod
+
+
+def __getattr__(name: str):
+    if name == "git":
+        return _get_git()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -129,7 +137,7 @@ class CloneMixin:
 
             # Metadata
             # pylint: disable=no-member
-            repo = git.Repo(self.source_dir)
+            repo = _get_git().Repo(self.source_dir)
             self.deployment.commit_hash = repo.head.commit.hexsha
             self.deployment.commit_message = repo.head.commit.message
             self.deployment.save(update_fields=['commit_hash', 'commit_message'])

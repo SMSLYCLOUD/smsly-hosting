@@ -29,7 +29,7 @@ class PipelineCloneTests(SimpleTestCase):
                 self.assertEqual(kwargs["env"]["SMSLY_GIT_PASSWORD"], "secret-token")
                 return subprocess.CompletedProcess(cmd, 0)
 
-            with patch(
+            with patch("apps.core.validators.validate_ssrf"), patch(
                 "apps.deployments.services.pipeline.clone.subprocess.run",
                 side_effect=fake_run,
             ) as mock_run:
@@ -82,7 +82,7 @@ class PipelineCloneTests(SimpleTestCase):
                 seen_cmds.append(list(cmd))
                 return subprocess.CompletedProcess(cmd, 0)
 
-            with patch(
+            with patch("apps.core.validators.validate_ssrf"), patch(
                 "apps.deployments.services.pipeline.clone.subprocess.run",
                 side_effect=fake_run,
             ):
@@ -115,7 +115,7 @@ class PipelineCloneTests(SimpleTestCase):
                     raise subprocess.CalledProcessError(1, cmd, stderr="reference is not a tree")
                 return subprocess.CompletedProcess(cmd, 0)
 
-            with patch(
+            with patch("apps.core.validators.validate_ssrf"), patch(
                 "apps.deployments.services.pipeline.clone.subprocess.run",
                 side_effect=fake_run,
             ):
@@ -132,3 +132,68 @@ class PipelineCloneTests(SimpleTestCase):
             self.assertIn("protocol.allow=never", seen_cmds[2])
             self.assertEqual(seen_cmds[2][-2:], ["origin", sha])
             self.assertEqual(seen_cmds[3], ["git", "checkout", "--detach", "FETCH_HEAD", "--"])
+
+    def test_clone_repo_reads_commit_metadata_with_cold_lazy_git_import(self):
+        from types import SimpleNamespace
+        from apps.deployments.services.pipeline import clone as clone_mod
+
+        clone_mod.__dict__.pop("git", None)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = Path(tmp) / "repo"
+            repo_dir.mkdir()
+            subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo_dir, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo_dir, check=True, capture_output=True)
+            (repo_dir / "README.md").write_text("hello\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=repo_dir, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "initial cold commit"], cwd=repo_dir, check=True, capture_output=True)
+
+            saved_updates = []
+            manager = object.__new__(PipelineManager)
+            manager.secret_values = []
+            manager.build_dir = str(repo_dir)
+            manager.source_dir = None
+            manager.service = SimpleNamespace(
+                id="svc-1",
+                branch="main",
+                repository_url="https://example.com/org/repo.git",
+                owner=None,
+                managed_by="USER",
+            )
+            manager.deployment = SimpleNamespace(
+                commit_hash="",
+                commit_message="",
+                save=lambda update_fields=None: saved_updates.append(update_fields),
+            )
+            manager._clone_with_github_token = lambda *args, **kwargs: None
+            manager._inject_dotenv_from_repo = lambda: None
+
+            with patch("apps.deployments.services.pipeline.clone.update_stage"), \
+                 patch("apps.deployments.services.pipeline.clone.append_log"), \
+                 patch("apps.deployments.services.pipeline.clone.log_exhaustive_clone_diagnostics"):
+                manager._clone_repo()
+
+            self.assertRegex(manager.deployment.commit_hash, r"^[0-9a-f]{40}$")
+            self.assertEqual(manager.deployment.commit_message.strip(), "initial cold commit")
+            self.assertEqual(saved_updates, [["commit_hash", "commit_message"]])
+
+    def test_git_manager_clone_repo_uses_cold_lazy_git_import(self):
+        from apps.cloud.services import git_manager as gm_mod
+
+        gm_mod.__dict__.pop("git", None)
+        loaded_git = gm_mod._get_git()
+        self.assertTrue(hasattr(loaded_git, "Repo"))
+        self.assertTrue(hasattr(loaded_git, "GitCommandError"))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("apps.core.validators.validate_ssrf"), \
+                 patch("apps.cloud.services.git_manager.git") as mock_git:
+                mock_git.GitCommandError = Exception
+                result_dir = gm_mod.GitManager.clone_repo(
+                    "https://github.com/SMSLYCLOUD/smsly-frontend.git",
+                    branch="main",
+                    destination=tmp,
+                )
+                self.assertTrue(result_dir.endswith("smsly-frontend"))
+                mock_git.Repo.clone_from.assert_called_once()
