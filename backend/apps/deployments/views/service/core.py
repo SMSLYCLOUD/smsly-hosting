@@ -972,6 +972,11 @@ class ServiceViewSet(DeployActionsMixin, MtlsActionsMixin, TrafficSplitMixin, Do
 
             elif container_id:
                 try:
+                    from apps.deployments.services.power import restore_restart_policy
+                    restore_restart_policy(
+                        container_id,
+                        getattr(service, 'restart_policy', 'unless-stopped') or 'unless-stopped',
+                    )
                     from apps.deployments.services.container_runtime import ContainerRuntime
                     runtime = ContainerRuntime()
                     runtime.restart_container(container_id)
@@ -1206,7 +1211,8 @@ class ServiceViewSet(DeployActionsMixin, MtlsActionsMixin, TrafficSplitMixin, Do
                 effective_status = 'unhealthy'
 
             exit_code = state.get('ExitCode')
-            restart_count = int(state.get('RestartCount') or 0)
+            raw_rc = container.attrs.get('RestartCount')
+            restart_count = int(raw_rc if raw_rc is not None else (state.get('RestartCount') or 0))
 
             # Also fetch saved crash logs from latest deployment
             from apps.deployments.models import Deployment as DepModel

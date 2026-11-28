@@ -13,6 +13,7 @@
   rollback-safe container_refresh path.
 """
 import logging
+import re
 import subprocess
 
 from celery import shared_task
@@ -21,15 +22,66 @@ from apps.deployments.constants import (
     TASK_TIME_LIMIT_QUICK,
     TASK_TIME_LIMIT_STANDARD,
 )
+from apps.deployments.services.power import (
+    is_platform_or_infra_container,
+    quarantine_crash_loop_service,
+)
 
 logger = logging.getLogger(__name__)
 
 RESTART_LOOP_MIN_COUNT = 10
+RESTART_LOOP_DELTA_MIN = 3
+RESTART_LOOP_RESTARTING_MIN = 5
+CHILD_CRASH_UNHEALTHY_STREAK = 10
+CHILD_CRASH_MIN_MATCHES = 3
 RESTARTING_GRACE_SECONDS = 900  # 15 min before flagging
+
+_CHILD_CRASH_RE = re.compile(
+    r"Child process \[\d+\] died"
+    r"|Worker \(pid:\d+\) exited with code [1-9]"
+    r"|Worker failed to boot"
+    r"|RuntimeError:\s*FATAL:"
+    r"|Refusing to boot"
+    r"|ModuleNotFoundError:"
+    r"|ImportError:"
+    r"|Address already in use"
+)
+
+
+def detect_child_crash_loop(logs: str) -> tuple[bool, str]:
+    """Return ``(True, sample_line)`` when child workers repeatedly die inside a live PID 1."""
+    if not logs:
+        return False, ""
+    matches = 0
+    sample = ""
+    for line in logs.splitlines():
+        if _CHILD_CRASH_RE.search(line):
+            matches += 1
+            if not sample:
+                sample = line.strip()[:160]
+    return (matches >= CHILD_CRASH_MIN_MATCHES), (sample if matches >= CHILD_CRASH_MIN_MATCHES else "")
 
 
 def _sh(args, timeout=60):
     return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+
+
+def _resolve_tenant_service(cid: str, container_name: str):
+    """Best-effort lookup of the tenant Service owning an active container."""
+    from apps.deployments.models import Deployment, Service
+
+    svc = Service.objects.filter(name=container_name).first()
+    if svc is not None:
+        return svc
+    dep = (
+        Deployment.objects.filter(
+            container_id__startswith=cid[:12],
+            status=Deployment.Status.ACTIVE,
+        )
+        .select_related("service")
+        .first()
+    )
+    return dep.service if dep else None
 
 
 @shared_task(
@@ -38,46 +90,101 @@ def _sh(args, timeout=60):
     time_limit=TASK_TIME_LIMIT_QUICK[1],
 )
 def container_restart_loop_watchdog_task():
-    """Flag containers stuck in restart loops.
-
-    Criteria (either):
-      * RestartCount >= RESTART_LOOP_MIN_COUNT
-      * Docker status 'Restarting' persistently (we rely on RestartCount for
-        persistence across the 5-minute beat interval)
-    Returns findings; logs at ERROR so log-based alerting can page.
+    """Detect active crash-looping containers (Docker restarts OR child-worker
+    death loops), quarantine offending tenant containers, and alert admins.
     """
-    out = _sh(['docker', 'ps', '-aq'])
+    from django.core.cache import cache
+
+    out = _sh(['docker', 'ps', '-q'])
     ids = [cid.strip() for cid in (out.stdout or '').splitlines() if cid.strip()]
     findings = []
     if ids:
         insp = _sh([
             'docker', 'inspect',
-            '--format', '{{.Name}}\t{{.RestartCount}}\t{{.State.Status}}\t{{.State.ExitCode}}',
+            '--format',
+            '{{.ID}}\t{{.Name}}\t{{.RestartCount}}\t{{.State.Status}}\t{{.State.ExitCode}}'
+            '\t{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}'
+            '\t{{if .State.Health}}{{.State.Health.FailingStreak}}{{else}}0{{end}}'
+            '\t{{.HostConfig.RestartPolicy.Name}}',
             *ids,
         ])
         for line in (insp.stdout or '').splitlines():
             parts = line.strip().split('\t')
-            if len(parts) < 4:
+            if len(parts) < 8:
                 continue
-            name, restarts_s, state_s, exit_s = parts[0].lstrip('/'), parts[1], parts[2], parts[3]
+            cid, raw_name, restarts_s, state_s, exit_s, health_s, streak_s, _rp = parts[:8]
+            name = raw_name.lstrip('/')
             try:
                 restarts = int(restarts_s)
             except Exception:
                 continue
-            loop = restarts >= RESTART_LOOP_MIN_COUNT or (
-                state_s == 'restarting' and restarts >= 3)
-            if loop:
-                findings.append({
-                    'container': name, 'restarts': restarts,
-                    'state': state_s, 'last_exit': exit_s,
-                })
+            try:
+                failing_streak = int(streak_s or 0)
+            except Exception:
+                failing_streak = 0
+
+            cache_key = f"watchdog:restart_prev:{cid}"
+            prev = cache.get(cache_key)
+            cache.set(cache_key, restarts, timeout=3600)
+
+            if health_s == "healthy":
+                continue
+
+            loop_reason = ""
+            is_container_loop = (
+                (state_s == "restarting" and restarts >= RESTART_LOOP_RESTARTING_MIN)
+                or (
+                    restarts >= RESTART_LOOP_MIN_COUNT
+                    and prev is not None
+                    and (restarts - prev) >= RESTART_LOOP_DELTA_MIN
+                )
+            )
+            if is_container_loop:
+                loop_reason = f"restart_loop (restarts={restarts}, state={state_s}, exit={exit_s})"
+            elif (
+                state_s == "running"
+                and health_s == "unhealthy"
+                and failing_streak >= CHILD_CRASH_UNHEALTHY_STREAK
+                and not is_platform_or_infra_container(name)
+            ):
+                log_res = _sh(["docker", "logs", "--tail", "60", "--since", "3m", cid], timeout=10)
+                combined = ((log_res.stdout or "") + "\n" + (log_res.stderr or "")).strip()
+                child_loop, sample = detect_child_crash_loop(combined)
+                if child_loop:
+                    loop_reason = f"child_crash_loop (streak={failing_streak}): {sample}"
+
+            if not loop_reason:
+                continue
+
+            quarantined = False
+            if not is_platform_or_infra_container(name):
+                try:
+                    svc = _resolve_tenant_service(cid, name)
+                    if svc is not None:
+                        qres = quarantine_crash_loop_service(
+                            svc,
+                            name,
+                            reason=loop_reason,
+                            exit_code=exit_s,
+                        )
+                        quarantined = bool(qres.get("quarantined"))
+                except Exception as exc:
+                    logger.warning("Quarantine failed for %s: %s", name, exc)
+
+            findings.append({
+                'container': name,
+                'restarts': restarts,
+                'state': state_s,
+                'last_exit': exit_s,
+                'reason': loop_reason,
+                'quarantined': quarantined,
+            })
     if findings:
         logger.error(
             "RESTART-LOOP WATCHDOG: %d container(s) crash-looping: %s",
             len(findings), findings,
         )
         try:
-            from django.core.cache import cache
             from apps.deployments.utils import log_event
             log_event(
                 action="CONTAINER_RESTART_LOOP_DETECTED",
@@ -90,7 +197,7 @@ def container_restart_loop_watchdog_task():
                 from apps.notifications.tasks import dispatch_notification
                 User = get_user_model()
                 summary = ", ".join(
-                    f"{f['container']} ({f['restarts']} restarts, exit={f['last_exit']})"
+                    f"{f['container']} ({f['restarts']} restarts, exit={f['last_exit']}, quarantined={f['quarantined']})"
                     for f in findings[:10]
                 )
                 for admin in User.objects.filter(is_superuser=True).only("id"):
@@ -103,7 +210,11 @@ def container_restart_loop_watchdog_task():
                     )
         except Exception as exc:
             logger.debug("Restart-loop alert dispatch skipped: %s", exc)
-    return {"status": "ok", "findings": findings}
+    return {
+        "status": "ok",
+        "findings": findings,
+        "quarantined": [f["container"] for f in findings if f.get("quarantined")],
+    }
 
 
 @shared_task(

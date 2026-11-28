@@ -6,9 +6,162 @@ failures are returned as dicts, never raised — callers decide whether a
 partial failure is an error (single view) or a summary line (bulk).
 """
 import logging
+import subprocess
 import time
 
 logger = logging.getLogger(__name__)
+
+_PLATFORM_INFRA_PREFIXES = (
+    "smsly-hosting-",
+    "smsly-addon-",
+    "envoy-",
+    "smsly-postgres",
+    "smsly-shared-postgres",
+    "smsly-redis",
+    "smsly-appsec",
+    "smsly-spire",
+    "smsly-loki",
+    "smsly-sablier",
+    "smsly-infisical",
+    "smsly-patroni",
+    "smsly-etcd",
+    "smsly-docker-",
+    "smsly-postgres-exporter",
+)
+
+_PLATFORM_INFRA_EXACT = frozenset({
+    "smsly-falco",
+    "smsly-crowdsec",
+    "smsly-cloudflare-bouncer",
+    "smsly-promtail",
+    "smsly-prometheus",
+    "smsly-cadvisor",
+    "smsly-node-exporter",
+    "smsly-alertmanager",
+    "smsly-pgbackrest",
+    "smsly-mcp-server",
+    "smsly-grafana",
+    "smsly-haproxy",
+})
+
+
+def is_platform_or_infra_container(name: str) -> bool:
+    """True for platform, infra, monitoring, WAF, SPIRE, or addon containers."""
+    clean = (name or "").strip().lstrip("/").lower()
+    if not clean:
+        return False
+    return clean in _PLATFORM_INFRA_EXACT or clean.startswith(_PLATFORM_INFRA_PREFIXES)
+
+
+def _docker_restart_arg(policy_name: str) -> str:
+    """Normalize Service.restart_policy for `docker update --restart=...`."""
+    policy = (policy_name or "").strip().lower()
+    if policy == "on-failure":
+        return "on-failure:5"
+    if policy in ("unless-stopped", "always", "no"):
+        return policy
+    return "unless-stopped"
+
+
+def restore_restart_policy(container_id: str, policy_name: str = "unless-stopped") -> bool:
+    """Best-effort restore of a container's Docker restart policy."""
+    cid = (container_id or "").strip()
+    if not cid:
+        return False
+    arg = _docker_restart_arg(policy_name)
+    try:
+        res = subprocess.run(
+            ["docker", "update", f"--restart={arg}", cid],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        if res.returncode != 0:
+            logger.debug("docker update --restart=%s %s failed: %s", arg, cid, (res.stderr or "").strip())
+            return False
+        return True
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        logger.debug("restore_restart_policy skipped for %s: %s", cid, exc)
+        return False
+
+
+def quarantine_crash_loop_service(service, container_ref: str, reason: str, exit_code=None) -> dict:
+    """Stop a crash-looping tenant container, disarm Docker auto-restart, and
+    mark the service ``needs_manual_intervention``.
+    """
+    from apps.deployments.models import Deployment
+
+    svc_name = getattr(service, "name", "") or ""
+    if is_platform_or_infra_container(svc_name) or is_platform_or_infra_container(container_ref or ""):
+        return {"ok": False, "skipped": True, "quarantined": False, "reason": "platform_or_infra"}
+
+    in_flight = [
+        Deployment.Status.QUEUED,
+        Deployment.Status.REVIEW,
+        Deployment.Status.BUILDING,
+        Deployment.Status.DEPLOYING,
+        Deployment.Status.HEALTH_CHECK,
+    ]
+    if Deployment.objects.filter(service=service, status__in=in_flight).exists():
+        return {"ok": False, "skipped": True, "quarantined": False, "reason": "deployment_in_flight"}
+
+    try:
+        from apps.core.services.health_monitor import _save_container_logs_to_deployment
+        _save_container_logs_to_deployment(service, exit_code=exit_code)
+    except Exception as exc:
+        logger.debug("Pre-quarantine log capture failed for %s: %s", svc_name, exc)
+
+    ref = (container_ref or "").strip()
+    stopped = False
+    if ref:
+        try:
+            subprocess.run(
+                ["docker", "update", "--restart=no", ref],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            stop_res = subprocess.run(
+                ["docker", "stop", "--timeout", "10", ref],
+                capture_output=True,
+                text=True,
+                timeout=25,
+                check=False,
+            )
+            stopped = stop_res.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+            logger.warning("Docker quarantine stop failed for %s (%s): %s", svc_name, ref, exc)
+
+    if getattr(service, "health_status", "") != "needs_manual_intervention":
+        service.health_status = "needs_manual_intervention"
+        service.save(update_fields=["health_status", "updated_at"])
+
+    _audit(
+        "system",
+        "CONTAINER_CRASH_LOOP_QUARANTINED",
+        service,
+        {
+            "container": ref,
+            "reason": reason,
+            "exit_code": exit_code,
+            "stopped": stopped,
+        },
+    )
+
+    try:
+        from apps.core.services.health_monitor import _dispatch_health_alert
+        _dispatch_health_alert(
+            service,
+            "needs_manual_intervention",
+            f"Auto-quarantined crash-looping container: {reason}",
+            exit_code=exit_code,
+        )
+    except Exception as exc:
+        logger.debug("Quarantine alert dispatch failed for %s: %s", svc_name, exc)
+
+    return {"ok": True, "quarantined": True, "stopped": stopped, "container": ref}
 
 
 def _active_container_id(service):
@@ -117,6 +270,10 @@ def start_service(service, actor="system"):
         logger.error("cryptd unlock failed before starting %s: %s", service.name, exc)
         return {'ok': False, 'error': f'Encryption controller refused start (locked): {exc}'}
     try:
+        restore_restart_policy(
+            container_id,
+            getattr(service, "restart_policy", "unless-stopped") or "unless-stopped",
+        )
         from apps.deployments.services.container_runtime import ContainerRuntime
         ContainerRuntime().start_container(container_id)
     except Exception as exc:
@@ -160,6 +317,10 @@ def restart_service(service, actor="system"):
         logger.error("cryptd unlock failed before restarting %s: %s", service.name, exc)
         return {'ok': False, 'error': f'Encryption controller refused restart (locked): {exc}'}
     try:
+        restore_restart_policy(
+            container_id,
+            getattr(service, "restart_policy", "unless-stopped") or "unless-stopped",
+        )
         from apps.deployments.services.container_runtime import ContainerRuntime
         ContainerRuntime().restart_container(container_id)
     except Exception as exc:
@@ -172,6 +333,8 @@ def restart_service(service, actor="system"):
         fields = ['health_status', 'status', 'updated_at']
     service.save(update_fields=fields)
     try:
+        from apps.core.services.health_monitor import reset_restart_state
+        reset_restart_state(str(service.id))
         from django.core.cache import cache
         cache.set(f"health:restart_grace:{service.id}", True, timeout=60)
     except Exception:

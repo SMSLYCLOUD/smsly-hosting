@@ -601,20 +601,25 @@ def _probe_container_state(container_id: str, service=None, runtime_id: str | No
         except Exception:
             pass
     if not container_id:
-        return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": "", "oom_killed": False, "sablier_enrolled": True}
+        return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": "", "oom_killed": False, "sablier_enrolled": True, "failing_streak": 0, "restart_policy": ""}
     try:
         client = get_docker_client()
         container = client.containers.get(container_id)
         attrs = container.attrs or {}
         state = attrs.get("State", {}) or {}
+        host_cfg = attrs.get("HostConfig", {}) or {}
         labels = ((attrs.get("Config") or {}).get("Labels") or {})
         status = (state.get("Status") or "unknown").lower()
         exit_code = state.get("ExitCode")
-        restart_count = int(state.get("RestartCount") or 0)
+        raw_rc = attrs.get("RestartCount")
+        restart_count = int(raw_rc if raw_rc is not None else (state.get("RestartCount") or 0))
         started_at = state.get("StartedAt") or ""
         oom_killed = bool(state.get("OOMKilled", False))
         sablier_enrolled = str(labels.get("sablier.enable", "") or "").strip().lower() == "true"
-        health = ((state.get("Health") or {}).get("Status") or "").lower()
+        health_obj = state.get("Health") or {}
+        health = (health_obj.get("Status") or "").lower()
+        failing_streak = int(health_obj.get("FailingStreak") or 0)
+        restart_policy = str((host_cfg.get("RestartPolicy") or {}).get("Name") or "").lower()
         return {
             "status": status,
             "health": health,
@@ -623,11 +628,13 @@ def _probe_container_state(container_id: str, service=None, runtime_id: str | No
             "started_at": started_at,
             "oom_killed": oom_killed,
             "sablier_enrolled": sablier_enrolled,
+            "failing_streak": failing_streak,
+            "restart_policy": restart_policy,
         }
     except docker.errors.NotFound:
-        return {"status": "not-found", "exit_code": None, "restart_count": 0, "started_at": "", "oom_killed": False, "sablier_enrolled": False}
+        return {"status": "not-found", "exit_code": None, "restart_count": 0, "started_at": "", "oom_killed": False, "sablier_enrolled": False, "failing_streak": 0, "restart_policy": ""}
     except Exception:
-        return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": "", "oom_killed": False, "sablier_enrolled": True}
+        return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": "", "oom_killed": False, "sablier_enrolled": True, "failing_streak": 0, "restart_policy": ""}
 
 
 def _probe_remote_container_state(server, service, container_ref: str) -> dict:
@@ -710,6 +717,12 @@ def _check_service_health(service: object, Deployment: object) -> None:
             service.health_status = "standby"
             service.save(update_fields=["health_status", "updated_at"])
         _clear_state(service_key, clear_restart=True)
+        return
+    if (
+        getattr(service, "health_status", "") == "needs_manual_intervention"
+        and state in {"exited", "dead"}
+        and state_info.get("restart_policy") == "no"
+    ):
         return
     is_crashed = state in {"exited", "dead", "not-found", "restarting"}
 
@@ -997,6 +1010,11 @@ def _should_restart(service, service_key: str) -> bool:
                 restart_count,
                 MAX_AUTO_RESTARTS,
             )
+            if service.health_status != "needs_manual_intervention":
+                _quarantine_if_looping(
+                    service,
+                    f"Auto-restart cap reached ({restart_count}/{MAX_AUTO_RESTARTS})",
+                )
             return False
 
     if restart_count == 0:
@@ -1079,6 +1097,28 @@ def _dispatch_health_alert(service, health_status: str, reason: str, exit_code=N
         logger.warning("Failed to dispatch health alert for %s: %s", service.name, exc)
 
 
+def _quarantine_if_looping(service, reason: str, exit_code=None) -> None:
+    """Quarantine actively restarting containers or mark needs_manual_intervention."""
+    state_info = cache.get(_container_state_key(str(service.id)))
+    is_loop = bool(
+        state_info
+        and isinstance(state_info, dict)
+        and (state_info.get("state") == "restarting" or state_info.get("restart_loop"))
+    )
+    if is_loop:
+        from apps.deployments.services.power import _active_container_id, quarantine_crash_loop_service
+        container_ref = _active_container_id(service) or service.name
+        if exit_code is None:
+            exit_code = state_info.get("exit_code")
+        res = quarantine_crash_loop_service(service, container_ref, reason=reason, exit_code=exit_code)
+        if res.get("quarantined"):
+            return
+    if service.health_status != "needs_manual_intervention":
+        service.health_status = "needs_manual_intervention"
+        service.save(update_fields=["health_status", "updated_at"])
+        _dispatch_health_alert(service, "needs_manual_intervention", reason, exit_code=exit_code)
+
+
 def _trigger_restart(service, service_key: str) -> bool:
     """Queue a deployment restart if safe to do so."""
     try:
@@ -1108,10 +1148,8 @@ def _trigger_restart(service, service_key: str) -> bool:
                     service.name, last_fallback_id,
                 )
                 if service.health_status != "needs_manual_intervention":
-                    service.health_status = "needs_manual_intervention"
-                    service.save(update_fields=["health_status", "updated_at"])
-                    _dispatch_health_alert(
-                        service, "needs_manual_intervention",
+                    _quarantine_if_looping(
+                        service,
                         f"Previous fallback deployment {last_fallback_id} failed",
                     )
                 return False
@@ -1171,10 +1209,8 @@ def _trigger_restart(service, service_key: str) -> bool:
                     f"health check restart aborted"
                 ),
             )
-            service.health_status = "needs_manual_intervention"
-            service.save(update_fields=["health_status", "updated_at"])
-            _dispatch_health_alert(
-                service, "needs_manual_intervention",
+            _quarantine_if_looping(
+                service,
                 f"{recent_failures} deployments failed in the last "
                 f"{AUTO_ROLLBACK_WINDOW_MINUTES} min; auto-rollback triggered",
             )
@@ -1195,10 +1231,8 @@ def _trigger_restart(service, service_key: str) -> bool:
                     service.name, last_fallback_id,
                 )
                 if service.health_status != "needs_manual_intervention":
-                    service.health_status = "needs_manual_intervention"
-                    service.save(update_fields=["health_status", "updated_at"])
-                    _dispatch_health_alert(
-                        service, "needs_manual_intervention",
+                    _quarantine_if_looping(
+                        service,
                         f"Previous fallback deployment {last_fallback_id} failed",
                     )
                 return False
@@ -1216,10 +1250,8 @@ def _trigger_restart(service, service_key: str) -> bool:
                 service.id,
             )
             if service.health_status != "needs_manual_intervention":
-                service.health_status = "needs_manual_intervention"
-                service.save(update_fields=["health_status", "updated_at"])
-                _dispatch_health_alert(
-                    service, "needs_manual_intervention",
+                _quarantine_if_looping(
+                    service,
                     "No successful deployment available to fall back to",
                 )
             return False

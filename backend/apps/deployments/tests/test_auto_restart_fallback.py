@@ -49,7 +49,7 @@ class AutoRestartFallbackTests(TestCase):
         hm.reset_restart_state(str(self.service.id))
         cache.clear()
 
-    @patch("apps.deployments.tasks.enqueue_smart_deploy_task")
+    @patch("apps.deployments.tasks.deployment.tasks_deploy.enqueue_smart_deploy_task")
     def test_no_successful_deploys_skips_auto_restart(self, deploy_delay_mock):
         """
         With zero ACTIVE deployments we must NOT queue a new deployment.
@@ -74,7 +74,7 @@ class AutoRestartFallbackTests(TestCase):
         self.service.refresh_from_db()
         self.assertEqual(self.service.health_status, "needs_manual_intervention")
 
-    @patch("apps.deployments.tasks.enqueue_smart_deploy_task")
+    @patch("apps.deployments.tasks.deployment.tasks_deploy.enqueue_smart_deploy_task")
     def test_falls_back_to_last_successful_commit(self, deploy_delay_mock):
         """
         1 successful deploy (commit A) and 1 failed deploy (commit B).
@@ -103,7 +103,7 @@ class AutoRestartFallbackTests(TestCase):
         new_deploy = Deployment.objects.get(id=new_deploy_id)
         self.assertEqual(new_deploy.commit_hash, "commitA")
 
-    @patch("apps.deployments.tasks.enqueue_smart_deploy_task")
+    @patch("apps.deployments.tasks.deployment.tasks_deploy.enqueue_smart_deploy_task")
     def test_fallback_commit_failure_marks_manual_intervention(
         self, deploy_delay_mock
     ):
