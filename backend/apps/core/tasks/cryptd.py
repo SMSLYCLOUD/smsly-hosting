@@ -57,4 +57,18 @@ def sync_cryptd_leases_task() -> dict:
             errors += 1
             logger.debug("cryptd sync failed for service %s: %s", svc.id, exc)
 
+    if errors:
+        logger.warning(
+            "grid-cryptd lease sync completed with errors (synced=%d, locked=%d, errors=%d)",
+            synced,
+            locked,
+            errors,
+        )
+    elif synced or locked:
+        logger.info(
+            "grid-cryptd lease sync completed (synced=%d, locked=%d)",
+            synced,
+            locked,
+        )
+
     return {"synced": synced, "locked": locked, "errors": errors}

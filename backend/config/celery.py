@@ -270,6 +270,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks.ai.tasks_code_intelligence.deep_scan_and_verify_task': {'queue': 'deploy'},
     'apps.deployments.tasks.check_agent_heartbeats_task': {'queue': 'fast'},
     'apps.deployments.tasks.cicd.tasks_commit_status.update_commit_status': {'queue': 'fast'},
+    'apps.core.tasks.cryptd.sync_cryptd_leases_task': {'queue': 'fast'},
 }
 
 def _beat_interval_seconds(config_field, env_name, default):
@@ -915,11 +916,13 @@ app.conf.beat_schedule = {
         'schedule': crontab(minute=15, hour=3, day_of_week=0),
         'options': {'expires': 86400.0},
     },
-    # Opt-in grid-cryptd lease renewal & epoch status heartbeat every 15 minutes
+    # Opt-in grid-cryptd lease renewal & epoch status heartbeat every 5 minutes
+    # on the 'fast' queue so heavy build/deploy queues never starve lease renewal
+    # and cause active services to hit 2h lease TTL expiry.
     'sync-cryptd-leases-every-15m': {
         'task': 'apps.core.tasks.cryptd.sync_cryptd_leases_task',
-        'schedule': 900.0,
-        'options': {'expires': 900.0},
+        'schedule': 300.0,
+        'options': {'expires': 300.0, 'queue': 'fast'},
     },
     # AEON CORE / OCSF telemetry normalization & Threat Intel matching every 10 minutes
     'sync-security-telemetry-every-10m': {
@@ -998,3 +1001,17 @@ def on_task_prerun(**kwargs):
 @signals.task_postrun.connect
 def on_task_postrun(**kwargs):
     close_old_connections()
+
+
+@signals.worker_ready.connect
+def on_worker_ready_sync_cryptd_leases(sender=None, **kwargs):  # pylint: disable=unused-argument
+    """Immediately renew grid-cryptd leases on worker boot so restarts never leave active services locked."""
+    try:
+        from apps.core.crypto_daemon import cryptd_client
+        if not cryptd_client.is_enabled():
+            return
+        from apps.core.tasks.cryptd import sync_cryptd_leases_task
+        sync_cryptd_leases_task.apply_async(queue="fast", expires=300.0)
+        logger.info("Dispatched startup sync_cryptd_leases_task on fast queue")
+    except Exception as exc:
+        logger.debug("Startup sync_cryptd_leases_task dispatch skipped: %s", exc)
