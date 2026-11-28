@@ -352,6 +352,7 @@ class SecurityStatusView(GenericAPIView):
             "envoy_running": False, "policy_mode": "unknown",
             "mode_configured": str(getattr(config, "openappsec_mode", "prevent") or "prevent"),
             "verdicts_recent": False, "shadow_port": 18081,
+            "inline_port": 8082, "inline_connected": False,
         }
         try:
             import os
@@ -608,6 +609,7 @@ class SecurityStatusView(GenericAPIView):
                 _cf_text = _cf.read()
             coraza["snippet_present"] = "(coraza_waf)" in _cf_text
             coraza["site_imports"] = _cf_text.count("import coraza_waf")
+            openappsec["inline_connected"] = "appsec-agent:8082" in _cf_text
         except OSError:
             pass
         try:

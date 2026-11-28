@@ -306,37 +306,32 @@ def scan_recent_builds_for_corruption(self):
     time_limit=TASK_TIME_LIMIT_STANDARD[1],
 )
 def ensure_migrations_applied(self):
-    """Detect and apply pending migrations.
-
-    ROOT CAUSE of the 2026-09-02 multi-outage: migration 0196
-    (media_repo_url) was committed but never applied on the VPS. The
-    PlatformConfig table was missing a column → every ORM query hit
-    ProgrammingError → the config loader fell to its ghost path →
-    empty domain → Caddyfile lost the platform block → 525 → custom
-    domains demoted. A simple `manage.py migrate` at startup would
-    have prevented ALL of it.
-
-    This task:
-      1. Runs `manage.py migrate --check` to detect pending migrations
-      2. If pending: runs `manage.py migrate` (noinput)
-      3. Reports the result
-
-    Beat: every 5 minutes (cheap when no-op).
-    """
+    """Detect and apply pending migrations in-process without 5m Python subprocess forks."""
     import subprocess
+    from django.core.cache import cache
+    from django.db import DEFAULT_DB_ALIAS, connections
+    from django.db.migrations.executor import MigrationExecutor
+
+    stamp_key = "smsly:migrations_verified_ok"
+    try:
+        if cache.get(stamp_key):
+            return {"status": "ok", "migrations": "up_to_date"}
+    except Exception:
+        pass
 
     try:
-        # Check for pending migrations
-        check = subprocess.run(
-            ["python", "manage.py", "migrate", "--check", "--noinput"],
-            capture_output=True, text=True, timeout=60,
-            cwd="/app",
-        )
-        if check.returncode == 0:
+        connection = connections[DEFAULT_DB_ALIAS]
+        executor = MigrationExecutor(connection)
+        plan = executor.migration_plan(executor.loader.graph.leaf_nodes())
+        if not plan:
+            try:
+                cache.set(stamp_key, "1", timeout=3600)
+            except Exception:
+                pass
             return {"status": "ok", "migrations": "up_to_date"}
 
         # Pending migrations — apply them
-        logger.warning("Pending migrations detected — applying automatically")
+        logger.warning("Pending migrations detected (%d) — applying automatically", len(plan))
         migrate = subprocess.run(
             ["python", "manage.py", "migrate", "--noinput"],
             capture_output=True, text=True, timeout=120,
@@ -344,6 +339,10 @@ def ensure_migrations_applied(self):
         )
         if migrate.returncode == 0:
             logger.info("Migrations applied successfully")
+            try:
+                cache.set(stamp_key, "1", timeout=3600)
+            except Exception:
+                pass
             # Clear PlatformConfig cache so the fresh schema is used
             from apps.deployments.models import PlatformConfig
             PlatformConfig.clear_cache()

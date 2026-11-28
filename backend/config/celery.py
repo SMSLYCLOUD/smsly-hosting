@@ -709,8 +709,8 @@ app.conf.beat_schedule = {
     # raced the enqueue in add/remove_peer_from_mesh).
     'mesh-dns-sync-every-5min': {
         'task': 'apps.deployments.tasks.infra.tasks_mesh_dns.sync_mesh_dns_task',
-        'schedule': 60.0,
-        'options': {'expires': 60.0},
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
     },
     # WAF policy converge every 5 minutes: Settings (PlatformConfig
     # .openappsec_mode) is the desired state, the agent's
@@ -720,11 +720,11 @@ app.conf.beat_schedule = {
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
-    # Leader election heartbeat every 5 seconds
+    # Leader election heartbeat every 15 seconds (was 5s)
     'cluster-heartbeat-every-5s': {
         'task': 'apps.deployments.tasks_election.heartbeat_task',
-        'schedule': 5.0,
-        'options': {'expires': 10.0},
+        'schedule': 15.0,
+        'options': {'expires': 15.0},
     },
     # Cleanup old heartbeat logs every 10 minutes (deterministic)
     'cleanup-heartbeat-logs-every-10m': {
@@ -797,8 +797,8 @@ app.conf.beat_schedule = {
     # Auto-scaling analysis — single authoritative sweep (batched + ACTIVE only)
     'auto-scaling-analyze-every-3m': {
         'task': 'apps.autoscaler.services.tasks_autoscale.analyze_all_services_task',
-        'schedule': 60.0,
-        'options': {'expires': 60.0},
+        'schedule': 180.0,
+        'options': {'expires': 180.0},
     },
     # Run scheduled backups every 1 minute
     'run-scheduled-backups-every-1m': {
@@ -975,6 +975,12 @@ if os.environ.get('SMSLY_ENABLE_MEDIA_NODES'):
         'apps.media.tasks.process_media_heartbeat': {'queue': 'media-telemetry'},
         'apps.media.tasks.restart_media_node_services_task': {'queue': 'deploy'},
     })
+
+# Periodic beat tasks do not return results to callers; avoid flooding
+# django-celery-results with ~60k+ TaskResult rows/day.
+for _beat_entry in app.conf.beat_schedule.values():
+    _opts = _beat_entry.setdefault('options', {})
+    _opts.setdefault('ignore_result', True)
 
 
 @app.task(bind=True, ignore_result=True)

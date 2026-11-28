@@ -44,6 +44,7 @@ import { ResourceAlerts } from '@/components/dashboard/ResourceAlerts';
 import { LogsView } from '@/components/logs/LogsView';
 import { GrafanaEmbed } from '@/components/observability/GrafanaEmbed';
 import { TopologyView } from '@/components/topology/TopologyView';
+import { startVisibilityInterval } from '@/lib/visibilityInterval';
 
 const XtermConsole = dynamic(() => import('@/components/terminal/XtermConsole'), { ssr: false });
 type ServiceEnvMap = Record<string, { id: number; value: string }>;
@@ -411,24 +412,36 @@ export default function ServiceDetailPage() {
         load();
     }, [id]);
 
+    const activeTabRef = useRef(activeTab);
+    activeTabRef.current = activeTab;
+    const lastDeploymentRef = useRef<{ id?: string; status?: string }>({});
+
     useEffect(() => {
         let stopped = false;
         const refresh = async () => {
             if (stopped) return;
-            // Background tabs don't need 3s freshness — skip the tick
-            // (the interval fires again when visible). Saves a full
-            // service+deployment fetch per hidden tab per tick.
-            if (typeof document !== 'undefined' && document.hidden) return;
             try {
                 const s = await servicesApi.get(id);
                 if (stopped) return;
                 setService(s);
                 if (s.latest_deployment) {
-                    // Tailed: status/progress polling doesn't need MBs of
-                    // logs (the Logs tab streams live lines over WS and
-                    // fetches its own tails).
-                    const d = await servicesApi.getDeployment(s.latest_deployment.id, 20000);
-                    if (!stopped) setDeployment(d);
+                    const depId = s.latest_deployment.id;
+                    const depStatus = s.latest_deployment.status;
+                    const isSettled = ['ACTIVE', 'FAILED', 'CANCELLED', 'SUPERSEDED'].includes(depStatus);
+                    const needsLogsTab = activeTabRef.current === 'build' || activeTabRef.current === 'logs';
+                    const changed =
+                        lastDeploymentRef.current.id !== depId ||
+                        lastDeploymentRef.current.status !== depStatus;
+                    if (!isSettled || needsLogsTab || changed) {
+                        // Tailed: status/progress polling doesn't need MBs of
+                        // logs (the Logs tab streams live lines over WS and
+                        // fetches its own tails).
+                        const d = await servicesApi.getDeployment(depId, 20000);
+                        if (!stopped) {
+                            setDeployment(d);
+                            lastDeploymentRef.current = { id: depId, status: d.status || depStatus };
+                        }
+                    }
                 }
             } catch (err: any) {
                 if (err?.response?.status === 404) {
@@ -437,8 +450,11 @@ export default function ServiceDetailPage() {
                 }
             }
         };
-        const interval = setInterval(refresh, 3000);
-        return () => { stopped = true; clearInterval(interval); };
+        const stopPolling = startVisibilityInterval(refresh, 3000);
+        return () => {
+            stopped = true;
+            stopPolling();
+        };
     }, [id]);
 
     useEffect(() => {

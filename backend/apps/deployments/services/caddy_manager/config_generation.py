@@ -7,7 +7,7 @@ from apps.domains.utils import normalize_domain
 from django.conf import settings
 
 from .tls import _generate_selfsigned_cert, sanitize_cloudflare_token
-from .upstream import _remote_upstream_url_for_service, _service_proxy_upstream
+from .upstream import INLINE_WAF_UPSTREAM, _remote_upstream_url_for_service, _service_proxy_upstream
 from .utils import _is_ip, _table_exists, is_agent_lite
 
 logger = logging.getLogger(__name__)
@@ -490,13 +490,27 @@ def _append_reverse_proxy(
     sablier_enabled: bool = False,
 ):
     upstream_url = upstream_url or _service_proxy_upstream()
-    has_fallbacks = len(str(upstream_url).split()) > 1
+    parts = str(upstream_url).split()
+    has_fallbacks = len(parts) > 1
+    is_inline_waf_failover = bool(
+        has_fallbacks and INLINE_WAF_UPSTREAM and parts[0] == INLINE_WAF_UPSTREAM
+    )
     is_remote_upstream = "://" in str(upstream_url)
     is_fallback_route = str(upstream_url).strip() == "route-fallback:80"
     sab_retry = bool(sablier_enabled) and not is_fallback_route
     if upstream_host or has_fallbacks or is_remote_upstream or sab_retry:
         lines.append(f"    reverse_proxy {upstream_url} {{")
-        if has_fallbacks:
+        if is_inline_waf_failover:
+            lines.append("        lb_policy first")
+            lines.append("        fail_duration 15s")
+            lines.append("        max_fails 1")
+            if sab_retry:
+                lines.append("        lb_try_duration 60s")
+                lines.append("        lb_try_interval 1s")
+            else:
+                lines.append("        lb_try_duration 3s")
+                lines.append("        lb_try_interval 250ms")
+        elif has_fallbacks:
             lines.append("        lb_policy round_robin")
             lines.append("        fail_duration 15s")
             lines.append("        max_fails 2")
@@ -517,6 +531,10 @@ def _append_reverse_proxy(
             lines.append("        transport http {")
             lines.append("            tls")
             lines.append(f"            tls_server_name {upstream_host}")
+            lines.append("        }")
+        elif is_inline_waf_failover:
+            lines.append("        transport http {")
+            lines.append("            dial_timeout 1s")
             lines.append("        }")
         lines.append("    }")
     else:
@@ -713,7 +731,8 @@ def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: st
                            path_redirect_rules: list[tuple[str, str, str, str]] | None = None,
                            edge_jwt_required: bool = False, waf_opt_out: bool = False,
                            crowdsec_enabled: bool = False,
-                           sablier_enabled: bool = False) -> str:
+                           sablier_enabled: bool = False,
+                           openappsec_inline: bool = False) -> str:
     """Caddyfile site block for a host alias (accounts.google.com pattern).
 
     Semantics (from Service.host_aliases help_text):
@@ -778,6 +797,9 @@ def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: st
     # included — alias blocks never had them.
     if path_redirect_rules:
         lines.extend(_path_redirect_site_lines(path_redirect_rules, site_domain=alias_host))
+    effective_upstream = upstream_url or _service_proxy_upstream(
+        openappsec_inline=openappsec_inline, waf_opt_out=waf_opt_out,
+    )
     if rewrite_root and rewrite_root != "/":
         lines.extend([
             "    @alias_root path /",
@@ -785,12 +807,12 @@ def _build_host_alias_block(alias_host: str, rewrite_root: str, upstream_url: st
             f"        rewrite * {rewrite_root}",
         ])
         before = len(lines)
-        _append_reverse_proxy(lines, upstream_url, host_header, sablier_enabled=sablier_enabled)
+        _append_reverse_proxy(lines, effective_upstream, host_header, sablier_enabled=sablier_enabled)
         for i in range(before, len(lines)):
             lines[i] = "    " + lines[i]
         lines.append("    }")
     lines.append("    handle {")
-    _append_reverse_proxy(lines, upstream_url, host_header, sablier_enabled=sablier_enabled)
+    _append_reverse_proxy(lines, effective_upstream, host_header, sablier_enabled=sablier_enabled)
     lines.append("    }")
     lines.extend(["    encode gzip", "}"])
     return "\n".join(lines)
@@ -805,6 +827,7 @@ def _build_service_domain_block(
     waf_opt_out: bool = False,
     crowdsec_enabled: bool = False,
     sablier_enabled: bool = False,
+    openappsec_inline: bool = False,
 ) -> str:
     lines = [f"{domain} {{"]
 
@@ -834,12 +857,15 @@ def _build_service_domain_block(
         ])
         lines.extend(EDGE_JWT_FORWARD_AUTH_LINES)
 
+    _proxy = _service_proxy_upstream(
+        openappsec_inline=openappsec_inline, waf_opt_out=waf_opt_out,
+    )
     if upstream_url:
         _append_reverse_proxy(lines, upstream_url, upstream_host or domain, sablier_enabled=sablier_enabled)
     elif upstream_host and upstream_host != domain:
-        _append_reverse_proxy(lines, _service_proxy_upstream(), upstream_host, sablier_enabled=sablier_enabled)
+        _append_reverse_proxy(lines, _proxy, upstream_host, sablier_enabled=sablier_enabled)
     else:
-        _append_reverse_proxy(lines, _service_proxy_upstream(), sablier_enabled=sablier_enabled)
+        _append_reverse_proxy(lines, _proxy, sablier_enabled=sablier_enabled)
 
     lines.extend(
         [
@@ -868,7 +894,11 @@ def _www_apex_redirect_target(value: str, verified_set: set[str]) -> str:
     return ""
 
 
-def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool = False) -> list:
+def _get_service_domain_blocks(
+    wildcard_domain: str = "",
+    crowdsec_enabled: bool = False,
+    openappsec_inline: bool = False,
+) -> list:
     blocks = []
     seen = set()
 
@@ -957,6 +987,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool
                             waf_opt_out=bool(getattr(service, "waf_opt_out", False)),
                             crowdsec_enabled=crowdsec_enabled,
                             sablier_enabled=sab_active,
+                            openappsec_inline=openappsec_inline,
                         )
                     )
 
@@ -1068,12 +1099,16 @@ def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool
                     lines.append("    }")
 
                     upstream_url = effective_remote_upstream
+                    _custom_waf_opt_out = bool(getattr(service, "waf_opt_out", False))
+                    _custom_proxy = _service_proxy_upstream(
+                        openappsec_inline=openappsec_inline, waf_opt_out=_custom_waf_opt_out,
+                    )
                     if upstream_url:
                         _append_reverse_proxy(lines, upstream_url, target_host or value, sablier_enabled=sab_active)
                     elif target_host and target_host != value:
-                        _append_reverse_proxy(lines, _service_proxy_upstream(), target_host, sablier_enabled=sab_active)
+                        _append_reverse_proxy(lines, _custom_proxy, target_host, sablier_enabled=sab_active)
                     else:
-                        _append_reverse_proxy(lines, _service_proxy_upstream(), sablier_enabled=sab_active)
+                        _append_reverse_proxy(lines, _custom_proxy, sablier_enabled=sab_active)
                     lines.append("    encode gzip")
                     lines.append("}")
                     blocks.append("\n".join(lines))
@@ -1111,6 +1146,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool
                     waf_opt_out=bool(getattr(service, "waf_opt_out", False)),
                     crowdsec_enabled=crowdsec_enabled,
                     sablier_enabled=sab_active,
+                    openappsec_inline=openappsec_inline,
                 ))
 
             # Custom staging domain: only route if this service has an active
@@ -1149,7 +1185,10 @@ def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool
                                 "        import coraza_waf",
                                 "    }",
                             ])
-                            lines.append("    reverse_proxy traefik:80")
+                            _append_reverse_proxy(
+                                lines,
+                                _service_proxy_upstream(openappsec_inline=openappsec_inline),
+                            )
                             lines.append("    encode gzip")
                             lines.append("}")
                             blocks.append("\n".join(lines))
@@ -1171,6 +1210,10 @@ def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool
                     )
                 else:
                     _addon_cs = "\n    crowdsec" if crowdsec_enabled else ""
+                    _addon_proxy = _service_proxy_upstream(openappsec_inline=openappsec_inline)
+                    _addon_proxy_lines = []
+                    _append_reverse_proxy(_addon_proxy_lines, _addon_proxy)
+                    _addon_proxy_block = "\n".join(_addon_proxy_lines)
                     blocks.append(
                         f"""{public_domain} {{
     import secure_headers{_addon_cs}
@@ -1180,7 +1223,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "", crowdsec_enabled: bool
         request_header -X-Edge-Scope
         import coraza_waf
     }}
-    reverse_proxy {_service_proxy_upstream()}
+{_addon_proxy_block}
 }}"""
                     )
                     seen.add(public_domain)
@@ -2416,6 +2459,7 @@ def generate_caddyfile(config) -> str:
 
     _crowdsec_key = _resolve_crowdsec_bouncer_key(config)
     _crowdsec_active = bool(getattr(config, "enable_crowdsec_waf", False) and _crowdsec_key)
+    _openappsec_inline = bool(getattr(config, "openappsec_enabled", False)) and not is_agent_lite()
 
     _ask_secret = str(os.environ.get("CADDY_ASK_SECRET", "") or "").strip()
     if not _ask_secret:
@@ -2604,7 +2648,16 @@ def generate_caddyfile(config) -> str:
                 "        reverse_proxy frontend:3000",
                 "    }",
                 "    handle /grafana/* {",
-                "        reverse_proxy grafana:3000",
+                "        reverse_proxy grafana:3000 backend:8000 {",
+                "            lb_policy first",
+                "            fail_duration 10s",
+                "            max_fails 1",
+                "            lb_try_duration 2s",
+                "            lb_try_interval 250ms",
+                "            transport http {",
+                "                dial_timeout 1s",
+                "            }",
+                "        }",
                 "    }",
                 "    handle /ui {",
                 "        redir / 301",
@@ -2972,11 +3025,18 @@ def generate_caddyfile(config) -> str:
                         "            request_header -X-User-Id",
                         "            request_header -X-Edge-Scope",
                         "            import coraza_waf",
-                        f"            reverse_proxy {_service_proxy_upstream()}",
-                        "        }",
-                        "    }",
                     ]
                 )
+                _wc_proxy_lines: list[str] = []
+                _append_reverse_proxy(
+                    _wc_proxy_lines,
+                    _service_proxy_upstream(openappsec_inline=_openappsec_inline),
+                )
+                wildcard_lines.extend("        " + ln for ln in _wc_proxy_lines)
+                wildcard_lines.extend([
+                    "        }",
+                    "    }",
+                ])
 
             wildcard_lines.extend(
                 [
@@ -3200,7 +3260,16 @@ def generate_caddyfile(config) -> str:
         reverse_proxy backend:8000
     }
     handle /grafana/* {
-        reverse_proxy grafana:3000
+        reverse_proxy grafana:3000 backend:8000 {
+            lb_policy first
+            fail_duration 10s
+            max_fails 1
+            lb_try_duration 2s
+            lb_try_interval 250ms
+            transport http {
+                dial_timeout 1s
+            }
+        }
     }
     handle /grafana {
         reverse_proxy frontend:3000
@@ -3250,7 +3319,16 @@ def generate_caddyfile(config) -> str:
         reverse_proxy backend:8000
     }
     handle /grafana/* {
-        reverse_proxy grafana:3000
+        reverse_proxy grafana:3000 backend:8000 {
+            lb_policy first
+            fail_duration 10s
+            max_fails 1
+            lb_try_duration 2s
+            lb_try_interval 250ms
+            transport http {
+                dial_timeout 1s
+            }
+        }
     }
     handle /grafana {
         reverse_proxy frontend:3000
@@ -3270,6 +3348,7 @@ def generate_caddyfile(config) -> str:
     service_blocks = _get_service_domain_blocks(
         wildcard_domain=wildcard_base,
         crowdsec_enabled=_crowdsec_active,
+        openappsec_inline=_openappsec_inline,
     )
     sections.extend(service_blocks)
 

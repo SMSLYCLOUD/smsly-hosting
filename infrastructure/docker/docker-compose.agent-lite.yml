@@ -123,6 +123,7 @@ services:
   # RabbitMQ (Local message broker for Celery workers)
   # ============================================================
   rabbitmq:
+    profiles: ["amqp"]
     image: rabbitmq:3-management-alpine
     restart: unless-stopped
     extra_hosts:
@@ -187,8 +188,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
     volumes:
       # Deploy/build paths mirrored from prod: builders write here and
       # staticfiles/media must persist across recreates.
@@ -251,8 +250,6 @@ services:
       socket-proxy:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      rabbitmq:
         condition: service_healthy
     volumes:
       - static_volume:/app/staticfiles

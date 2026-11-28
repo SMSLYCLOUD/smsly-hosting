@@ -185,6 +185,13 @@ class CookieAwareTokenAuthentication(TokenAuthentication):
                 # sees the original (headerless) state.
                 request = getattr(request, "_request", request)
                 request.META = {**request.META, "HTTP_AUTHORIZATION": f"Token {cookie_token}"}
+                cached = getattr(request, "_cached_drf_token_auth", None)
+                if cached and len(cached) == 3 and cached[0] == cookie_token:
+                    return (cached[1], cached[2])
+        raw_django_req = getattr(request, "_request", request)
+        cached = getattr(raw_django_req, "_cached_drf_token_auth", None)
+        if cached and len(cached) == 3 and auth_header == f"Token {cached[0]}":
+            return (cached[1], cached[2])
         return super().authenticate(request)
 
     def authenticate_header(self, request):

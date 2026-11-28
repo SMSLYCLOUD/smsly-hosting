@@ -6,6 +6,7 @@ from .utils import _normalize_upstream_ip
 logger = logging.getLogger(__name__)
 
 SERVICE_PROXY_UPSTREAM = os.environ.get("SMSLY_SERVICE_PROXY_UPSTREAM", "traefik:80")
+INLINE_WAF_UPSTREAM = os.environ.get("SMSLY_INLINE_WAF_UPSTREAM", "appsec-agent:8082")
 
 
 def _remote_server_mesh_ip(server) -> str:
@@ -101,5 +102,19 @@ def _remote_upstream_url_for_service(service) -> str:
     return " ".join(upstreams)
 
 
-def _service_proxy_upstream() -> str:
-    return SERVICE_PROXY_UPSTREAM or "traefik:80"
+def _service_proxy_upstream(
+    *,
+    openappsec_inline: bool = False,
+    waf_opt_out: bool = False,
+) -> str:
+    base = SERVICE_PROXY_UPSTREAM or "traefik:80"
+    if openappsec_inline and not waf_opt_out:
+        try:
+            from .utils import is_agent_lite
+            if is_agent_lite():
+                return base
+        except Exception:
+            pass
+        if INLINE_WAF_UPSTREAM and INLINE_WAF_UPSTREAM not in base:
+            return f"{INLINE_WAF_UPSTREAM} {base}"
+    return base

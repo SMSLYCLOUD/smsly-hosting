@@ -44,8 +44,9 @@ SHARED_CONTAINER = "smsly-shared-postgres"
 SHARED_VOLUME = "smsly-shared-postgres-data"
 SHARED_IMAGE = "pgvector/pgvector:pg16"
 SHARED_PORT = 5432
-SHARED_MAX_CONNECTIONS = 600
+SHARED_MAX_CONNECTIONS = int(os.environ.get("SHARED_POSTGRES_MAX_CONNECTIONS", "200"))
 SHARED_RESERVED_CONNECTIONS = 10
+SHARED_POSTGRES_MEMORY_LIMIT = os.environ.get("SHARED_POSTGRES_MEMORY_LIMIT", "512m")
 # Passed as `postgres -c` flags on BOTH primary and standby: command-line
 # settings do not replicate, and recovery refuses to start when the
 # standby's max_connections is lower than the primary's (observed live).
@@ -233,6 +234,9 @@ def ensure_shared_server() -> str:
                  "--name", SHARED_CONTAINER,
                  "--network", "smsly-net",
                  "--restart", "unless-stopped",
+                 "--memory", SHARED_POSTGRES_MEMORY_LIMIT,
+                 "--log-opt", "max-size=10m",
+                 "--log-opt", "max-file=3",
                  "--env-file", env_file,
                  "-v", f"{SHARED_VOLUME}:/var/lib/postgresql/data",
                  "-v", f"{SHARED_TLS_VOLUME}:{SHARED_TLS_MOUNT}:ro",
@@ -445,6 +449,9 @@ def ensure_shared_standby(reseed: bool = False) -> str:
                 ["docker", "run", "-d", "--name", SHARED_STANDBY,
                  "--network", "smsly-net",
                  "--restart", "unless-stopped",
+                 "--memory", SHARED_POSTGRES_MEMORY_LIMIT,
+                 "--log-opt", "max-size=10m",
+                 "--log-opt", "max-file=3",
                  "--env-file", env_file,
                  "-v", f"{volume}:/var/lib/postgresql/data",
                  "-v", f"{SHARED_STANDBY_TLS_VOLUME}:{SHARED_TLS_MOUNT}:ro",

@@ -5,6 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { formatDistanceToNow } from 'date-fns';
 import { notificationsApi } from '@/lib/api';
+import { startVisibilityInterval } from '@/lib/visibilityInterval';
 
 export function NotificationsDropdown() {
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -23,8 +24,7 @@ export function NotificationsDropdown() {
 
   useEffect(() => {
     fetchNotifications();
-    const interval = setInterval(fetchNotifications, 60000); // Poll every minute
-    return () => clearInterval(interval);
+    return startVisibilityInterval(fetchNotifications, 60000); // Poll every minute when visible
   }, []);
 
   const handleMarkRead = async (id: string) => {

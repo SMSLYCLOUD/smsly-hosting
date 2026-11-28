@@ -1938,6 +1938,9 @@ class AddonProvisioner:
             '--name', container_name,
             '--network', self.network_name,
             '--restart', 'unless-stopped',
+            '--memory', str(os.environ.get('ADDON_RABBITMQ_MEMORY_LIMIT', '512m')),
+            '--log-opt', 'max-size=10m',
+            '--log-opt', 'max-file=3',
             *self.SECURITY_OPTS,
             '--env-file', env_file,
             '-v', f'{container_name}-data:/data',
@@ -2219,11 +2222,19 @@ metrics = false
                 continue
             non_secret_env_flags.extend(['-e', f'{_k}={_v}'])
 
+        mem_limit = str(
+            config.get('memory_limit')
+            or os.environ.get('ADDON_DEFAULT_MEMORY_LIMIT')
+            or ('512m' if addon_type.upper() in ('POSTGRES', 'MYSQL', 'MONGODB', 'ELASTICSEARCH', 'CLICKHOUSE', 'KAFKA', 'RABBITMQ') else '256m')
+        )
         cmd = [
             'docker', 'run', '-d',
             '--name', container_name,
             '--network', self.network_name,
             '--restart', 'unless-stopped',
+            '--memory', mem_limit,
+            '--log-opt', 'max-size=10m',
+            '--log-opt', 'max-file=3',
             *self.SECURITY_OPTS,
             '--env-file', env_file,
             *non_secret_env_flags,

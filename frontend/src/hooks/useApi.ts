@@ -67,9 +67,12 @@ export function useApi<T>(url: string | null, options?: UseApiOptions): UseApiRe
 
     run();
 
-    // Polling
+    // Polling (pause ticks while tab is hidden)
     const interval = options?.refreshInterval
-      ? setInterval(run, options.refreshInterval)
+      ? setInterval(() => {
+          if (typeof document !== 'undefined' && document.hidden) return;
+          void run();
+        }, options.refreshInterval)
       : undefined;
 
     // Pause when hidden

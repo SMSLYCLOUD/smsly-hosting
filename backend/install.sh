@@ -1872,6 +1872,9 @@ refresh_runtime_services() {
     else
         echo -e "${BLUE}  → smsly-autoscaler not running, skipping restart${NC}"
     fi
+    if [ -x "${INSTALL_DIR:-/opt/smsly-hosting}/scripts/smsly-tier.sh" ]; then
+        timeout 120 bash "${INSTALL_DIR:-/opt/smsly-hosting}/scripts/smsly-tier.sh" resleep || true
+    fi
     echo -e "${GREEN}  OK Clean runtime refresh complete${NC}"
 }
 
@@ -4084,6 +4087,9 @@ refresh_runtime_services() {
     else
         echo -e "${BLUE}  → smsly-autoscaler not running, skipping restart${NC}"
     fi
+    if [ -x "${INSTALL_DIR:-/opt/smsly-hosting}/scripts/smsly-tier.sh" ]; then
+        timeout 120 bash "${INSTALL_DIR:-/opt/smsly-hosting}/scripts/smsly-tier.sh" resleep || true
+    fi
     echo -e "${GREEN}  OK Clean runtime refresh complete${NC}"
 }
 
@@ -5649,6 +5655,9 @@ _harden_openappsec_verify() {
     [ "$(docker inspect -f '{{.State.Running}}' smsly-appsec-agent 2>/dev/null)" = "true" ] || { _harden_log warn "appsec-agent — container not running"; _fail=1; }
     [ "$(docker inspect -f '{{.State.Running}}' smsly-appsec-envoy 2>/dev/null)" = "true" ] || { _harden_log warn "appsec-envoy — container not running"; _fail=1; }
     if [ "$_fail" = "0" ]; then
+        if ! timeout 5 docker exec smsly-appsec-agent sh -c 'grep -qiE ":1F92 [0-9A-F]+:[0-9A-F]+ 0A " /proc/net/tcp /proc/net/tcp6' 2>/dev/null; then
+            _harden_log warn "open-appsec inline listener (:8082) not listening in appsec-agent netns"
+        fi
         # Attachment signal: the agent never logs the word "attachment"
         # (it logs nano-service installs + policy loads), so grep the
         # ENVOY side — its golang filter logs a verdict per inspected
@@ -9230,17 +9239,21 @@ ensure_env_runtime_defaults() {
             ;;
     esac
     [ "$_waf_enabled" = "1" ] && _default_profiles="${_default_profiles},appsec"
+    local _pf_broker_mode=""
+    _pf_broker_mode="$(env_get_value "$env_file" "CELERY_BROKER_MODE" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+    [ "$_pf_broker_mode" = "amqp" ] && _default_profiles="${_default_profiles},amqp"
     env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_default_profiles" "Compose profiles to activate (DB mode + tier + optional appsec)"
     _prof_cur="$(env_get_value "$env_file" "COMPOSE_PROFILES")"
     if command -v python3 >/dev/null 2>&1; then
-        _prof_new="$(DB_MODE="$_db_ha_mode" STACK_TIER_VAL="$_stack_tier" WAF_VAL="$_waf_enabled" CUR_PROF="$_prof_cur" python3 -c '
+        _prof_new="$(DB_MODE="$_db_ha_mode" STACK_TIER_VAL="$_stack_tier" WAF_VAL="$_waf_enabled" BROKER_VAL="$_pf_broker_mode" CUR_PROF="$_prof_cur" python3 -c '
 import os
 mode = (os.environ.get("DB_MODE") or "local-ha").strip() or "local-ha"
 tier = (os.environ.get("STACK_TIER_VAL") or "full").strip().lower()
 waf = (os.environ.get("WAF_VAL") or "0").strip()
+broker = (os.environ.get("BROKER_VAL") or "redis").strip().lower()
 cur = os.environ.get("CUR_PROF", "")
 db_modes = {"local-ha", "patroni", "external"}
-managed = {"local-ha-replica", "redis-ha", "medium", "full", "appsec"}
+managed = {"local-ha-replica", "redis-ha", "medium", "full", "appsec", "amqp"}
 seen = set()
 out = []
 for tok in [t.strip() for t in cur.split(",")]:
@@ -9261,6 +9274,8 @@ if tier == "full":
     desired.append("full")
 if waf == "1":
     desired.append("appsec")
+if broker == "amqp":
+    desired.append("amqp")
 # Keep DB mode + tier profiles ordered deterministically, followed by custom tokens.
 final = []
 final_seen = set()
@@ -9440,15 +9455,33 @@ print(",".join(final))
         fi
     fi
 
-    if [ -n "$rabbitmq_password" ]; then
-        expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+    env_ensure_var "$env_file" "CELERY_BROKER_MODE" "redis" "Celery broker mode (redis=low-RAM default, amqp=RabbitMQ)"
+    local _broker_mode=""
+    _broker_mode="$(env_get_value "$env_file" "CELERY_BROKER_MODE" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+    [ "$_broker_mode" = "amqp" ] || _broker_mode="redis"
+    if [ -n "$redis_password" ] || [ -n "$rabbitmq_password" ]; then
+        if [ "$_broker_mode" = "amqp" ] && [ -n "$rabbitmq_password" ]; then
+            expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+        else
+            local _rhost="redis-primary"
+            if [ "${MODE_NODE:-false}" = "true" ]; then
+                _rhost="redis"
+            fi
+            expected_celery_broker_url="redis://:${redis_password}@${_rhost}:6379/4"
+        fi
         current_celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
 
-        env_set_value "$env_file" "RABBITMQ_DEFAULT_USER" "smsly_user"
-        env_set_value "$env_file" "RABBITMQ_DEFAULT_PASS" "$rabbitmq_password"
-        env_ensure_var "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url" "Celery broker (RabbitMQ with auth)"
+        if [ -n "$rabbitmq_password" ]; then
+            env_set_value "$env_file" "RABBITMQ_DEFAULT_USER" "smsly_user"
+            env_set_value "$env_file" "RABBITMQ_DEFAULT_PASS" "$rabbitmq_password"
+        fi
+        env_ensure_var "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url" "Celery broker (Redis DB 4 default, or RabbitMQ)"
 
-        if [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]] && [ "$current_celery_broker_url" != "$expected_celery_broker_url" ]; then
+        if [ "$_broker_mode" = "redis" ] && [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]]; then
+            echo -e "${BLUE}  -> Switching default CELERY_BROKER_URL to Redis DB 4${NC}"
+            env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url"
+            echo -e "${GREEN}  OK CELERY_BROKER_URL synced${NC}"
+        elif [ "$_broker_mode" = "amqp" ] && [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]] && [ "$current_celery_broker_url" != "$expected_celery_broker_url" ]; then
             echo -e "${BLUE}  -> Syncing CELERY_BROKER_URL with RABBITMQ_PASSWORD${NC}"
             env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url"
             echo -e "${GREEN}  OK CELERY_BROKER_URL synced${NC}"
@@ -9477,7 +9510,11 @@ print(",".join(final))
             local db_host="${MASTER_MESH_IP}"
             expected_database_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
             expected_direct_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
-            expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+            if [ "$_broker_mode" = "amqp" ]; then
+                expected_celery_broker_url="amqp://smsly_user:${mq_pass}@rabbitmq:5672//"
+            else
+                expected_celery_broker_url="redis://:${redis_password}@redis:6379/4"
+            fi
 
             env_set_value "$env_file" "DATABASE_URL" "$expected_database_url"
             env_set_value "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url"
@@ -10317,17 +10354,21 @@ ensure_env_runtime_defaults() {
             ;;
     esac
     [ "$_waf_enabled" = "1" ] && _default_profiles="${_default_profiles},appsec"
+    local _pf_broker_mode=""
+    _pf_broker_mode="$(env_get_value "$env_file" "CELERY_BROKER_MODE" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+    [ "$_pf_broker_mode" = "amqp" ] && _default_profiles="${_default_profiles},amqp"
     env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_default_profiles" "Compose profiles to activate (DB mode + tier + optional appsec)"
     _prof_cur="$(env_get_value "$env_file" "COMPOSE_PROFILES")"
     if command -v python3 >/dev/null 2>&1; then
-        _prof_new="$(DB_MODE="$_db_ha_mode" STACK_TIER_VAL="$_stack_tier" WAF_VAL="$_waf_enabled" CUR_PROF="$_prof_cur" python3 -c '
+        _prof_new="$(DB_MODE="$_db_ha_mode" STACK_TIER_VAL="$_stack_tier" WAF_VAL="$_waf_enabled" BROKER_VAL="$_pf_broker_mode" CUR_PROF="$_prof_cur" python3 -c '
 import os
 mode = (os.environ.get("DB_MODE") or "local-ha").strip() or "local-ha"
 tier = (os.environ.get("STACK_TIER_VAL") or "full").strip().lower()
 waf = (os.environ.get("WAF_VAL") or "0").strip()
+broker = (os.environ.get("BROKER_VAL") or "redis").strip().lower()
 cur = os.environ.get("CUR_PROF", "")
 db_modes = {"local-ha", "patroni", "external"}
-managed = {"local-ha-replica", "redis-ha", "medium", "full", "appsec"}
+managed = {"local-ha-replica", "redis-ha", "medium", "full", "appsec", "amqp"}
 seen = set()
 out = []
 for tok in [t.strip() for t in cur.split(",")]:
@@ -10348,6 +10389,8 @@ if tier == "full":
     desired.append("full")
 if waf == "1":
     desired.append("appsec")
+if broker == "amqp":
+    desired.append("amqp")
 # Keep DB mode + tier profiles ordered deterministically, followed by custom tokens.
 final = []
 final_seen = set()
@@ -10527,15 +10570,33 @@ print(",".join(final))
         fi
     fi
 
-    if [ -n "$rabbitmq_password" ]; then
-        expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+    env_ensure_var "$env_file" "CELERY_BROKER_MODE" "redis" "Celery broker mode (redis=low-RAM default, amqp=RabbitMQ)"
+    local _broker_mode=""
+    _broker_mode="$(env_get_value "$env_file" "CELERY_BROKER_MODE" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+    [ "$_broker_mode" = "amqp" ] || _broker_mode="redis"
+    if [ -n "$redis_password" ] || [ -n "$rabbitmq_password" ]; then
+        if [ "$_broker_mode" = "amqp" ] && [ -n "$rabbitmq_password" ]; then
+            expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+        else
+            local _rhost="redis-primary"
+            if [ "${MODE_NODE:-false}" = "true" ]; then
+                _rhost="redis"
+            fi
+            expected_celery_broker_url="redis://:${redis_password}@${_rhost}:6379/4"
+        fi
         current_celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
 
-        env_set_value "$env_file" "RABBITMQ_DEFAULT_USER" "smsly_user"
-        env_set_value "$env_file" "RABBITMQ_DEFAULT_PASS" "$rabbitmq_password"
-        env_ensure_var "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url" "Celery broker (RabbitMQ with auth)"
+        if [ -n "$rabbitmq_password" ]; then
+            env_set_value "$env_file" "RABBITMQ_DEFAULT_USER" "smsly_user"
+            env_set_value "$env_file" "RABBITMQ_DEFAULT_PASS" "$rabbitmq_password"
+        fi
+        env_ensure_var "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url" "Celery broker (Redis DB 4 default, or RabbitMQ)"
 
-        if [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]] && [ "$current_celery_broker_url" != "$expected_celery_broker_url" ]; then
+        if [ "$_broker_mode" = "redis" ] && [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]]; then
+            echo -e "${BLUE}  -> Switching default CELERY_BROKER_URL to Redis DB 4${NC}"
+            env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url"
+            echo -e "${GREEN}  OK CELERY_BROKER_URL synced${NC}"
+        elif [ "$_broker_mode" = "amqp" ] && [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]] && [ "$current_celery_broker_url" != "$expected_celery_broker_url" ]; then
             echo -e "${BLUE}  -> Syncing CELERY_BROKER_URL with RABBITMQ_PASSWORD${NC}"
             env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url"
             echo -e "${GREEN}  OK CELERY_BROKER_URL synced${NC}"
@@ -10564,7 +10625,11 @@ print(",".join(final))
             local db_host="${MASTER_MESH_IP}"
             expected_database_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
             expected_direct_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
-            expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+            if [ "$_broker_mode" = "amqp" ]; then
+                expected_celery_broker_url="amqp://smsly_user:${mq_pass}@rabbitmq:5672//"
+            else
+                expected_celery_broker_url="redis://:${redis_password}@redis:6379/4"
+            fi
 
             env_set_value "$env_file" "DATABASE_URL" "$expected_database_url"
             env_set_value "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url"
@@ -12768,6 +12833,9 @@ _harden_openappsec_verify() {
     [ "$(docker inspect -f '{{.State.Running}}' smsly-appsec-agent 2>/dev/null)" = "true" ] || { _harden_log warn "appsec-agent — container not running"; _fail=1; }
     [ "$(docker inspect -f '{{.State.Running}}' smsly-appsec-envoy 2>/dev/null)" = "true" ] || { _harden_log warn "appsec-envoy — container not running"; _fail=1; }
     if [ "$_fail" = "0" ]; then
+        if ! timeout 5 docker exec smsly-appsec-agent sh -c 'grep -qiE ":1F92 [0-9A-F]+:[0-9A-F]+ 0A " /proc/net/tcp /proc/net/tcp6' 2>/dev/null; then
+            _harden_log warn "open-appsec inline listener (:8082) not listening in appsec-agent netns"
+        fi
         # Attachment signal: the agent never logs the word "attachment"
         # (it logs nano-service installs + policy loads), so grep the
         # ENVOY side — its golang filter logs a verdict per inspected
@@ -14732,6 +14800,9 @@ _harden_openappsec_verify() {
     [ "$(docker inspect -f '{{.State.Running}}' smsly-appsec-agent 2>/dev/null)" = "true" ] || { _harden_log warn "appsec-agent — container not running"; _fail=1; }
     [ "$(docker inspect -f '{{.State.Running}}' smsly-appsec-envoy 2>/dev/null)" = "true" ] || { _harden_log warn "appsec-envoy — container not running"; _fail=1; }
     if [ "$_fail" = "0" ]; then
+        if ! timeout 5 docker exec smsly-appsec-agent sh -c 'grep -qiE ":1F92 [0-9A-F]+:[0-9A-F]+ 0A " /proc/net/tcp /proc/net/tcp6' 2>/dev/null; then
+            _harden_log warn "open-appsec inline listener (:8082) not listening in appsec-agent netns"
+        fi
         # Attachment signal: the agent never logs the word "attachment"
         # (it logs nano-service installs + policy loads), so grep the
         # ENVOY side — its golang filter logs a verdict per inspected
@@ -18062,6 +18133,9 @@ refresh_runtime_services() {
     else
         echo -e "${BLUE}  → smsly-autoscaler not running, skipping restart${NC}"
     fi
+    if [ -x "${INSTALL_DIR:-/opt/smsly-hosting}/scripts/smsly-tier.sh" ]; then
+        timeout 120 bash "${INSTALL_DIR:-/opt/smsly-hosting}/scripts/smsly-tier.sh" resleep || true
+    fi
     echo -e "${GREEN}  OK Clean runtime refresh complete${NC}"
 }
 
@@ -19916,17 +19990,21 @@ ensure_env_runtime_defaults() {
             ;;
     esac
     [ "$_waf_enabled" = "1" ] && _default_profiles="${_default_profiles},appsec"
+    local _pf_broker_mode=""
+    _pf_broker_mode="$(env_get_value "$env_file" "CELERY_BROKER_MODE" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+    [ "$_pf_broker_mode" = "amqp" ] && _default_profiles="${_default_profiles},amqp"
     env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_default_profiles" "Compose profiles to activate (DB mode + tier + optional appsec)"
     _prof_cur="$(env_get_value "$env_file" "COMPOSE_PROFILES")"
     if command -v python3 >/dev/null 2>&1; then
-        _prof_new="$(DB_MODE="$_db_ha_mode" STACK_TIER_VAL="$_stack_tier" WAF_VAL="$_waf_enabled" CUR_PROF="$_prof_cur" python3 -c '
+        _prof_new="$(DB_MODE="$_db_ha_mode" STACK_TIER_VAL="$_stack_tier" WAF_VAL="$_waf_enabled" BROKER_VAL="$_pf_broker_mode" CUR_PROF="$_prof_cur" python3 -c '
 import os
 mode = (os.environ.get("DB_MODE") or "local-ha").strip() or "local-ha"
 tier = (os.environ.get("STACK_TIER_VAL") or "full").strip().lower()
 waf = (os.environ.get("WAF_VAL") or "0").strip()
+broker = (os.environ.get("BROKER_VAL") or "redis").strip().lower()
 cur = os.environ.get("CUR_PROF", "")
 db_modes = {"local-ha", "patroni", "external"}
-managed = {"local-ha-replica", "redis-ha", "medium", "full", "appsec"}
+managed = {"local-ha-replica", "redis-ha", "medium", "full", "appsec", "amqp"}
 seen = set()
 out = []
 for tok in [t.strip() for t in cur.split(",")]:
@@ -19947,6 +20025,8 @@ if tier == "full":
     desired.append("full")
 if waf == "1":
     desired.append("appsec")
+if broker == "amqp":
+    desired.append("amqp")
 # Keep DB mode + tier profiles ordered deterministically, followed by custom tokens.
 final = []
 final_seen = set()
@@ -20126,15 +20206,33 @@ print(",".join(final))
         fi
     fi
 
-    if [ -n "$rabbitmq_password" ]; then
-        expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+    env_ensure_var "$env_file" "CELERY_BROKER_MODE" "redis" "Celery broker mode (redis=low-RAM default, amqp=RabbitMQ)"
+    local _broker_mode=""
+    _broker_mode="$(env_get_value "$env_file" "CELERY_BROKER_MODE" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+    [ "$_broker_mode" = "amqp" ] || _broker_mode="redis"
+    if [ -n "$redis_password" ] || [ -n "$rabbitmq_password" ]; then
+        if [ "$_broker_mode" = "amqp" ] && [ -n "$rabbitmq_password" ]; then
+            expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+        else
+            local _rhost="redis-primary"
+            if [ "${MODE_NODE:-false}" = "true" ]; then
+                _rhost="redis"
+            fi
+            expected_celery_broker_url="redis://:${redis_password}@${_rhost}:6379/4"
+        fi
         current_celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
 
-        env_set_value "$env_file" "RABBITMQ_DEFAULT_USER" "smsly_user"
-        env_set_value "$env_file" "RABBITMQ_DEFAULT_PASS" "$rabbitmq_password"
-        env_ensure_var "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url" "Celery broker (RabbitMQ with auth)"
+        if [ -n "$rabbitmq_password" ]; then
+            env_set_value "$env_file" "RABBITMQ_DEFAULT_USER" "smsly_user"
+            env_set_value "$env_file" "RABBITMQ_DEFAULT_PASS" "$rabbitmq_password"
+        fi
+        env_ensure_var "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url" "Celery broker (Redis DB 4 default, or RabbitMQ)"
 
-        if [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]] && [ "$current_celery_broker_url" != "$expected_celery_broker_url" ]; then
+        if [ "$_broker_mode" = "redis" ] && [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]]; then
+            echo -e "${BLUE}  -> Switching default CELERY_BROKER_URL to Redis DB 4${NC}"
+            env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url"
+            echo -e "${GREEN}  OK CELERY_BROKER_URL synced${NC}"
+        elif [ "$_broker_mode" = "amqp" ] && [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]] && [ "$current_celery_broker_url" != "$expected_celery_broker_url" ]; then
             echo -e "${BLUE}  -> Syncing CELERY_BROKER_URL with RABBITMQ_PASSWORD${NC}"
             env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url"
             echo -e "${GREEN}  OK CELERY_BROKER_URL synced${NC}"
@@ -20163,7 +20261,11 @@ print(",".join(final))
             local db_host="${MASTER_MESH_IP}"
             expected_database_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
             expected_direct_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
-            expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+            if [ "$_broker_mode" = "amqp" ]; then
+                expected_celery_broker_url="amqp://smsly_user:${mq_pass}@rabbitmq:5672//"
+            else
+                expected_celery_broker_url="redis://:${redis_password}@redis:6379/4"
+            fi
 
             env_set_value "$env_file" "DATABASE_URL" "$expected_database_url"
             env_set_value "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url"
@@ -21700,6 +21802,9 @@ refresh_runtime_services() {
         systemctl restart smsly-autoscaler || echo -e "${YELLOW}    ⚠ smsly-autoscaler restart failed${NC}"
     else
         echo -e "${BLUE}  → smsly-autoscaler not running, skipping restart${NC}"
+    fi
+    if [ -x "${INSTALL_DIR:-/opt/smsly-hosting}/scripts/smsly-tier.sh" ]; then
+        timeout 120 bash "${INSTALL_DIR:-/opt/smsly-hosting}/scripts/smsly-tier.sh" resleep || true
     fi
     echo -e "${GREEN}  OK Clean runtime refresh complete${NC}"
 }
@@ -24197,6 +24302,9 @@ refresh_runtime_services() {
         systemctl restart smsly-autoscaler || echo -e "${YELLOW}    ⚠ smsly-autoscaler restart failed${NC}"
     else
         echo -e "${BLUE}  → smsly-autoscaler not running, skipping restart${NC}"
+    fi
+    if [ -x "${INSTALL_DIR:-/opt/smsly-hosting}/scripts/smsly-tier.sh" ]; then
+        timeout 120 bash "${INSTALL_DIR:-/opt/smsly-hosting}/scripts/smsly-tier.sh" resleep || true
     fi
     echo -e "${GREEN}  OK Clean runtime refresh complete${NC}"
 }
@@ -28465,6 +28573,9 @@ _harden_openappsec_verify() {
     [ "$(docker inspect -f '{{.State.Running}}' smsly-appsec-agent 2>/dev/null)" = "true" ] || { _harden_log warn "appsec-agent — container not running"; _fail=1; }
     [ "$(docker inspect -f '{{.State.Running}}' smsly-appsec-envoy 2>/dev/null)" = "true" ] || { _harden_log warn "appsec-envoy — container not running"; _fail=1; }
     if [ "$_fail" = "0" ]; then
+        if ! timeout 5 docker exec smsly-appsec-agent sh -c 'grep -qiE ":1F92 [0-9A-F]+:[0-9A-F]+ 0A " /proc/net/tcp /proc/net/tcp6' 2>/dev/null; then
+            _harden_log warn "open-appsec inline listener (:8082) not listening in appsec-agent netns"
+        fi
         # Attachment signal: the agent never logs the word "attachment"
         # (it logs nano-service installs + policy loads), so grep the
         # ENVOY side — its golang filter logs a verdict per inspected
@@ -30098,6 +30209,8 @@ except Exception:
     # profile). Caller-supplied COMPOSE_PROFILES is respected verbatim.
     # NOTE: this MUST live here, not inside the template heredoc below.
     _fc_db_ha="${DB_HA_ENABLED:-local-ha}"
+    _fc_broker_mode="$(printf '%s' "${CELERY_BROKER_MODE:-redis}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    [ "$_fc_broker_mode" = "amqp" ] || _fc_broker_mode="redis"
     if [ -z "$_caller_compose_profiles" ]; then
         COMPOSE_PROFILES="$_fc_db_ha"
         case "$STACK_TIER" in
@@ -30112,6 +30225,9 @@ except Exception:
         esac
         if [ "$ENV_OPENAPPSEC_ENABLED" = "1" ]; then
             COMPOSE_PROFILES="${COMPOSE_PROFILES},appsec"
+        fi
+        if [ "$_fc_broker_mode" = "amqp" ]; then
+            COMPOSE_PROFILES="${COMPOSE_PROFILES},amqp"
         fi
     else
         COMPOSE_PROFILES="$_caller_compose_profiles"
@@ -30161,7 +30277,11 @@ except Exception:
     if [ -z "$ENV_LOKI_RETENTION" ]; then
         if [ "$ENV_SCHED_RAM_MB" -lt 12288 ]; then ENV_LOKI_RETENTION="7d"; else ENV_LOKI_RETENTION="30d"; fi
     fi
-    echo -e "${BLUE}  → Runtime sizing: tier ${STACK_TIER}, ${ENV_GUNICORN_WORKERS} gunicorn workers, PG buffers ${ENV_DB_SHARED_BUFFERS}, WAF shadow ${ENV_OPENAPPSEC_ENABLED}, host ${ENV_SCHED_RAM_MB}MB/${ENV_SCHED_CPUS}CPU${NC}"
+    ENV_CELERY_BROKER_URL="redis://:$REDIS_PASSWORD@redis-primary:6379/4"
+    if [ "$_fc_broker_mode" = "amqp" ]; then
+        ENV_CELERY_BROKER_URL="amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//"
+    fi
+    echo -e "${BLUE}  → Runtime sizing: tier ${STACK_TIER}, ${ENV_GUNICORN_WORKERS} gunicorn workers, PG buffers ${ENV_DB_SHARED_BUFFERS}, broker ${_fc_broker_mode}, WAF shadow ${ENV_OPENAPPSEC_ENABLED}, host ${ENV_SCHED_RAM_MB}MB/${ENV_SCHED_CPUS}CPU${NC}"
     cat <<EOF > "$ENV_TMP"
 # SMSLY Hosting Configuration — Generated $(date -Iseconds)
 ENVIRONMENT=production
@@ -30233,7 +30353,8 @@ PG_SYNCHRONOUS_COMMIT=on
 # PG_SYNCHRONOUS_STANDBY_NAMES=  (unset = async replication)
 
 REDIS_SOCKET_TIMEOUT=5
-CELERY_BROKER_URL=amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//
+CELERY_BROKER_MODE=$_fc_broker_mode
+CELERY_BROKER_URL=$ENV_CELERY_BROKER_URL
 
 DOMAIN=$DOMAIN
 ACME_EMAIL=${ACME_EMAIL:-}
@@ -33675,6 +33796,9 @@ refresh_runtime_services() {
     else
         echo -e "${BLUE}  → smsly-autoscaler not running, skipping restart${NC}"
     fi
+    if [ -x "${INSTALL_DIR:-/opt/smsly-hosting}/scripts/smsly-tier.sh" ]; then
+        timeout 120 bash "${INSTALL_DIR:-/opt/smsly-hosting}/scripts/smsly-tier.sh" resleep || true
+    fi
     echo -e "${GREEN}  OK Clean runtime refresh complete${NC}"
 }
 
@@ -35529,17 +35653,21 @@ ensure_env_runtime_defaults() {
             ;;
     esac
     [ "$_waf_enabled" = "1" ] && _default_profiles="${_default_profiles},appsec"
+    local _pf_broker_mode=""
+    _pf_broker_mode="$(env_get_value "$env_file" "CELERY_BROKER_MODE" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+    [ "$_pf_broker_mode" = "amqp" ] && _default_profiles="${_default_profiles},amqp"
     env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_default_profiles" "Compose profiles to activate (DB mode + tier + optional appsec)"
     _prof_cur="$(env_get_value "$env_file" "COMPOSE_PROFILES")"
     if command -v python3 >/dev/null 2>&1; then
-        _prof_new="$(DB_MODE="$_db_ha_mode" STACK_TIER_VAL="$_stack_tier" WAF_VAL="$_waf_enabled" CUR_PROF="$_prof_cur" python3 -c '
+        _prof_new="$(DB_MODE="$_db_ha_mode" STACK_TIER_VAL="$_stack_tier" WAF_VAL="$_waf_enabled" BROKER_VAL="$_pf_broker_mode" CUR_PROF="$_prof_cur" python3 -c '
 import os
 mode = (os.environ.get("DB_MODE") or "local-ha").strip() or "local-ha"
 tier = (os.environ.get("STACK_TIER_VAL") or "full").strip().lower()
 waf = (os.environ.get("WAF_VAL") or "0").strip()
+broker = (os.environ.get("BROKER_VAL") or "redis").strip().lower()
 cur = os.environ.get("CUR_PROF", "")
 db_modes = {"local-ha", "patroni", "external"}
-managed = {"local-ha-replica", "redis-ha", "medium", "full", "appsec"}
+managed = {"local-ha-replica", "redis-ha", "medium", "full", "appsec", "amqp"}
 seen = set()
 out = []
 for tok in [t.strip() for t in cur.split(",")]:
@@ -35560,6 +35688,8 @@ if tier == "full":
     desired.append("full")
 if waf == "1":
     desired.append("appsec")
+if broker == "amqp":
+    desired.append("amqp")
 # Keep DB mode + tier profiles ordered deterministically, followed by custom tokens.
 final = []
 final_seen = set()
@@ -35739,15 +35869,33 @@ print(",".join(final))
         fi
     fi
 
-    if [ -n "$rabbitmq_password" ]; then
-        expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+    env_ensure_var "$env_file" "CELERY_BROKER_MODE" "redis" "Celery broker mode (redis=low-RAM default, amqp=RabbitMQ)"
+    local _broker_mode=""
+    _broker_mode="$(env_get_value "$env_file" "CELERY_BROKER_MODE" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+    [ "$_broker_mode" = "amqp" ] || _broker_mode="redis"
+    if [ -n "$redis_password" ] || [ -n "$rabbitmq_password" ]; then
+        if [ "$_broker_mode" = "amqp" ] && [ -n "$rabbitmq_password" ]; then
+            expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+        else
+            local _rhost="redis-primary"
+            if [ "${MODE_NODE:-false}" = "true" ]; then
+                _rhost="redis"
+            fi
+            expected_celery_broker_url="redis://:${redis_password}@${_rhost}:6379/4"
+        fi
         current_celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
 
-        env_set_value "$env_file" "RABBITMQ_DEFAULT_USER" "smsly_user"
-        env_set_value "$env_file" "RABBITMQ_DEFAULT_PASS" "$rabbitmq_password"
-        env_ensure_var "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url" "Celery broker (RabbitMQ with auth)"
+        if [ -n "$rabbitmq_password" ]; then
+            env_set_value "$env_file" "RABBITMQ_DEFAULT_USER" "smsly_user"
+            env_set_value "$env_file" "RABBITMQ_DEFAULT_PASS" "$rabbitmq_password"
+        fi
+        env_ensure_var "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url" "Celery broker (Redis DB 4 default, or RabbitMQ)"
 
-        if [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]] && [ "$current_celery_broker_url" != "$expected_celery_broker_url" ]; then
+        if [ "$_broker_mode" = "redis" ] && [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]]; then
+            echo -e "${BLUE}  -> Switching default CELERY_BROKER_URL to Redis DB 4${NC}"
+            env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url"
+            echo -e "${GREEN}  OK CELERY_BROKER_URL synced${NC}"
+        elif [ "$_broker_mode" = "amqp" ] && [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]] && [ "$current_celery_broker_url" != "$expected_celery_broker_url" ]; then
             echo -e "${BLUE}  -> Syncing CELERY_BROKER_URL with RABBITMQ_PASSWORD${NC}"
             env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url"
             echo -e "${GREEN}  OK CELERY_BROKER_URL synced${NC}"
@@ -35776,7 +35924,11 @@ print(",".join(final))
             local db_host="${MASTER_MESH_IP}"
             expected_database_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
             expected_direct_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
-            expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+            if [ "$_broker_mode" = "amqp" ]; then
+                expected_celery_broker_url="amqp://smsly_user:${mq_pass}@rabbitmq:5672//"
+            else
+                expected_celery_broker_url="redis://:${redis_password}@redis:6379/4"
+            fi
 
             env_set_value "$env_file" "DATABASE_URL" "$expected_database_url"
             env_set_value "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url"
@@ -37199,7 +37351,9 @@ INTEGRITY_CRON="0 * * * * root $INTEGRITY_SCRIPT >> /var/log/smsly-integrity.log
 # executable first so the -x gate cannot false-negative (2026-09-12).
 chmod +x "$INTEGRITY_SCRIPT" 2>/dev/null || true
 if [ -f "$INTEGRITY_SCRIPT" ]; then
-    if ! grep -q "verify_platform_integrity.sh" /etc/crontab ; then
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-enabled --quiet smsly-integrity.timer 2>/dev/null; then
+        echo -e "${GREEN}  ✓ Platform integrity guard handled by systemd timer (smsly-integrity.timer)${NC}"
+    elif ! grep -q "verify_platform_integrity.sh" /etc/crontab ; then
         echo "$INTEGRITY_CRON" >> /etc/crontab
         echo -e "${GREEN}  ✓ Platform integrity guard scheduled hourly via cron${NC}"
     else

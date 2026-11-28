@@ -65,7 +65,6 @@ fi
 
 # ─── Systemd services to keep alive ────────────────────────────────────
 SYSTEMD_SERVICES=(
-    "smsly-autoscaler.service"
     "smsly-domain-ssl.service"
 )
 
@@ -77,12 +76,16 @@ SYSTEMD_TIMERS=(
 # ─── Production stack ──────────────────────────────────────────────────
 _DB_HA_MODE="$(_env_val DB_HA_ENABLED local-ha)"
 _CUR_PROFILES=",$(_env_val COMPOSE_PROFILES ""),"
+_BROKER_MODE="$(_env_val CELERY_BROKER_MODE redis | tr '[:upper:]' '[:lower:]')"
 PROD_SERVICES=(
     "pgcat" "redis-primary"
-    "registry" "rabbitmq"
+    "registry"
     "backend" "celery" "celery-beat"
     "frontend" "socket-proxy" "caddy"
 )
+if [ "$_BROKER_MODE" = "amqp" ] || [[ "$_CUR_PROFILES" == *",amqp,"* ]]; then
+    PROD_SERVICES+=("rabbitmq")
+fi
 if [ "$_DB_HA_MODE" = "local-ha" ]; then
     PROD_SERVICES=("db" "${PROD_SERVICES[@]}")
     if [ "$STACK_TIER" != "lite" ]; then
@@ -94,10 +97,16 @@ if [ "$STACK_TIER" != "lite" ] || [[ "$_CUR_PROFILES" == *",redis-ha,"* ]]; then
 fi
 if [ "$IS_AGENT_LITE" = "true" ]; then
     # Worker (agent-lite) stack must never start master-only services from docker-compose.prod.yml.
-    PROD_SERVICES=("redis" "rabbitmq" "socket-proxy" "traefik" "backend" "celery-worker" "agent-registrar")
+    PROD_SERVICES=("redis" "socket-proxy" "traefik" "backend" "celery-worker" "agent-registrar")
+    if [ "$_BROKER_MODE" = "amqp" ] || [[ "$_CUR_PROFILES" == *",amqp,"* ]]; then
+        PROD_SERVICES+=("rabbitmq")
+    fi
 elif [ "$IS_NODE_MODE" = "true" ]; then
     # Worker (full-stack node) runs docker-compose.node.yml without frontend/pgcat/registry.
-    PROD_SERVICES=("db" "redis" "rabbitmq" "backend" "celery-worker" "celery-beat" "socket-proxy" "traefik" "caddy" "agent-registrar" "coredns")
+    PROD_SERVICES=("db" "redis" "backend" "celery-worker" "celery-beat" "socket-proxy" "traefik" "caddy" "agent-registrar" "coredns")
+    if [ "$_BROKER_MODE" = "amqp" ] || [[ "$_CUR_PROFILES" == *",amqp,"* ]]; then
+        PROD_SERVICES+=("rabbitmq")
+    fi
 fi
 
 # ─── Autoscaled burst workers (idle-minimal) ─────────────────────────────
@@ -247,6 +256,18 @@ if [ -d "$TIER_STATE_DIR" ]; then
     shopt -u nullglob
 fi
 
+# Single batched container state snapshot (eliminates ~50 compose/inspect CLI forks/min).
+declare -A _CTR_STATE=()
+declare -A _CTR_HEALTH=()
+while IFS='|' read -r _lbl_svc _cid _cstate _cstatus; do
+    [ -n "$_lbl_svc" ] || continue
+    _CTR_STATE["$_lbl_svc"]="$_cstate"
+    case "$_cstatus" in
+        *"(unhealthy)"*) _CTR_HEALTH["$_lbl_svc"]="unhealthy" ;;
+        *)               _CTR_HEALTH["$_lbl_svc"]="ok" ;;
+    esac
+done < <(timeout 15 docker ps -a --format '{{.Label "com.docker.compose.service"}}|{{.ID}}|{{.State}}|{{.Status}}' 2>/dev/null || true)
+
 check_and_heal() {
     local compose_file=$1
     local service=$2
@@ -255,32 +276,18 @@ check_and_heal() {
         return 0
     fi
 
-    container_id=$(timeout 30 docker compose "${COMPOSE_ENV_ARGS[@]}" -f "$compose_file" ps -q "$service"  || true)
+    local status="${_CTR_STATE[$service]:-missing}"
+    local health="${_CTR_HEALTH[$service]:-none}"
 
-    if [ -z "$container_id" ]; then
+    if [ "$status" = "missing" ]; then
         log "Warning: Container for service '$service' is missing. Attempting to start..."
-        timeout 120 docker compose "${COMPOSE_ENV_ARGS[@]}" -f "$compose_file" up -d "$service" || log "Warning: Failed to start service $service"
+        timeout 120 docker compose "${COMPOSE_ENV_ARGS[@]}" -f "$compose_file" up -d --no-deps "$service" || log "Warning: Failed to start service $service"
         return
     fi
-
-    inspect_data=$(timeout 30 docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id"  || true)
-
-    if [ -z "$inspect_data" ]; then
-        log "Warning: Failed to inspect container '$container_id' for service '$service'. Attempting restart..."
-        timeout 120 docker compose "${COMPOSE_ENV_ARGS[@]}" -f "$compose_file" restart "$service" || log "Warning: Failed to restart service $service"
-        return
-    fi
-
-    status=$(echo "$inspect_data" | awk '{print $1}')
-    health=$(echo "$inspect_data" | awk '{print $2}')
 
     if [ "$status" != "running" ]; then
-        # NOTE: `up -d`, not `restart`. A container stuck in Created
-        # (recreated but never started — 2026-09-16 backend outage)
-        # cannot be restarted; `up -d` starts Created AND restarts
-        # Stopped/Exited uniformly.
         log "Alert: Container for service '$service' is not running (status: $status). Starting..."
-        timeout 120 docker compose "${COMPOSE_ENV_ARGS[@]}" -f "$compose_file" up -d "$service" || log "Warning: Failed to start service $service (not running)"
+        timeout 120 docker compose "${COMPOSE_ENV_ARGS[@]}" -f "$compose_file" up -d --no-deps "$service" || log "Warning: Failed to start service $service (not running)"
     elif [ "$health" = "unhealthy" ]; then
         log "Alert: Container for service '$service' is running but UNHEALTHY. Restarting..."
         timeout 120 docker compose "${COMPOSE_ENV_ARGS[@]}" -f "$compose_file" restart "$service" || log "Warning: Failed to restart service $service (unhealthy)"

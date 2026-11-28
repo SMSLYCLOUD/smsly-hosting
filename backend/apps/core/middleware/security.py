@@ -263,7 +263,12 @@ class SecurityMiddleware:
                 return any(check_password(token_key, ak.key_hash) for ak in candidates)
 
             from rest_framework.authtoken.models import Token
-            return Token.objects.filter(key=token_key).exists()
+            token = Token.objects.select_related('user').filter(key=token_key).first()
+            if token is None:
+                return False
+            if token.user and token.user.is_active:
+                request._cached_drf_token_auth = (token_key, token.user, token)
+            return True
         except Exception:
             logger.exception("Token validation failed in SecurityMiddleware")
             return False
@@ -286,7 +291,12 @@ class SecurityMiddleware:
             return False
         try:
             from rest_framework.authtoken.models import Token
-            return Token.objects.filter(key=token_key).exists()
+            token = Token.objects.select_related('user').filter(key=token_key).first()
+            if token is None:
+                return False
+            if token.user and token.user.is_active:
+                request._cached_drf_token_auth = (token_key, token.user, token)
+            return True
         except Exception:
             logger.exception("Cookie token validation failed in SecurityMiddleware")
             return False

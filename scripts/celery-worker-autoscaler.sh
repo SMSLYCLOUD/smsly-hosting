@@ -110,7 +110,61 @@ _rabbitmq_container() {
 # loop can tell "idle" apart from "blind". A blind tick must never scale
 # (in either direction): stopping workers during a broker outage, or
 # starting them on phantom depth, both make recovery worse.
+_broker_mode() {
+    case "${CELERY_BROKER_URL:-}" in
+        redis://*|rediss://*|sentinel://*) echo "redis" ;;
+        amqp://*|amqps://*) echo "amqp" ;;
+        *)
+            case "${CELERY_BROKER_MODE:-redis}" in
+                amqp) echo "amqp" ;;
+                *) echo "redis" ;;
+            esac
+            ;;
+    esac
+}
+
+_redis_broker_db() {
+    local url="${CELERY_BROKER_URL:-}"
+    local tail="${url##*/}"
+    tail="${tail%%\?*}"
+    case "$tail" in
+        ''|*[!0-9]*) echo "4" ;;
+        *) echo "$tail" ;;
+    esac
+}
+
+_redis_container() {
+    timeout 15 docker compose -f "$COMPOSE_FILE" ps -q redis-primary 2>/dev/null | head -n 1
+}
+
+_redis_exec() {
+    local rc="" db=""
+    rc="$(_redis_container)"
+    [ -n "$rc" ] || return 1
+    db="$(_redis_broker_db)"
+    local pw="${REDIS_PASSWORD:-}"
+    if [ -n "$pw" ]; then
+        timeout 10 docker exec -e REDISCLI_AUTH="$pw" "$rc" redis-cli -n "$db" "$@" 2>/dev/null
+    else
+        timeout 10 docker exec "$rc" redis-cli -n "$db" "$@" 2>/dev/null
+    fi
+}
+
 _get_queue_depth() {
+    if [ "$(_broker_mode)" = "redis" ]; then
+        local total=0 q="" n=""
+        for q in celery deploy fast media-telemetry media-audit; do
+            if ! n=$(_redis_exec LLEN "$q"); then
+                return 1
+            fi
+            case "$n" in
+                ''|*[!0-9]*) n=0 ;;
+            esac
+            total=$((total + n))
+        done
+        echo "$total"
+        return 0
+    fi
     local total=0
     local raw
     local mq
@@ -134,6 +188,17 @@ _get_queue_depth() {
 # with unacked tasks can murder a running (multi-minute) deploy. Scale-down
 # requires this to be 0 — an idle queue with running tasks still waits.
 _get_burst_unacked() {
+    if [ "$(_broker_mode)" = "redis" ]; then
+        local n=""
+        if ! n=$(_redis_exec HLEN unacked); then
+            return 1
+        fi
+        case "$n" in
+            ''|*[!0-9]*) echo "0" ;;
+            *) echo "$n" ;;
+        esac
+        return 0
+    fi
     local total=0
     local raw
     local mq

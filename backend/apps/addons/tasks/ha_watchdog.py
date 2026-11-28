@@ -180,8 +180,10 @@ def _container_running(name: str) -> bool:
 )
 def check_addon_ha_task(self):
     """Beat task: health-check every HA-enabled addon; fail over Postgres."""
-    addons = Addon.objects.filter(ha_enabled=True).exclude(
-        status=Addon.Status.DELETED)
+    addons = list(Addon.objects.filter(ha_enabled=True).exclude(
+        status=Addon.Status.DELETED))
+    if not addons:
+        return {'checked': 0, 'healthy': 0, 'degraded': 0, 'failed_over': 0}
     summary = {'checked': 0, 'healthy': 0, 'degraded': 0, 'failed_over': 0}
     for addon in addons:
         try:
@@ -552,6 +554,19 @@ def check_shared_postgres_ha_task(self) -> dict:
         shared_ha_status,
     )
 
+    has_shared = cache.get("shared_pg_ha:has_tenants")
+    if has_shared is None:
+        try:
+            has_shared = Addon.objects.filter(
+                addon_type=Addon.Type.POSTGRES,
+                provision_mode='shared',
+            ).exclude(status=Addon.Status.DELETED).exists()
+            cache.set("shared_pg_ha:has_tenants", bool(has_shared), timeout=120)
+        except Exception:
+            # SimpleTestCase unit suites disallow ORM queries; fail-open so tests
+            # and genuine DB-outage alerts still evaluate shared_ha_status().
+            has_shared = True
+
     now = _time.time()
     try:
         status = shared_ha_status()
@@ -560,16 +575,25 @@ def check_shared_postgres_ha_task(self) -> dict:
         return {'action': 'none', 'reason': 'status-error'}
 
     state = status.get('state')
+    if state == 'DOWN' and not has_shared:
+        # No shared Postgres addons exist on this host yet — never fire false primary-down alerts.
+        cache.set(_SHARED_PG_DOWN_KEY, 0, timeout=3600)
+        return {'action': 'none', 'state': 'UNUSED'}
     if state == 'HEALTHY':
         cache.set(_SHARED_PG_DOWN_KEY, 0, timeout=3600)
         cache.set(_SHARED_PG_HEALTHY_KEY, now, timeout=_SHARED_PG_HEALTHY_WINDOW_S * 2)
         return {'action': 'none', 'state': state}
 
     if state == 'STANDALONE':
-        # Primary serves; redundancy missing — rebuild it (idempotent).
-        # Not a failover: reset the down counter so a later outage
-        # needs the full sustained window.
+        # Primary serves; redundancy missing — rebuild only when shared HA is enabled for this tier.
         cache.set(_SHARED_PG_DOWN_KEY, 0, timeout=3600)
+        _ha_raw = os.environ.get("SHARED_POSTGRES_HA_ENABLED", "").strip().lower()
+        if not _ha_raw:
+            _ha_enabled = os.environ.get("STACK_TIER", "").strip().lower() != "lite"
+        else:
+            _ha_enabled = _ha_raw in ("1", "true", "yes", "on")
+        if not _ha_enabled:
+            return {'action': 'none', 'state': state, 'reason': 'ha-disabled-for-tier'}
         try:
             ensure_shared_standby()
             logger.info("shared pg watchdog: standby restored (was STANDALONE)")

@@ -1,7 +1,6 @@
 import logging
 from datetime import datetime
 
-import croniter  # type: ignore[import-untyped]
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 from django.utils import timezone
@@ -33,9 +32,14 @@ def check_cron_jobs(self):
     determine which jobs are actually due so a */5 schedule does
     not fire every 60 s.
     """
+    jobs = list(CronJob.objects.filter(is_active=True).select_related('service'))
+    if not jobs:
+        return {'dispatched': 0}
+    import croniter  # type: ignore[import-untyped]
+
     now = timezone.now()
     dispatched = 0
-    for job in CronJob.objects.filter(is_active=True).select_related('service'):
+    for job in jobs:
         try:
             if not job.next_run_at:
                 cron = croniter.croniter(job.schedule, now)

@@ -443,6 +443,8 @@ except Exception:
     # profile). Caller-supplied COMPOSE_PROFILES is respected verbatim.
     # NOTE: this MUST live here, not inside the template heredoc below.
     _fc_db_ha="${DB_HA_ENABLED:-local-ha}"
+    _fc_broker_mode="$(printf '%s' "${CELERY_BROKER_MODE:-redis}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    [ "$_fc_broker_mode" = "amqp" ] || _fc_broker_mode="redis"
     if [ -z "$_caller_compose_profiles" ]; then
         COMPOSE_PROFILES="$_fc_db_ha"
         case "$STACK_TIER" in
@@ -457,6 +459,9 @@ except Exception:
         esac
         if [ "$ENV_OPENAPPSEC_ENABLED" = "1" ]; then
             COMPOSE_PROFILES="${COMPOSE_PROFILES},appsec"
+        fi
+        if [ "$_fc_broker_mode" = "amqp" ]; then
+            COMPOSE_PROFILES="${COMPOSE_PROFILES},amqp"
         fi
     else
         COMPOSE_PROFILES="$_caller_compose_profiles"
@@ -506,7 +511,11 @@ except Exception:
     if [ -z "$ENV_LOKI_RETENTION" ]; then
         if [ "$ENV_SCHED_RAM_MB" -lt 12288 ]; then ENV_LOKI_RETENTION="7d"; else ENV_LOKI_RETENTION="30d"; fi
     fi
-    echo -e "${BLUE}  → Runtime sizing: tier ${STACK_TIER}, ${ENV_GUNICORN_WORKERS} gunicorn workers, PG buffers ${ENV_DB_SHARED_BUFFERS}, WAF shadow ${ENV_OPENAPPSEC_ENABLED}, host ${ENV_SCHED_RAM_MB}MB/${ENV_SCHED_CPUS}CPU${NC}"
+    ENV_CELERY_BROKER_URL="redis://:$REDIS_PASSWORD@redis-primary:6379/4"
+    if [ "$_fc_broker_mode" = "amqp" ]; then
+        ENV_CELERY_BROKER_URL="amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//"
+    fi
+    echo -e "${BLUE}  → Runtime sizing: tier ${STACK_TIER}, ${ENV_GUNICORN_WORKERS} gunicorn workers, PG buffers ${ENV_DB_SHARED_BUFFERS}, broker ${_fc_broker_mode}, WAF shadow ${ENV_OPENAPPSEC_ENABLED}, host ${ENV_SCHED_RAM_MB}MB/${ENV_SCHED_CPUS}CPU${NC}"
     cat <<EOF > "$ENV_TMP"
 # SMSLY Hosting Configuration — Generated $(date -Iseconds)
 ENVIRONMENT=production
@@ -578,7 +587,8 @@ PG_SYNCHRONOUS_COMMIT=on
 # PG_SYNCHRONOUS_STANDBY_NAMES=  (unset = async replication)
 
 REDIS_SOCKET_TIMEOUT=5
-CELERY_BROKER_URL=amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//
+CELERY_BROKER_MODE=$_fc_broker_mode
+CELERY_BROKER_URL=$ENV_CELERY_BROKER_URL
 
 DOMAIN=$DOMAIN
 ACME_EMAIL=${ACME_EMAIL:-}

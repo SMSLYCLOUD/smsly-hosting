@@ -31,7 +31,10 @@ class RateLimitMiddleware:
         if request.path.startswith("/api/"):
             # DRF handles per-user throttling. This middleware is an edge
             # guard for anonymous/unauthenticated request bursts.
-            if not (hasattr(request, "user") and request.user.is_authenticated):
+            if not (
+                (hasattr(request, "user") and request.user.is_authenticated)
+                or getattr(request, "_cached_drf_token_auth", None) is not None
+            ):
                 ip = self._get_client_ip(request)
                 if not self._check_rate_limit(ip):
                     logger.warning("Rate limit exceeded for IP %s", ip)

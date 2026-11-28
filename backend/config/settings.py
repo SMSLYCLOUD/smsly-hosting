@@ -1408,8 +1408,18 @@ _RABBITMQ_HOST = config('RABBITMQ_HOST', default='rabbitmq')
 _RABBITMQ_PORT = config('RABBITMQ_PORT', default='5672')
 _RABBITMQ_VHOST = config('RABBITMQ_DEFAULT_VHOST', default='')
 
-_FALLBACK_BROKER_URL = f"amqp://{_RABBITMQ_USER}:{_RABBITMQ_PASS}@{_RABBITMQ_HOST}:{_RABBITMQ_PORT}/{_RABBITMQ_VHOST}"
+CELERY_BROKER_MODE = config('CELERY_BROKER_MODE', default='redis').strip().lower()
+_REDIS_BROKER_URL = standalone_url(_REDIS_BASE_URL, 4)
+_AMQP_BROKER_URL = f"amqp://{_RABBITMQ_USER}:{_RABBITMQ_PASS}@{_RABBITMQ_HOST}:{_RABBITMQ_PORT}/{_RABBITMQ_VHOST}"
+_FALLBACK_BROKER_URL = _AMQP_BROKER_URL if CELERY_BROKER_MODE == 'amqp' else _REDIS_BROKER_URL
 CELERY_BROKER_URL = config('CELERY_BROKER_URL', default=_FALLBACK_BROKER_URL)
+if str(CELERY_BROKER_URL).startswith(('redis://', 'rediss://', 'sentinel://')):
+    CELERY_BROKER_TRANSPORT_OPTIONS = {
+        # Exceeds CELERY_TASK_TIME_LIMIT (7500s) so long builds are never re-delivered mid-flight.
+        'visibility_timeout': 7800,
+        'socket_connect_timeout': REDIS_SOCKET_TIMEOUT,
+        'socket_timeout': 30,
+    }
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = config(
     'CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP',
     default=True,
@@ -1483,6 +1493,7 @@ CHANNEL_LAYERS = {
     },
 }
 CELERY_RESULT_BACKEND = 'django-db'
+CELERY_RESULT_EXPIRES = 3600
 
 # Use separate queues for different task types
 CELERY_TASK_DEFAULT_QUEUE = 'celery'

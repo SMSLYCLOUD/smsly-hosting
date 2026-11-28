@@ -36,7 +36,7 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Health check via Envoy admin interface
-HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://127.0.0.1:9901/ready || exit 1
 
 # Envoy admin port (internal only)

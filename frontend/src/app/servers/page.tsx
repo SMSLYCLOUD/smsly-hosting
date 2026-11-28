@@ -23,6 +23,7 @@ import { Button } from '@/components/ui/button';
 import {
     ManagedServer, ManagedServerRuntimeInfo, ServerStatus, ProvisionStatus, ServerRole,
 } from '@/lib/api';
+import { startVisibilityInterval } from '@/lib/visibilityInterval';
 
 // Alias for backward compatibility with local code
 type AgentRuntimeInfo = ManagedServerRuntimeInfo;
@@ -270,10 +271,9 @@ export default function ServersPage() {
 
     useEffect(() => {
         fetchServers();
-        // 10s polling is fine for the dashboard — the 5s "now" hook
+        // 10s polling paused when hidden — the 5s "now" hook
         // re-renders the freshness labels without refetching.
-        const interval = setInterval(fetchServers, 10000);
-        return () => clearInterval(interval);
+        return startVisibilityInterval(fetchServers, 10000);
     }, [fetchServers]);
 
     // Poll provision logs + live server state when the log panel

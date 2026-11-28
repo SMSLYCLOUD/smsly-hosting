@@ -6,8 +6,6 @@ import os
 import statistics
 from typing import Any
 
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -36,6 +34,7 @@ class DevOpsAgent:
     def __init__(self):
         self.api_key = os.environ.get("GEMINI_API_KEY")
         if self.api_key:
+            from langchain_google_genai import ChatGoogleGenerativeAI
             self.llm = ChatGoogleGenerativeAI(
                 model="gemini-pro",
                 google_api_key=self.api_key,
@@ -53,6 +52,7 @@ class DevOpsAgent:
         if not self.llm:
             return self._simulate_analysis(repo_url)
 
+        from langchain_core.prompts import ChatPromptTemplate
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are an elite DevOps AI agent. Analyze the provided repository file list.
             Detect the framework, database requirements, and build configuration.
@@ -75,6 +75,7 @@ class DevOpsAgent:
         if not self.llm:
             return self._simulate_diagnosis(build_logs)
 
+        from langchain_core.prompts import ChatPromptTemplate
         prompt = ChatPromptTemplate.from_messages([
             ("system", "You are an expert DevOps engineer. Analyze these build logs and explain the failure in simple terms. Suggest a concrete fix."),
             ("user", "{logs}")

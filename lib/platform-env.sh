@@ -331,17 +331,21 @@ ensure_env_runtime_defaults() {
             ;;
     esac
     [ "$_waf_enabled" = "1" ] && _default_profiles="${_default_profiles},appsec"
+    local _pf_broker_mode=""
+    _pf_broker_mode="$(env_get_value "$env_file" "CELERY_BROKER_MODE" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+    [ "$_pf_broker_mode" = "amqp" ] && _default_profiles="${_default_profiles},amqp"
     env_ensure_var "$env_file" "COMPOSE_PROFILES" "$_default_profiles" "Compose profiles to activate (DB mode + tier + optional appsec)"
     _prof_cur="$(env_get_value "$env_file" "COMPOSE_PROFILES")"
     if command -v python3 >/dev/null 2>&1; then
-        _prof_new="$(DB_MODE="$_db_ha_mode" STACK_TIER_VAL="$_stack_tier" WAF_VAL="$_waf_enabled" CUR_PROF="$_prof_cur" python3 -c '
+        _prof_new="$(DB_MODE="$_db_ha_mode" STACK_TIER_VAL="$_stack_tier" WAF_VAL="$_waf_enabled" BROKER_VAL="$_pf_broker_mode" CUR_PROF="$_prof_cur" python3 -c '
 import os
 mode = (os.environ.get("DB_MODE") or "local-ha").strip() or "local-ha"
 tier = (os.environ.get("STACK_TIER_VAL") or "full").strip().lower()
 waf = (os.environ.get("WAF_VAL") or "0").strip()
+broker = (os.environ.get("BROKER_VAL") or "redis").strip().lower()
 cur = os.environ.get("CUR_PROF", "")
 db_modes = {"local-ha", "patroni", "external"}
-managed = {"local-ha-replica", "redis-ha", "medium", "full", "appsec"}
+managed = {"local-ha-replica", "redis-ha", "medium", "full", "appsec", "amqp"}
 seen = set()
 out = []
 for tok in [t.strip() for t in cur.split(",")]:
@@ -362,6 +366,8 @@ if tier == "full":
     desired.append("full")
 if waf == "1":
     desired.append("appsec")
+if broker == "amqp":
+    desired.append("amqp")
 # Keep DB mode + tier profiles ordered deterministically, followed by custom tokens.
 final = []
 final_seen = set()
@@ -541,15 +547,33 @@ print(",".join(final))
         fi
     fi
 
-    if [ -n "$rabbitmq_password" ]; then
-        expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+    env_ensure_var "$env_file" "CELERY_BROKER_MODE" "redis" "Celery broker mode (redis=low-RAM default, amqp=RabbitMQ)"
+    local _broker_mode=""
+    _broker_mode="$(env_get_value "$env_file" "CELERY_BROKER_MODE" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+    [ "$_broker_mode" = "amqp" ] || _broker_mode="redis"
+    if [ -n "$redis_password" ] || [ -n "$rabbitmq_password" ]; then
+        if [ "$_broker_mode" = "amqp" ] && [ -n "$rabbitmq_password" ]; then
+            expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+        else
+            local _rhost="redis-primary"
+            if [ "${MODE_NODE:-false}" = "true" ]; then
+                _rhost="redis"
+            fi
+            expected_celery_broker_url="redis://:${redis_password}@${_rhost}:6379/4"
+        fi
         current_celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
 
-        env_set_value "$env_file" "RABBITMQ_DEFAULT_USER" "smsly_user"
-        env_set_value "$env_file" "RABBITMQ_DEFAULT_PASS" "$rabbitmq_password"
-        env_ensure_var "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url" "Celery broker (RabbitMQ with auth)"
+        if [ -n "$rabbitmq_password" ]; then
+            env_set_value "$env_file" "RABBITMQ_DEFAULT_USER" "smsly_user"
+            env_set_value "$env_file" "RABBITMQ_DEFAULT_PASS" "$rabbitmq_password"
+        fi
+        env_ensure_var "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url" "Celery broker (Redis DB 4 default, or RabbitMQ)"
 
-        if [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]] && [ "$current_celery_broker_url" != "$expected_celery_broker_url" ]; then
+        if [ "$_broker_mode" = "redis" ] && [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]]; then
+            echo -e "${BLUE}  -> Switching default CELERY_BROKER_URL to Redis DB 4${NC}"
+            env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url"
+            echo -e "${GREEN}  OK CELERY_BROKER_URL synced${NC}"
+        elif [ "$_broker_mode" = "amqp" ] && [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]] && [ "$current_celery_broker_url" != "$expected_celery_broker_url" ]; then
             echo -e "${BLUE}  -> Syncing CELERY_BROKER_URL with RABBITMQ_PASSWORD${NC}"
             env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url"
             echo -e "${GREEN}  OK CELERY_BROKER_URL synced${NC}"
@@ -578,7 +602,11 @@ print(",".join(final))
             local db_host="${MASTER_MESH_IP}"
             expected_database_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
             expected_direct_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
-            expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+            if [ "$_broker_mode" = "amqp" ]; then
+                expected_celery_broker_url="amqp://smsly_user:${mq_pass}@rabbitmq:5672//"
+            else
+                expected_celery_broker_url="redis://:${redis_password}@redis:6379/4"
+            fi
 
             env_set_value "$env_file" "DATABASE_URL" "$expected_database_url"
             env_set_value "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url"

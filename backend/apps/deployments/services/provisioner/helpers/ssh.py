@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import contextlib
 import hashlib
 import io
@@ -7,8 +9,6 @@ import re
 import shlex
 import time
 
-import paramiko
-
 from apps.deployments.models.servers import ManagedServer
 
 from .logging import _append_log
@@ -17,16 +17,33 @@ from .server_config import _get_master_mesh_ip
 logger = logging.getLogger(__name__)
 
 
+def _get_paramiko():
+    """Import paramiko lazily while keeping module-level patchability."""
+    mod = globals().get("paramiko")
+    if mod is None:
+        import paramiko as _paramiko
+        globals()["paramiko"] = _paramiko
+        return _paramiko
+    return mod
+
+
+def __getattr__(name: str):
+    if name == "paramiko":
+        return _get_paramiko()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
-    client = paramiko.SSHClient()
+    _paramiko = _get_paramiko()
+    client = _paramiko.SSHClient()
 
     strict_mode = str(os.environ.get("SMSLY_STRICT_SSH_HOST_KEY_CHECK", "false")).lower() not in ("false", "0", "no")
     allow_auto_add = str(os.environ.get("ALLOW_SSH_AUTOADD", "false")).lower() in ("true", "1", "yes")
 
     if strict_mode and not allow_auto_add:
-        client.set_missing_host_key_policy(paramiko.RejectPolicy())
+        client.set_missing_host_key_policy(_paramiko.RejectPolicy())
     elif allow_auto_add:
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
     else:
         from apps.deployments.services.ssh_client import _get_tofu_policy
         client.set_missing_host_key_policy(_get_tofu_policy(server.host, server.ssh_port))
@@ -50,15 +67,15 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
         passphrase = getattr(server, "ssh_key_passphrase", "") or None
         pkey: paramiko.PKey | None = None
         for _loader in (
-            paramiko.RSAKey.from_private_key,
-            paramiko.Ed25519Key.from_private_key,
-            paramiko.ECDSAKey.from_private_key,
+            _paramiko.RSAKey.from_private_key,
+            _paramiko.Ed25519Key.from_private_key,
+            _paramiko.ECDSAKey.from_private_key,
         ):
             try:
                 key_file.seek(0)
                 pkey = _loader(key_file, password=passphrase)
                 break
-            except paramiko.SSHException:
+            except _paramiko.SSHException:
                 continue
             except (ValueError, Exception):
                 # binascii/malformed-key errors are not SSHException;
@@ -80,7 +97,7 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
         try:
             client.connect(**connect_kwargs)
             break
-        except paramiko.AuthenticationException:
+        except _paramiko.AuthenticationException:
             if "pkey" in connect_kwargs and server.ssh_password:
                 logger.warning(
                     "SSH key auth failed for %s — falling back to password "
@@ -92,7 +109,7 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
                 client.connect(**connect_kwargs)
                 break
             raise
-        except (OSError, EOFError, paramiko.SSHException) as exc:
+        except (OSError, EOFError, _paramiko.SSHException) as exc:
             # Transient network/banner failures: retry with backoff.
             last_exc = exc
             logger.warning(
@@ -141,11 +158,12 @@ def _load_private_key(pem: str, passphrase: str | None = None):
     """Parse an OpenSSH/PEM private key across supported key types."""
     if not pem:
         return None
+    _paramiko = _get_paramiko()
     key_file = io.StringIO(pem)
     for _loader in (
-        paramiko.Ed25519Key.from_private_key,
-        paramiko.RSAKey.from_private_key,
-        paramiko.ECDSAKey.from_private_key,
+        _paramiko.Ed25519Key.from_private_key,
+        _paramiko.RSAKey.from_private_key,
+        _paramiko.ECDSAKey.from_private_key,
     ):
         try:
             key_file.seek(0)

@@ -13,7 +13,19 @@ try:
 except ImportError:  # Windows dev machines have no fcntl
     fcntl = None  # type: ignore[assignment]
 
-import paramiko
+def _get_paramiko():
+    """Import paramiko lazily so Django web/beat workers avoid loading SSH/crypto modules."""
+    mod = globals().get("paramiko")
+    if mod is None:
+        import paramiko as mod  # type: ignore[no-redef]
+        globals()["paramiko"] = mod
+    return mod
+
+
+def __getattr__(name: str):
+    if name == "paramiko":
+        return _get_paramiko()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 logger = logging.getLogger(__name__)
 _TOFU_THREAD_LOCK = threading.Lock()
@@ -40,7 +52,7 @@ _KNOWN_HOSTS_PATH = os.environ.get(
 )
 
 
-class _TOFUPolicy(paramiko.MissingHostKeyPolicy):
+class _TOFUPolicy:
     """Trust-On-First-Use host key policy.
 
     On first connection to an unknown host, the key is accepted and its
@@ -74,7 +86,7 @@ class _TOFUPolicy(paramiko.MissingHostKeyPolicy):
             # A corrupt store must NEVER silently become empty: that
             # would trust the next presented key (MITM accept). Fail
             # closed so the operator repairs or deletes the file.
-            raise paramiko.SSHException(
+            raise _get_paramiko().SSHException(
                 f"TOFU store corrupt at {path}: {exc}"
             )
         except OSError:
@@ -145,7 +157,7 @@ class _TOFUPolicy(paramiko.MissingHostKeyPolicy):
 
             # Known host — verify key matches
             if stored.get("fingerprint") != fingerprint:
-                raise paramiko.SSHException(
+                raise _get_paramiko().SSHException(
                     f"TOFU REJECT: host key for {hostname} has changed!\n"
                     f"  Stored: {stored.get('key_type')} {stored.get('fingerprint')}\n"
                     f"  Presented: {key_type} {fingerprint}\n"
@@ -212,12 +224,13 @@ class SSHClient:
                 )
 
         # Try various key formats
+        _paramiko = _get_paramiko()
         errors = []
         passphrase = self.key_passphrase or None
         for key_cls in (
-            paramiko.RSAKey,
-            paramiko.Ed25519Key,
-            paramiko.ECDSAKey,
+            _paramiko.RSAKey,
+            _paramiko.Ed25519Key,
+            _paramiko.ECDSAKey,
         ):
             try:
                 self._key = key_cls.from_private_key(
@@ -251,6 +264,7 @@ class SSHClient:
         # A reasonable minimum is 32 bytes for any key type.
         if len(decoded) < 32:
             return None
+        _paramiko = _get_paramiko()
         # Try wrapping as RSA (most common), then generic PKCS8
         for label in ("RSA PRIVATE KEY", "PRIVATE KEY"):
             pem = f"-----BEGIN {label}-----\n"
@@ -261,13 +275,13 @@ class SSHClient:
             try:
                 # Quick validation: attempt to parse it
                 key_file = io.StringIO(pem)
-                paramiko.RSAKey.from_private_key(key_file)
+                _paramiko.RSAKey.from_private_key(key_file)
                 return pem
             except Exception as exc:
                 logger.debug("Failed to validate PEM as RSA key: %s", exc)
             try:
                 key_file = io.StringIO(pem)
-                paramiko.Ed25519Key.from_private_key(key_file)
+                _paramiko.Ed25519Key.from_private_key(key_file)
                 return pem
             except Exception as exc:
                 logger.debug("Failed to validate PEM as Ed25519 key: %s", exc)
@@ -277,7 +291,8 @@ class SSHClient:
         if self.client:
             return
 
-        self.client = paramiko.SSHClient()
+        _paramiko = _get_paramiko()
+        self.client = _paramiko.SSHClient()
         # Do NOT call load_system_host_keys() in Docker containers — stale
         # entries from prior provisioning runs cause key-mismatch rejections
         # after server reboots (AutoAddPolicy only handles *missing* keys, not
@@ -288,9 +303,9 @@ class SSHClient:
         allow_auto_add = str(os.environ.get("ALLOW_SSH_AUTOADD", "false")).lower() in ("true", "1", "yes")
 
         if strict_mode and not allow_auto_add:
-            self.client.set_missing_host_key_policy(paramiko.RejectPolicy())
+            self.client.set_missing_host_key_policy(_paramiko.RejectPolicy())
         elif allow_auto_add:
-            self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            self.client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
             logger.warning("Using AutoAddPolicy for SSH host %s (insecure).", self.ip)
         else:
             # Default: TOFU — trust on first use, reject on key change.
@@ -352,9 +367,9 @@ class SSHClient:
                     self.ip = host  # Update self.ip to the successful one
                     logger.info("SSHClient: Connected to %s:%s successfully", host, self.port)
                     return
-                except paramiko.AuthenticationException:
+                except _paramiko.AuthenticationException:
                     raise
-                except (OSError, TimeoutError, paramiko.SSHException) as e:
+                except (OSError, TimeoutError, _paramiko.SSHException) as e:
                     last_exc = e
                     if i < retries - 1:
                         time.sleep(2)

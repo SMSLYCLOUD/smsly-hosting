@@ -14,6 +14,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { Progress } from "@/components/ui/progress";
 import { useServiceStatusUpdates, getStatusColor, getStatusIcon } from "@/lib/websocket";
 import { isServiceFailed, isServiceRunning, isServiceStopped } from "@/lib/deploymentStatus";
+import { startVisibilityInterval } from "@/lib/visibilityInterval";
 
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardOverview | null>(null);
@@ -70,9 +71,7 @@ export default function DashboardPage() {
       }
     };
     fetchData();
-    
-    const interval = setInterval(fetchData, 10000);
-    return () => clearInterval(interval);
+    return startVisibilityInterval(fetchData, 10000);
   }, [toast]);
 
   if (loading) {

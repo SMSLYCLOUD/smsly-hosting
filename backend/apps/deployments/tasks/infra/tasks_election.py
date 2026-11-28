@@ -15,11 +15,16 @@ def heartbeat_task():
     - If FOLLOWER: check if leader heartbeat has timed out
     - If CANDIDATE: retry only after the campaign timeout (worker recovery)
     """
+    from django.core.cache import cache
     from apps.deployments.models.mesh import MeshNetwork
     from apps.deployments.services.election_service import ElectionService
 
+    has_mesh = cache.get("election:has_active_mesh")
+    if has_mesh is False:
+        return
     # Find active meshes with cluster state
-    meshes = MeshNetwork.objects.filter(is_active=True)
+    meshes = list(MeshNetwork.objects.filter(is_active=True))
+    cache.set("election:has_active_mesh", bool(meshes), timeout=60)
     for mesh in meshes:
         try:
             cluster = ElectionService.get_or_create_cluster(mesh=mesh)

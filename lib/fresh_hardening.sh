@@ -169,7 +169,9 @@ INTEGRITY_CRON="0 * * * * root $INTEGRITY_SCRIPT >> /var/log/smsly-integrity.log
 # executable first so the -x gate cannot false-negative (2026-09-12).
 chmod +x "$INTEGRITY_SCRIPT" 2>/dev/null || true
 if [ -f "$INTEGRITY_SCRIPT" ]; then
-    if ! grep -q "verify_platform_integrity.sh" /etc/crontab ; then
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-enabled --quiet smsly-integrity.timer 2>/dev/null; then
+        echo -e "${GREEN}  ✓ Platform integrity guard handled by systemd timer (smsly-integrity.timer)${NC}"
+    elif ! grep -q "verify_platform_integrity.sh" /etc/crontab ; then
         echo "$INTEGRITY_CRON" >> /etc/crontab
         echo -e "${GREEN}  ✓ Platform integrity guard scheduled hourly via cron${NC}"
     else

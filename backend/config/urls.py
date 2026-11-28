@@ -12,6 +12,7 @@ from drf_spectacular.views import (
 
 from config.health import health_check, health_check_verbose, liveness_check, readiness_check
 from apps.core.views import ContactView
+from apps.core.views.observability import grafana_wake_fallback_view
 from apps.domains.views.challenge import domain_challenge
 
 
@@ -473,6 +474,7 @@ urlpatterns = [
         'api/v1/auth/registration/',
         include('dj_rest_auth.registration.urls')),
     path('accounts/', include('allauth.urls')),
+    re_path(r'^grafana/(?P<subpath>.*)$', grafana_wake_fallback_view, name='grafana-wake-fallback'),
 ]
 
 # ─── Conditional App Routes (Agent Mode Resiliency) ───────────────────────

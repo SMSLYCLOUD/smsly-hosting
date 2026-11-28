@@ -255,6 +255,16 @@ def converge_openappsec_stack_task():
             ok = len(running) > 0
         else:
             ok = len(running) == 0
+        try:
+            from apps.deployments.services.caddy_manager import apply_caddyfile, generate_caddyfile
+            pc = PlatformConfig.load()
+            apply_caddyfile(
+                generate_caddyfile(pc),
+                cloudflare_token=(getattr(pc, "cloudflare_api_token", "") or "").strip(),
+                preserve_existing_token=True,
+            )
+        except Exception as exc:
+            logger.debug("WAF converge Caddy sync skipped: %s", exc)
         logger.info("WAF converge: enabled=%s action=%s running=%d", enabled, action, len(running))
         return {"ok": ok, "enabled": enabled, "action": action, "running": running}
     finally:

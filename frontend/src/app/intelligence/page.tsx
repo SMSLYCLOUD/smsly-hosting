@@ -37,6 +37,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RequiresTier } from '@/components/licensing/RequiresTier';
 import { Progress } from '@/components/ui/progress';
 import { usePermissions } from '@/hooks/usePermissions';
+import { startVisibilityInterval } from '@/lib/visibilityInterval';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -445,8 +446,7 @@ export default function IntelligencePage() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
+    return startVisibilityInterval(fetchData, 30000);
   }, [fetchData]);
 
   const handleRefresh = () => {

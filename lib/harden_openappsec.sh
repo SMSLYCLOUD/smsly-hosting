@@ -183,6 +183,9 @@ _harden_openappsec_verify() {
     [ "$(docker inspect -f '{{.State.Running}}' smsly-appsec-agent 2>/dev/null)" = "true" ] || { _harden_log warn "appsec-agent — container not running"; _fail=1; }
     [ "$(docker inspect -f '{{.State.Running}}' smsly-appsec-envoy 2>/dev/null)" = "true" ] || { _harden_log warn "appsec-envoy — container not running"; _fail=1; }
     if [ "$_fail" = "0" ]; then
+        if ! timeout 5 docker exec smsly-appsec-agent sh -c 'grep -qiE ":1F92 [0-9A-F]+:[0-9A-F]+ 0A " /proc/net/tcp /proc/net/tcp6' 2>/dev/null; then
+            _harden_log warn "open-appsec inline listener (:8082) not listening in appsec-agent netns"
+        fi
         # Attachment signal: the agent never logs the word "attachment"
         # (it logs nano-service installs + policy loads), so grep the
         # ENVOY side — its golang filter logs a verdict per inspected

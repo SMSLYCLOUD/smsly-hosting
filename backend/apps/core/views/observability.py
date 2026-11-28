@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 import requests
 from decouple import config
 from django.conf import settings
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
@@ -402,11 +403,26 @@ def loki_query(request):
             payload[dst_key] = value
 
     try:
-        resp = requests.get(
-            f"{LOKI_INTERNAL_URL}/loki/api/v1/query_range",
-            params=payload,
-            timeout=PROXY_TIMEOUT,
-        )
+        try:
+            resp = requests.get(
+                f"{LOKI_INTERNAL_URL}/loki/api/v1/query_range",
+                params=payload,
+                timeout=PROXY_TIMEOUT,
+            )
+        except requests.RequestException:
+            woke = False
+            try:
+                from apps.deployments.services.tiers import ensure_tier_awake
+                woke = ensure_tier_awake("metrics", timeout=20)
+            except Exception:
+                woke = False
+            if not woke:
+                raise
+            resp = requests.get(
+                f"{LOKI_INTERNAL_URL}/loki/api/v1/query_range",
+                params=payload,
+                timeout=PROXY_TIMEOUT,
+            )
         resp.raise_for_status()
         data = resp.json()
     except requests.RequestException:
@@ -540,11 +556,26 @@ def prometheus_query(request):
         params = {'query': query}
         if parsed_time is not None:
             params['time'] = parsed_time
-        resp = requests.get(
-            f"{PROMETHEUS_INTERNAL_URL}/api/v1/query",
-            params=params,
-            timeout=PROXY_TIMEOUT,
-        )
+        try:
+            resp = requests.get(
+                f"{PROMETHEUS_INTERNAL_URL}/api/v1/query",
+                params=params,
+                timeout=PROXY_TIMEOUT,
+            )
+        except requests.RequestException:
+            woke = False
+            try:
+                from apps.deployments.services.tiers import ensure_tier_awake
+                woke = ensure_tier_awake("metrics", timeout=20)
+            except Exception:
+                woke = False
+            if not woke:
+                raise
+            resp = requests.get(
+                f"{PROMETHEUS_INTERNAL_URL}/api/v1/query",
+                params=params,
+                timeout=PROXY_TIMEOUT,
+            )
         resp.raise_for_status()
         data = resp.json()
     except requests.RequestException:
@@ -555,3 +586,49 @@ def prometheus_query(request):
         )
 
     return Response(data)
+
+
+def grafana_wake_fallback_view(request, subpath: str = ""):
+    """Fallback reached only when Caddy cannot dial sleeping grafana:3000.
+
+    Wakes the `ui` tier cooperatively via napd and renders an auto-reloading
+    page so direct `/grafana/*` navigation recovers without a bare 502.
+    """
+    user = getattr(request, "user", None)
+    if not (user and user.is_authenticated and (user.is_staff or user.is_superuser)):
+        accept = str(request.META.get("HTTP_ACCEPT", "") or "").lower()
+        if "application/json" in accept:
+            return JsonResponse({"error": "Authentication required."}, status=401)
+        next_url = urllib.parse.quote(request.get_full_path() or "/grafana/", safe="")
+        return HttpResponseRedirect(f"/login?next={next_url}")
+
+    woke = False
+    try:
+        from apps.deployments.services.tiers import ensure_tier_awake
+        woke = bool(ensure_tier_awake("ui", timeout=30))
+    except Exception:
+        woke = False
+
+    accept = str(request.META.get("HTTP_ACCEPT", "") or "").lower()
+    if "application/json" in accept:
+        return JsonResponse(
+            {"status": "waking" if woke else "unavailable", "tier": "ui"},
+            status=503,
+        )
+
+    html = (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta http-equiv='refresh' content='3'>"
+        "<title>Starting Grafana…</title></head>"
+        "<body style='font-family:system-ui,sans-serif;background:#0b1020;"
+        "color:#e2e8f0;display:flex;align-items:center;justify-content:center;"
+        "height:100vh;margin:0'>"
+        "<div style='text-align:center;max-width:420px;padding:24px'>"
+        "<h2>Starting Grafana dashboard…</h2>"
+        "<p>The UI tier was parked to save memory and is waking up now. "
+        "This page refreshes automatically.</p>"
+        "</div></body></html>"
+    )
+    resp = HttpResponse(html, status=200, content_type="text/html; charset=utf-8")
+    resp["Cache-Control"] = "no-store"
+    return resp

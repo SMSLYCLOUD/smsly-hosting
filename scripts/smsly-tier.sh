@@ -113,6 +113,12 @@ check_stack_tier_compat() {
     *) return 0 ;;
   esac
 
+  if [ "$TIER_NAME" = "appsec" ]; then
+    local _oa_flag=""
+    _oa_flag=$(grep -E '^OPENAPPSEC_ENABLED=' "$env_file" | tail -n 1 | cut -d= -f2- | tr -d '[:space:]"\x27' || true)
+    [ "$_oa_flag" = "1" ] && return 0
+  fi
+
   local allowed_profiles="$host_profiles"
   if [ "$host_stack_tier" = "medium" ]; then
     allowed_profiles="$allowed_profiles medium"

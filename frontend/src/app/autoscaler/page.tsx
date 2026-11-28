@@ -26,6 +26,7 @@ import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
 import { RequiresTier } from '@/components/licensing/RequiresTier';
+import { startVisibilityInterval } from '@/lib/visibilityInterval';
 
 // ─── Components ─────────────────────────────────────────────────────────────
 
@@ -315,11 +316,10 @@ export default function AutoscalerPage() {
 
   useEffect(() => {
     if (!autoRefresh) return;
-    const interval = setInterval(() => {
+    return startVisibilityInterval(() => {
       if (draggingSliderRef.current) return;
       void fetchData();
-    }, 10000); // 10s poll
-    return () => clearInterval(interval);
+    }, 10000); // 10s poll, paused while tab is hidden
   }, [autoRefresh, fetchData]);
 
   const handleTrigger = async () => {

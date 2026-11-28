@@ -729,7 +729,26 @@ def _discover_effective_groups(stats: dict[str, ContainerStats]) -> dict[str, di
     return groups
 
 
+def _has_legacy_managed_containers() -> bool:
+    """Cheap preflight before calling `docker stats --no-stream`."""
+    try:
+        res = subprocess.run(
+            ['docker', 'ps', '--format', '{{.Names}}'],
+            capture_output=True, text=True, timeout=10,
+        )
+        if res.returncode != 0:
+            return False
+        running = {line.strip() for line in res.stdout.splitlines() if line.strip()}
+        return any(name in running for name in SERVICE_GROUPS)
+    except Exception:
+        return False
+
+
 def _run_once_implementation():
+    if not _has_legacy_managed_containers():
+        logger.debug("No legacy SERVICE_GROUPS containers running — skipping docker stats")
+        return
+
     stats = get_docker_stats()
     if not stats:
         logger.warning("No container stats available — skipping cycle")
@@ -788,12 +807,16 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
 
     while True:
+        idle_backoff = False
         try:
-            run_once()
+            if not _has_legacy_managed_containers():
+                idle_backoff = True
+            else:
+                run_once()
         except Exception as e:
             logger.error(f"Autoscaler cycle failed: {e}")
 
-        time.sleep(CHECK_INTERVAL)
+        time.sleep(300 if idle_backoff else CHECK_INTERVAL)
 
 
 if __name__ == '__main__':

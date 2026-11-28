@@ -28,6 +28,7 @@ REFRESH_INTERVAL = int(os.environ.get("REFRESH_INTERVAL", "30"))
 MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "12"))
 STATS_TIMEOUT = int(os.environ.get("STATS_TIMEOUT", "25"))
 NODE_NAME = os.environ.get("NODE_NAME", "local")
+COLLECT_CONTAINER_STATS = os.environ.get("COLLECT_CONTAINER_STATS", "0").strip() in {"1", "true", "yes"}
 
 _metrics_cache = {"data": "", "ts": 0, "container_count": 0}
 _lock = threading.Lock()
@@ -146,7 +147,7 @@ def _collect_metrics():
     start = time.time()
 
     try:
-        all_containers = _query_docker("/containers/json?all=true")
+        all_containers = _query_docker("/containers/json?all=0")
     except Exception:
         traceback.print_exc(file=sys.stdout)
         sys.stdout.flush()
@@ -184,13 +185,13 @@ def _collect_metrics():
         out.append("")
         return "\n".join(out), 0
 
-    # ── resource stats ─────────────────────────────────────────────────
-    if _HAS_POOL and len(managed) > 1:
-        stats_lines = _collect_parallel(managed)
-    else:
-        stats_lines = _collect_serial(managed)
-
-    out.extend(stats_lines)
+    # ── resource stats (opt-in; cAdvisor already exports container stats) ──
+    if COLLECT_CONTAINER_STATS:
+        if _HAS_POOL and len(managed) > 1:
+            stats_lines = _collect_parallel(managed)
+        else:
+            stats_lines = _collect_serial(managed)
+        out.extend(stats_lines)
 
     elapsed = time.time() - start
     if elapsed > (REFRESH_INTERVAL * 0.8):

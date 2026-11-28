@@ -970,6 +970,9 @@ refresh_runtime_services() {
     else
         echo -e "${BLUE}  → smsly-autoscaler not running, skipping restart${NC}"
     fi
+    if [ -x "${INSTALL_DIR:-/opt/smsly-hosting}/scripts/smsly-tier.sh" ]; then
+        timeout 120 bash "${INSTALL_DIR:-/opt/smsly-hosting}/scripts/smsly-tier.sh" resleep || true
+    fi
     echo -e "${GREEN}  OK Clean runtime refresh complete${NC}"
 }
 

@@ -7,7 +7,6 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlparse as parse_url
 
-import git
 from django.utils import timezone
 
 from apps.deployments.models import EnvironmentVariable
@@ -16,6 +15,14 @@ from .exceptions import BuildError
 
 
 logger = logging.getLogger(__name__)
+
+
+def __getattr__(name: str):
+    if name == "git":
+        import git as _git
+        globals()["git"] = _git
+        return _git
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _sanitize_repo_symlinks(root_dir: str) -> None:

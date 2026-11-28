@@ -46,28 +46,31 @@ def container_restart_loop_watchdog_task():
         persistence across the 5-minute beat interval)
     Returns findings; logs at ERROR so log-based alerting can page.
     """
-    out = _sh(['docker', 'ps', '-a', '--format', '{{.Names}}\t{{.Status}}'])
+    out = _sh(['docker', 'ps', '-aq'])
+    ids = [cid.strip() for cid in (out.stdout or '').splitlines() if cid.strip()]
     findings = []
-    for line in (out.stdout or '').splitlines():
-        name, _, status = line.partition('\t')
-        if not name:
-            continue
-        insp = _sh(['docker', 'inspect', name,
-                    '--format', '{{.RestartCount}}\t{{.State.Status}}\t{{.State.ExitCode}}'])
-        if insp.returncode != 0:
-            continue
-        try:
-            restarts_s, state_s, exit_s = insp.stdout.strip().split('\t')
-            restarts = int(restarts_s)
-        except Exception:
-            continue
-        loop = restarts >= RESTART_LOOP_MIN_COUNT or (
-            state_s == 'restarting' and restarts >= 3)
-        if loop:
-            findings.append({
-                'container': name, 'restarts': restarts,
-                'state': state_s, 'last_exit': exit_s,
-            })
+    if ids:
+        insp = _sh([
+            'docker', 'inspect',
+            '--format', '{{.Name}}\t{{.RestartCount}}\t{{.State.Status}}\t{{.State.ExitCode}}',
+            *ids,
+        ])
+        for line in (insp.stdout or '').splitlines():
+            parts = line.strip().split('\t')
+            if len(parts) < 4:
+                continue
+            name, restarts_s, state_s, exit_s = parts[0].lstrip('/'), parts[1], parts[2], parts[3]
+            try:
+                restarts = int(restarts_s)
+            except Exception:
+                continue
+            loop = restarts >= RESTART_LOOP_MIN_COUNT or (
+                state_s == 'restarting' and restarts >= 3)
+            if loop:
+                findings.append({
+                    'container': name, 'restarts': restarts,
+                    'state': state_s, 'last_exit': exit_s,
+                })
     if findings:
         logger.error(
             "RESTART-LOOP WATCHDOG: %d container(s) crash-looping: %s",

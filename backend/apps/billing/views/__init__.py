@@ -7,7 +7,6 @@ import logging
 import uuid
 from decimal import Decimal
 
-import stripe
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Sum
@@ -394,6 +393,7 @@ class StripeWebhookView(GenericAPIView):
                 return Response({"error": "Invalid payload"}, status=status.HTTP_400_BAD_REQUEST)
         else:
             try:
+                import stripe
                 # pylint: disable=protected-access
                 StripeService._configure_stripe()
                 event = stripe.Webhook.construct_event(payload, sig_header, secret)

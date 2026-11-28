@@ -13,6 +13,12 @@
 #      names that exist on THIS host (OVH uses ens3).
 
 set -u
+exec 9>/run/smsly-integrity.lock 2>/dev/null || exec 9>/tmp/smsly-integrity.lock 2>/dev/null || true
+if command -v flock >/dev/null 2>&1; then
+    if ! flock -n 9 2>/dev/null; then
+        exit 0
+    fi
+fi
 INSTALL_DIR="${INSTALL_DIR:-/opt/smsly-hosting}"
 CERTS="$INSTALL_DIR/certs"
 LOG_PREFIX="[smsly-integrity]"
@@ -584,6 +590,9 @@ ensure_openappsec_shadow_parity() {
         log "openappsec shadow parity OK (filter transparent: probe=$direct_a redirect='$direct_b_norm')"
     else
         log "ALERT: openappsec shadow DIVERGES from direct Caddy (direct probe=$direct_a redirect='$direct_b_norm' vs shadow probe=$shadow_a redirect='$shadow_b') — edge cutover BLOCKED until fixed"
+    fi
+    if ! timeout -k 5 10 docker exec smsly-appsec-agent sh -c 'grep -qiE ":1F92 [0-9A-F]+:[0-9A-F]+ 0A " /proc/net/tcp /proc/net/tcp6' 2>/dev/null; then
+        log "ALERT: openappsec inline listener (:8082) not active inside smsly-appsec-agent netns"
     fi
 }
 

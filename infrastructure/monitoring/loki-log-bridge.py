@@ -101,6 +101,7 @@ def query_loki(client: httpx.Client, job: str, start: str, end: str) -> list[dic
 
 def write_logs(logs: list[dict], log_dir: Path, prefix: str) -> int:
     """Write log lines to per-node files. Returns number of lines written."""
+    max_bytes = int(os.environ.get("LOKI_BRIDGE_MAX_LOG_BYTES", str(10 * 1024 * 1024)))
     written = 0
     for entry in logs:
         node_id = entry["node_id"]
@@ -108,6 +109,12 @@ def write_logs(logs: list[dict], log_dir: Path, prefix: str) -> int:
         safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in node_id)
         log_file = log_dir / f"{prefix}{safe_name}.log"
         try:
+            if max_bytes > 0 and log_file.exists() and log_file.stat().st_size >= max_bytes:
+                rotated = log_dir / f"{prefix}{safe_name}.log.1"
+                try:
+                    log_file.replace(rotated)
+                except OSError:
+                    pass
             with open(log_file, "a") as f:
                 f.write(entry["line"] + "\n")
                 written += 1
@@ -129,7 +136,8 @@ def main():
 
     with httpx.Client(timeout=30) as client:
         while True:
-            now_ns = str(int(datetime.now(timezone.utc).timestamp() * 1e9))
+            now_ns_int = int(datetime.now(timezone.utc).timestamp() * 1e9)
+            now_ns = str(now_ns_int)
             for job, prefix in JOB_FILE_PREFIXES.items():
                 job_last_ts = last_ts_by_job.get(job, initial_ts_ns)
                 logs = query_loki(client, job, job_last_ts, now_ns)
@@ -141,6 +149,10 @@ def main():
                         last_ts_by_job[job] = str(int(max_ts) + 1)  # +1 ns to avoid duplicates
                     log.info("Wrote %d %s log lines from Loki", written, job)
                 else:
+                    # Advance cursor past already-scanned window (minus 1s skew)
+                    # so idle jobs never re-query back to boot_time forever.
+                    floor_ns = max(int(job_last_ts), now_ns_int - 1_000_000_000)
+                    last_ts_by_job[job] = str(floor_ns)
                     log.debug("No new %s logs", job)
             time.sleep(POLL_INTERVAL)
 

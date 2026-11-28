@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { useSpaceOps } from "@/context/SpaceOpsContext";
 import { Loader2, CheckCircle, XCircle, Rocket, Terminal, GitBranch, Clock, AlertTriangle, ArrowLeft } from "lucide-react";
 import api from "@/lib/api";
+import { startVisibilityInterval } from "@/lib/visibilityInterval";
 import {
   isDeploymentFailed,
   isDeploymentInProgress,
@@ -29,6 +30,8 @@ export default function DeploymentWatchPage() {
   const [recovering, setRecovering] = useState(false);
   const confirm = useConfirm();
 
+  const isTerminalRef = React.useRef(false);
+
   const fetchDeployment = async () => {
     try {
         const res = await api.get(`/deployments/${id}/`);
@@ -39,12 +42,19 @@ export default function DeploymentWatchPage() {
         // emitted by the backend).
         const status = res.data.status;
         if (isDeploymentLive(status)) {
+            isTerminalRef.current = true;
             setSpaceOpsState({ mode: 'success', intensity: 'low' });
         } else if (isDeploymentFailed(status)) {
+            isTerminalRef.current = true;
             setSpaceOpsState({ mode: 'failed', intensity: 'medium' });
+        } else if (status === 'CANCELLED' || status === 'SUPERSEDED') {
+            isTerminalRef.current = true;
+            setSpaceOpsState({ mode: 'idle', intensity: 'low' });
         } else if (isDeploymentInProgress(status)) {
+            isTerminalRef.current = false;
             setSpaceOpsState({ mode: 'deploying', intensity: 'high' });
         } else {
+            isTerminalRef.current = false;
             setSpaceOpsState({ mode: 'idle', intensity: 'low' });
         }
     } catch (err) {
@@ -55,10 +65,14 @@ export default function DeploymentWatchPage() {
   };
 
   useEffect(() => {
+    isTerminalRef.current = false;
     fetchDeployment();
-    const interval = setInterval(fetchDeployment, 5000);
+    const stopPolling = startVisibilityInterval(() => {
+      if (isTerminalRef.current) return;
+      void fetchDeployment();
+    }, 5000);
     return () => {
-        clearInterval(interval);
+        stopPolling();
         resetSpaceOpsState(); // Reset background on unmount
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps

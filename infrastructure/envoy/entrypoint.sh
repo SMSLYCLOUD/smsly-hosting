@@ -49,4 +49,4 @@ else
 fi
 
 echo "[envoy-sidecar] Starting Envoy..."
-exec envoy -c "${ENVOY_CONFIG}" --service-cluster "${SERVICE_NAME}" --service-node "${SERVICE_NAME}"
+exec envoy -c "${ENVOY_CONFIG}" --concurrency "${ENVOY_CONCURRENCY:-1}" --service-cluster "${SERVICE_NAME}" --service-node "${SERVICE_NAME}"

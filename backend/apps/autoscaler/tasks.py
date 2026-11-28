@@ -10,4 +10,4 @@ from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
 def autoscaler_collect_stats() -> None:
     """Run inline autoscaler check to populate stats/history in Redis cache."""
     from apps.autoscaler.views import _run_autoscaler_check
-    _run_autoscaler_check()
+    _run_autoscaler_check(skip_broker_inspect=True)

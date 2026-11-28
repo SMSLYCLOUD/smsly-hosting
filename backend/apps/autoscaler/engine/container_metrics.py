@@ -30,18 +30,9 @@ STATS_OVERALL_TIMEOUT = 20
 # Autoscaler tab permanently empty.
 STATS_CLI_TIMEOUT = 12
 
-# Lazy-loaded K8s clients — only imported when the kubernetes package
-# is available.  ``init_k8s()`` populates ``_k8s_clients`` on first use.
+# Lazy-loaded K8s clients — only imported inside init_k8s() when actually needed.
 k8s_config = None
 k8s_client = None
-try:
-    from kubernetes import client as _k8s_client
-    from kubernetes import config as _k8s_config
-    k8s_config = _k8s_config
-    k8s_client = _k8s_client
-except ImportError:
-    pass
-
 
 # K8s availability flag — populated lazily by ``init_k8s``
 K8S_AVAILABLE = False
@@ -50,13 +41,19 @@ _k8s_clients: dict = {}
 
 def init_k8s() -> bool:
     """Try to load an in-cluster or kubeconfig K8s client. Returns True on success."""
-    global K8S_AVAILABLE
+    global K8S_AVAILABLE, k8s_config, k8s_client
     if _k8s_clients.get('available') is not None:
         return _k8s_clients['available']
     if k8s_config is None or k8s_client is None:
-        _k8s_clients['available'] = False
-        K8S_AVAILABLE = False
-        return False
+        try:
+            from kubernetes import client as _k8s_client
+            from kubernetes import config as _k8s_config
+            k8s_config = _k8s_config
+            k8s_client = _k8s_client
+        except ImportError:
+            _k8s_clients['available'] = False
+            K8S_AVAILABLE = False
+            return False
     try:
         try:
             k8s_config.load_incluster_config()

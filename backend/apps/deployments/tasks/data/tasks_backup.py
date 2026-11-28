@@ -530,12 +530,14 @@ def recover_stalled_backups_task():
 @shared_task(soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1], name="apps.deployments.tasks_backup.run_scheduled_backups_task")
 def run_scheduled_backups_task():
     """Execute all due BackupSchedule entries."""
-    import croniter  # type: ignore[import-untyped]
-
     from apps.cloud.models.backup import BackupSchedule
 
+    schedules = list(BackupSchedule.objects.filter(enabled=True))
+    if not schedules:
+        return 0
+    import croniter  # type: ignore[import-untyped]
+
     now = timezone.now()
-    schedules = BackupSchedule.objects.filter(enabled=True)
     ran = 0
     for sched in schedules:
         try:
@@ -564,12 +566,14 @@ def run_scheduled_backups_task():
 @shared_task(soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1], name="apps.deployments.tasks_backup.run_scheduled_snapshots_task")
 def run_scheduled_snapshots_task():
     """Execute all due SnapshotSchedule entries."""
-    import croniter  # type: ignore[import-untyped]
-
     from apps.cloud.models.backup import SnapshotSchedule
 
+    schedules = list(SnapshotSchedule.objects.filter(enabled=True))
+    if not schedules:
+        return 0
+    import croniter  # type: ignore[import-untyped]
+
     now = timezone.now()
-    schedules = SnapshotSchedule.objects.filter(enabled=True)
     ran = 0
     for sched in schedules:
         try:

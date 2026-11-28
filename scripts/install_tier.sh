@@ -59,6 +59,8 @@ case "$TIER" in
     ;;
 esac
 [ "$WAF_ENABLED" = "1" ] && PROFILES="${PROFILES},appsec"
+BROKER_MODE="$(grep -E '^CELERY_BROKER_MODE=' "$ENV_FILE" | cut -d= -f2 | tail -1 | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+[ "$BROKER_MODE" = "amqp" ] && PROFILES="${PROFILES},amqp"
 
 echo "==> Stack tier: $TIER  (COMPOSE_PROFILES=$PROFILES)"
 echo "    DB HA: $DB_HA  |  OpenAppSec: $WAF_ENABLED"

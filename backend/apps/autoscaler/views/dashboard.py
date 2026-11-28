@@ -36,8 +36,6 @@ START_TIME = time.time()
 # before returning cached data. Prevents the endpoint from hanging.
 API_TIMEOUT = 15
 
-init_k8s()
-
 
 def _get_system_memory() -> int:
     try:
@@ -171,7 +169,7 @@ def _overlay_paas_state(services: dict) -> None:
         logger.debug("PaaS state overlay skipped: %s", exc)
 
 
-def _get_infra_autoscaler_state(stats: dict | None = None) -> dict:
+def _get_infra_autoscaler_state(stats: dict | None = None, *, skip_broker_inspect: bool = False) -> dict:
     """Query infrastructure autoscaler state (Celery burst workers, RabbitMQ queues, and in-flight drains).
 
     Monitors:
@@ -215,32 +213,54 @@ def _get_infra_autoscaler_state(stats: dict | None = None) -> dict:
     from django.conf import settings
     is_testing = "pytest" in sys.modules or getattr(settings, "TESTING", False)
 
-    if not is_testing:
-        try:
-            from config.celery import app as celery_app
-            with celery_app.connection_for_read() as conn:
-                conn.connect_timeout = 0.5
-                conn.ensure_connection(max_retries=0, timeout=0.5)
-                insp = celery_app.control.inspect(timeout=0.5, connection=conn)
-                if insp:
-                    active_map = insp.active() or {}
-                    reserved_map = insp.reserved() or {}
-                    ping_workers = list((insp.ping() or {}).keys())
-                    for wname, tasks in active_map.items():
-                        active_by_worker[wname] = len(tasks) if isinstance(tasks, list) else 0
-                    for wname, tasks in reserved_map.items():
-                        reserved_by_worker[wname] = len(tasks) if isinstance(tasks, list) else 0
+    if not is_testing and not skip_broker_inspect:
+        _probe_cache_key = "autoscaler:infra_broker_probe"
+        _cached_probe = cache.get(_probe_cache_key)
+        if isinstance(_cached_probe, dict):
+            active_by_worker = _cached_probe.get("active_by_worker", {})
+            reserved_by_worker = _cached_probe.get("reserved_by_worker", {})
+            ping_workers = _cached_probe.get("ping_workers", [])
+            queues = _cached_probe.get("queues", queues)
+            total_depth = _cached_probe.get("total_depth", 0)
+        else:
+            try:
+                from config.celery import app as celery_app
+                with celery_app.connection_for_read() as conn:
+                    conn.connect_timeout = 0.5
+                    conn.ensure_connection(max_retries=0, timeout=0.5)
+                    insp = celery_app.control.inspect(timeout=0.5, connection=conn)
+                    if insp:
+                        active_map = insp.active() or {}
+                        reserved_map = insp.reserved() or {}
+                        ping_workers = list((insp.ping() or {}).keys())
+                        for wname, tasks in active_map.items():
+                            active_by_worker[wname] = len(tasks) if isinstance(tasks, list) else 0
+                        for wname, tasks in reserved_map.items():
+                            reserved_by_worker[wname] = len(tasks) if isinstance(tasks, list) else 0
 
-                for q_name in list(queues.keys()):
-                    try:
-                        q = conn.default_channel.queue_declare(queue=q_name, passive=True)
-                        count = getattr(q, "message_count", 0) or 0
-                        queues[q_name] = count
-                        total_depth += count
-                    except Exception:
-                        pass
-        except Exception as exc:
-            logger.debug("Celery/RabbitMQ broker probe skipped: %s", exc)
+                    broker_url = str(getattr(settings, "CELERY_BROKER_URL", "") or "")
+                    if not broker_url.startswith(("redis://", "rediss://", "sentinel://")):
+                        for q_name in list(queues.keys()):
+                            try:
+                                q = conn.default_channel.queue_declare(queue=q_name, passive=True)
+                                count = getattr(q, "message_count", 0) or 0
+                                queues[q_name] = count
+                                total_depth += count
+                            except Exception:
+                                pass
+                cache.set(
+                    _probe_cache_key,
+                    {
+                        "active_by_worker": active_by_worker,
+                        "reserved_by_worker": reserved_by_worker,
+                        "ping_workers": ping_workers,
+                        "queues": queues,
+                        "total_depth": total_depth,
+                    },
+                    timeout=120,
+                )
+            except Exception as exc:
+                logger.debug("Celery broker probe skipped: %s", exc)
 
     def _find_stat(pattern: str) -> dict | None:
         if not stats:
@@ -586,7 +606,7 @@ def _decide_scaling(services: dict) -> list[dict]:
 
 
 # ── Core health-check routine ──────────────────────────────────────────────
-def _run_autoscaler_check():
+def _run_autoscaler_check(*, skip_broker_inspect: bool = False):
     config = _get_config()
     # Stat only containers the dashboard renders: the daemon hosts
     # ~100 addon/sidecar containers and statting all of them over a
@@ -635,7 +655,7 @@ def _run_autoscaler_check():
         },
         "services": services,
         "recent_decisions": _get_recent_decisions(),
-        "infra": _get_infra_autoscaler_state(stats),
+        "infra": _get_infra_autoscaler_state(stats, skip_broker_inspect=skip_broker_inspect),
     }
     cache.set(CACHE_KEY_STATUS, status_data, timeout=300)
     return status_data

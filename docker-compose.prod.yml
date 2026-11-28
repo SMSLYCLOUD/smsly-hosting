@@ -130,9 +130,9 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - python3 -c "import socket; s=socket.socket(); s.settimeout(5); s.connect(('127.0.0.1', 6432)); s.close()"
-      interval: 20s
-      timeout: 10s
+      - grep -qiE ':1920 [0-9A-F]+:[0-9A-F]+ 0A ' /proc/net/tcp /proc/net/tcp6
+      interval: 60s
+      timeout: 5s
       retries: 10
       start_period: 60s
     labels:
@@ -177,7 +177,7 @@ services:
       test:
       - CMD-SHELL
       - sh -c "test ! -s /etc/pgbouncer/pgbouncer.ini || nc -z 127.0.0.1 5432"
-      interval: 30s
+      interval: 60s
       timeout: 10s
       retries: 3
       start_period: 120s
@@ -902,8 +902,6 @@ services:
         condition: service_healthy
       socket-proxy:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
       registry:
         condition: service_started
     volumes:
@@ -1015,6 +1013,8 @@ services:
       --prefetch-multiplier=1
       --max-tasks-per-child=${CELERY_MAX_TASKS_PER_CHILD:-200}
       --max-memory-per-child=${CELERY_MAX_MEMORY_PER_CHILD:-524288}
+      --without-gossip --without-mingle --without-heartbeat
+      --pidfile=/tmp/celery.pid
       -Q ${CELERY_QUEUES:-celery}
     restart: unless-stopped
     env_file: .env
@@ -1047,8 +1047,6 @@ services:
         condition: service_healthy
       socket-proxy:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
       registry:
         condition: service_started
     volumes:
@@ -1078,12 +1076,10 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1
-      # Stretched 30s->120s (2026-09-16): each ping boots a full Python
-      # interpreter plus broker roundtrip; at 30s x4 workers they piled
-      # up and burned ~0.6 core continuously under host CPU cap.
+      - test -f /tmp/celery.pid && test -d "/proc/$$(tr -d '[:space:]' < /tmp/celery.pid)"
+      # Zero-fork PID liveness check (no Python interpreter + broker ping).
       interval: 120s
-      timeout: 20s
+      timeout: 10s
       retries: 5
       start_period: 300s
     labels:
@@ -1144,8 +1140,6 @@ services:
       backend:
         condition: service_healthy
       redis-primary:
-        condition: service_healthy
-      rabbitmq:
         condition: service_healthy
     volumes:
     # WAF converge task runs compose up/down for the appsec stack.
@@ -1247,6 +1241,8 @@ services:
       --prefetch-multiplier=1
       --max-tasks-per-child=${CELERY_FAST_MAX_TASKS_PER_CHILD:-100}
       --max-memory-per-child=${CELERY_FAST_MAX_MEMORY_PER_CHILD:-393216}
+      --without-gossip --without-mingle --without-heartbeat
+      --pidfile=/tmp/celery.pid
       -Q fast
     restart: unless-stopped
     env_file: .env
@@ -1276,8 +1272,6 @@ services:
         condition: service_healthy
       socket-proxy:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
     volumes:
     # WAF converge task runs compose up/down for the appsec stack.
     - /opt/smsly-hosting/docker-compose.prod.yml:/opt/smsly-hosting/docker-compose.prod.yml:ro,z
@@ -1301,12 +1295,10 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1
-      # Stretched 30s->120s (2026-09-16): each ping boots a full Python
-      # interpreter plus broker roundtrip; at 30s x4 workers they piled
-      # up and burned ~0.6 core continuously under host CPU cap.
+      - test -f /tmp/celery.pid && test -d "/proc/$$(tr -d '[:space:]' < /tmp/celery.pid)"
+      # Zero-fork PID liveness check (no Python interpreter + broker ping).
       interval: 120s
-      timeout: 20s
+      timeout: 10s
       retries: 5
       start_period: 300s
     labels:
@@ -1344,6 +1336,8 @@ services:
       --prefetch-multiplier=1
       --max-tasks-per-child=${CELERY_DEPLOY_MAX_TASKS_PER_CHILD:-20}
       --max-memory-per-child=${CELERY_DEPLOY_MAX_MEMORY_PER_CHILD:-786432}
+      --without-gossip --without-mingle --without-heartbeat
+      --pidfile=/tmp/celery.pid
       -Q deploy --hostname=deploy@%h
     restart: unless-stopped
     env_file: .env
@@ -1376,8 +1370,6 @@ services:
         condition: service_healthy
       socket-proxy:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
     volumes:
     # WAF converge task runs compose up/down for the appsec stack.
     - /opt/smsly-hosting/docker-compose.prod.yml:/opt/smsly-hosting/docker-compose.prod.yml:ro,z
@@ -1402,12 +1394,10 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1
-      # Stretched 30s->120s (2026-09-16): each ping boots a full Python
-      # interpreter plus broker roundtrip; at 30s x4 workers they piled
-      # up and burned ~0.6 core continuously under host CPU cap.
+      - test -f /tmp/celery.pid && test -d "/proc/$$(tr -d '[:space:]' < /tmp/celery.pid)"
+      # Zero-fork PID liveness check (no Python interpreter + broker ping).
       interval: 120s
-      timeout: 20s
+      timeout: 10s
       retries: 5
       start_period: 300s
     labels:
@@ -1529,7 +1519,7 @@ services:
       test:
       - CMD-SHELL
       - wget -q -O /dev/null http://127.0.0.1:80/health || exit 1
-      interval: 30s
+      interval: 60s
       timeout: 5s
       retries: 5
       start_period: 10s
@@ -1782,7 +1772,7 @@ services:
     - /var/run/docker.sock:/var/run/docker.sock:ro,z
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2375/version || exit 1"]
-      interval: 30s
+      interval: 60s
       timeout: 5s
       retries: 5
       start_period: 10s
@@ -1826,7 +1816,7 @@ services:
       test:
       - CMD-SHELL
       - nc -z 127.0.0.1 7000 || exit 1
-      interval: 30s
+      interval: 60s
       timeout: 5s
       retries: 3
       start_period: 10s
@@ -1839,6 +1829,7 @@ services:
         limits:
           memory: ${FRPS_MEMORY_LIMIT:-256M}
   rabbitmq:
+    profiles: ["amqp"]
     security_opt:
       - apparmor:docker-default
     image: rabbitmq:3-management-alpine
@@ -2074,6 +2065,16 @@ services:
     image: postgres:${OPENAPPSEC_POSTGRES_VERSION:-18}
     container_name: smsly-appsec-db
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_buffers=32MB
+      - -c
+      - max_connections=25
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=16MB
     environment:
       - POSTGRES_PASSWORD=${OPENAPPSEC_DB_PASSWORD:-}
       - POSTGRES_USER=postgres
@@ -2181,8 +2182,8 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://smsly-loki:3100/ready', timeout=5)"]
-      interval: 30s
+      test: ["CMD-SHELL", "wget -q --spider http://smsly-loki:3100/ready || exit 1"]
+      interval: 60s
       timeout: 10s
       retries: 3
       start_period: 15s
@@ -2357,8 +2358,8 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9234/health')"]
-      interval: 30s
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:9234/health || exit 1"]
+      interval: 60s
       timeout: 10s
       retries: 5
       start_period: 180s

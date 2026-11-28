@@ -10,6 +10,7 @@ import { Rocket, Clock, CheckCircle, XCircle, Loader2, RefreshCw, ExternalLink }
 import api from "@/lib/api";
 import { motion } from "framer-motion";
 import { DashboardShell } from "@/components/layout/DashboardShell";
+import { startVisibilityInterval } from "@/lib/visibilityInterval";
 
 interface Deployment {
   id: string;
@@ -43,8 +44,7 @@ export default function DeploymentsPage() {
 
   useEffect(() => {
     fetchDeployments();
-    const interval = setInterval(fetchDeployments, 5000);
-    return () => clearInterval(interval);
+    return startVisibilityInterval(fetchDeployments, 5000);
   }, []);
 
   const handleRefresh = () => {
