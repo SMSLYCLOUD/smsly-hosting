@@ -62,7 +62,8 @@ class TestOption1Diet(unittest.TestCase):
     def test_autoscaler_script_supports_redis_and_rabbitmq(self):
         script = read("scripts/celery-worker-autoscaler.sh")
         self.assertIn("_broker_mode", script)
-        self.assertIn("_redis_exec LLEN", script)
+        self.assertIn("smsly-redis-primary", script)
+        self.assertIn("LLEN celery", script)
         self.assertIn("HLEN unacked", script)
         self.assertIn("messages_unacknowledged", script)
 
@@ -91,3 +92,10 @@ class TestOption1Diet(unittest.TestCase):
         su_sh = read("scripts/safe-update.sh")
         self.assertIn("_su_rmq", su_sh)
         self.assertIn("CELERY_BROKER_MODE", su_sh)
+
+    def test_pg_exporters_tier_and_monitor_infra_replica_gate(self):
+        pg_exp = read("infrastructure/systemd/tiers/pg-exporters.conf")
+        self.assertIn("postgres-exporter-shared", pg_exp)
+        self.assertIn("postgres-exporter-platform", pg_exp)
+        mon = read("scripts/monitor_infra.sh")
+        self.assertIn("local-ha-replica", mon)

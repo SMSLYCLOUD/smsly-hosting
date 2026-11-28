@@ -88,7 +88,7 @@ if [ "$_BROKER_MODE" = "amqp" ] || [[ "$_CUR_PROFILES" == *",amqp,"* ]]; then
 fi
 if [ "$_DB_HA_MODE" = "local-ha" ]; then
     PROD_SERVICES=("db" "${PROD_SERVICES[@]}")
-    if [ "$STACK_TIER" != "lite" ]; then
+    if [[ "$_CUR_PROFILES" == *",local-ha-replica,"* ]]; then
         PROD_SERVICES+=("postgres-replica")
     fi
 fi

@@ -134,6 +134,12 @@ _redis_broker_db() {
 }
 
 _redis_container() {
+    local cid=""
+    cid="$(timeout 5 docker ps -q --filter "name=^/smsly-redis-primary$" 2>/dev/null | head -n 1 || true)"
+    if [ -n "$cid" ]; then
+        printf '%s\n' "$cid"
+        return 0
+    fi
     timeout 15 docker compose -f "$COMPOSE_FILE" ps -q redis-primary 2>/dev/null | head -n 1
 }
 
@@ -152,11 +158,17 @@ _redis_exec() {
 
 _get_queue_depth() {
     if [ "$(_broker_mode)" = "redis" ]; then
-        local total=0 q="" n=""
-        for q in celery deploy fast media-telemetry media-audit; do
-            if ! n=$(_redis_exec LLEN "$q"); then
-                return 1
-            fi
+        local rc="" db="" pw="" raw="" total=0 n=""
+        rc="$(_redis_container)"
+        [ -n "$rc" ] || return 1
+        db="$(_redis_broker_db)"
+        pw="${REDIS_PASSWORD:-}"
+        if [ -n "$pw" ]; then
+            raw="$(printf 'LLEN celery\nLLEN deploy\nLLEN fast\nLLEN media-telemetry\nLLEN media-audit\n' | timeout 10 docker exec -i -e REDISCLI_AUTH="$pw" "$rc" redis-cli -n "$db" 2>/dev/null)" || return 1
+        else
+            raw="$(printf 'LLEN celery\nLLEN deploy\nLLEN fast\nLLEN media-telemetry\nLLEN media-audit\n' | timeout 10 docker exec -i "$rc" redis-cli -n "$db" 2>/dev/null)" || return 1
+        fi
+        for n in $raw; do
             case "$n" in
                 ''|*[!0-9]*) n=0 ;;
             esac
@@ -219,7 +231,7 @@ _get_burst_unacked() {
 # ── Worker state tracking ────────────────────────────────────────────────────
 _worker_running() {
     local svc="$1"
-    timeout 15 docker compose -f "$COMPOSE_FILE" ps "$svc" 2>/dev/null | grep -q "Up"
+    timeout 5 docker ps --filter "label=com.docker.compose.service=$svc" --format '{{.Status}}' 2>/dev/null | grep -q "^Up"
 }
 
 _scale_up() {
@@ -283,7 +295,7 @@ main() {
 
         local depth
         if ! depth=$(_get_queue_depth); then
-            _log WARN "RabbitMQ unreachable — skipping tick (no scale action blind)"
+            _log WARN "Celery broker ($(_broker_mode)) unreachable — skipping tick (no scale action blind)"
             continue
         fi
 
@@ -310,7 +322,7 @@ main() {
             if [ "$extra_workers_up" = "true" ] && [ "$elapsed" -ge "$scale_down_after" ]; then
                 local unacked
                 if ! unacked=$(_get_burst_unacked); then
-                    _log WARN "RabbitMQ unreachable during scale-down check — deferring"
+                    _log WARN "Celery broker ($(_broker_mode)) unreachable during scale-down check — deferring"
                     below_threshold_since=$now
                 elif [ "${unacked:-0}" -gt 0 ] 2>/dev/null; then
                     _log INFO "Queue idle but $unacked task(s) still running on burst workers — deferring scale-down"

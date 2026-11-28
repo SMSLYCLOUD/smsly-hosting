@@ -27,6 +27,8 @@ ACCESS_LOG_CANDIDATES = [
     Path('/var/log/traefik/access.log'),
 ]
 OFFSET_FILE = Path('/tmp/.traefik_log_offset')
+INITIAL_TAIL_BYTES = 262_144
+MAX_LINES_PER_RUN = 2_000
 
 SKIP_PATHS = frozenset({'/ping', '/health', '/health/live', '/health/ready', '/metrics'})
 
@@ -81,12 +83,28 @@ def _offset_file_for_path(log_path: Path) -> Path:
     return Path(f"/tmp/.traffic_log_offset_{digest}")
 
 
-def _read_offset(log_path: Path) -> int:
+def _read_offset(log_path: Path) -> int | None:
     offset_file = _offset_file_for_path(log_path)
     try:
         return int(offset_file.read_text().strip())
     except (FileNotFoundError, ValueError):
+        return None
+
+
+def _resolve_initial_offset(fh, file_size: int, offset: int | None) -> int:
+    """Seek cleanly, capping first-time tailing of huge access logs."""
+    if offset is None:
+        if file_size > INITIAL_TAIL_BYTES:
+            fh.seek(file_size - INITIAL_TAIL_BYTES)
+            fh.readline()
+            return fh.tell()
+        fh.seek(0)
         return 0
+    if file_size < offset:
+        fh.seek(0)
+        return 0
+    fh.seek(offset)
+    return offset
 
 
 def _write_offset(log_path: Path, pos: int) -> None:
@@ -278,19 +296,19 @@ def _tail_sablier_internal_log(primary_log_path: Path | None) -> None:
     try:
         offset = _read_offset(traefik_log)
         file_size = traefik_log.stat().st_size
-        if file_size < offset:
-            offset = 0
-        if offset == file_size:
+        if offset is not None and offset == file_size:
             return
         with open(traefik_log, 'r', buffering=8192) as fh:
-            fh.seek(offset)
-            while True:
+            _resolve_initial_offset(fh, file_size, offset)
+            scanned_lines = 0
+            while scanned_lines < MAX_LINES_PER_RUN:
                 line = fh.readline()
                 if not line:
                     break
                 line = line.strip()
                 if not line:
                     continue
+                scanned_lines += 1
                 try:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
@@ -329,23 +347,22 @@ def collect_traefik_logs(self) -> None:
         offset = _read_offset(log_path)
         file_size = log_path.stat().st_size
 
-        if file_size < offset:
-            offset = 0
-
-        if offset == file_size:
+        if offset is not None and offset == file_size:
             return
 
         try:
             with open(log_path, 'r', buffering=8192) as fh:
-                fh.seek(offset)
+                _resolve_initial_offset(fh, file_size, offset)
                 new_lines = 0
-                while True:
+                scanned_lines = 0
+                while scanned_lines < MAX_LINES_PER_RUN:
                     line = fh.readline()
                     if not line:
                         break
                     line = line.strip()
                     if not line:
                         continue
+                    scanned_lines += 1
                     try:
                         entry = json.loads(line)
                     except json.JSONDecodeError:
@@ -394,7 +411,11 @@ def collect_remote_traffic() -> None:
     except Exception:
         return
     try:
-        servers = list(ManagedServer.objects.filter(is_primary=False).only("id", "name")[:20])
+        servers = list(
+            ManagedServer.objects.filter(is_primary=False)
+            .exclude(status="OFFLINE")
+            .only("id", "name")[:20]
+        )
     except Exception:
         return
     for server in servers:

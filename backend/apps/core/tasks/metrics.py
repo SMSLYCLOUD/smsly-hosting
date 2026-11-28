@@ -109,7 +109,7 @@ def _collect_remote_container_stats(service, latest):
         if target.get("target_type") not in ("remote", "lite_agent"):
             return None
         server = target.get("server_obj")
-        if server is None:
+        if server is None or str(getattr(server, "status", "") or "").upper() == "OFFLINE":
             return None
         ref = (
             (getattr(latest, "verified_runtime_id", "") or "").strip()
@@ -171,7 +171,7 @@ def collect_metrics_task() -> None:
         Service.objects.select_related("server").only(
             "id", "cpu_cores", "memory_mb", "owner_id", "name",
             "alert_config", "active_runtime_id",
-            "server__id", "server__is_lite_agent",
+            "server__id", "server__is_lite_agent", "server__status",
         )
     )
     active_by_service: dict = {}
@@ -196,7 +196,7 @@ def collect_metrics_task() -> None:
                 status='RUNNING',
             )
             .select_related('node')
-            .only('id', 'service_id', 'container_name', 'container_id', 'node__id', 'node__host', 'node__wg_address', 'node__api_token', 'node__is_lite_agent')
+            .only('id', 'service_id', 'container_name', 'container_id', 'node__id', 'node__host', 'node__wg_address', 'node__api_token', 'node__is_lite_agent', 'node__status')
         ):
             replicas_by_service.setdefault(rep.service_id, []).append(rep)
     except Exception:
@@ -221,6 +221,8 @@ def collect_metrics_task() -> None:
                 continue
             r_stats = None
             if rep.node_id:
+                if str(getattr(rep.node, "status", "") or "").upper() == "OFFLINE":
+                    continue
                 try:
                     from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
                     data = RemoteOrchestrator(rep.node).get_container_stats(ref)
