@@ -46,11 +46,15 @@ validate_env_file() {
         var_value="$(env_get_value "$env_file" "$var_name")"
         if [ -z "$var_value" ]; then
             if [ "$var_name" = "RABBITMQ_PASSWORD" ]; then
-                local new_rabbitmq_pass
+                local new_rabbitmq_pass _val_broker_mode _val_broker_url
                 new_rabbitmq_pass=$(gen_hex_secret 32)
                 echo -e "${BLUE}  -> Generating missing RABBITMQ_PASSWORD for upgrade...${NC}"
                 echo "RABBITMQ_PASSWORD=$new_rabbitmq_pass" >> "$env_file"
-                env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${new_rabbitmq_pass}@rabbitmq:5672//"
+                _val_broker_mode="$(env_get_value "$env_file" "CELERY_BROKER_MODE" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+                _val_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
+                if [ "$_val_broker_mode" = "amqp" ] && [ -z "$_val_broker_url" ]; then
+                    env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${new_rabbitmq_pass}@rabbitmq:5672//"
+                fi
             elif [ "$var_name" = "GATEWAY_SECRET" ]; then
                 echo -e "${BLUE}  -> Generating missing GATEWAY_SECRET...${NC}"
                 env_set_value "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 64)"
@@ -90,8 +94,8 @@ validate_env_file() {
     fi
 
     celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
-    if [ -n "$celery_broker_url" ] && [[ ! "$celery_broker_url" =~ ^amqp:// ]]; then
-        invalid_vars+=("CELERY_BROKER_URL (must start with amqp://)")
+    if [ -n "$celery_broker_url" ] && [[ ! "$celery_broker_url" =~ ^(amqp|amqps|redis|rediss|sentinel):// ]]; then
+        invalid_vars+=("CELERY_BROKER_URL (must start with redis://, rediss://, sentinel://, or amqp://)")
     fi
 
     var_value="$(env_get_value "$env_file" "TUNNEL_DOMAIN")"

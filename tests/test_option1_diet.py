@@ -84,3 +84,10 @@ class TestOption1Diet(unittest.TestCase):
         )
         res = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, res.stderr or res.stdout)
+
+    def test_platform_validation_and_safe_update_accept_redis_broker(self):
+        val_sh = read("lib/platform-validation.sh")
+        self.assertIn("^(amqp|amqps|redis|rediss|sentinel)://", val_sh)
+        su_sh = read("scripts/safe-update.sh")
+        self.assertIn("_su_rmq", su_sh)
+        self.assertIn("CELERY_BROKER_MODE", su_sh)

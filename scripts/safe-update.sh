@@ -243,15 +243,20 @@ safe_update_post_verify() {
     fi
     local db_ha_mode="${DB_HA_ENABLED:-local-ha}"
 
+    local _su_rmq=()
+    if [ "${CELERY_BROKER_MODE:-redis}" = "amqp" ] || [[ "${CELERY_BROKER_URL:-}" =~ ^amqps?:// ]]; then
+        _su_rmq=(smsly-hosting-rabbitmq-1)
+    fi
+
     local tier0=()
     local core=()
     if [ "$is_agent_lite" = "true" ]; then
         tier0=(smsly-hosting-redis-1 smsly-hosting-backend-1 smsly-hosting-traefik-1)
-        core=(smsly-hosting-redis-1 smsly-hosting-rabbitmq-1 smsly-hosting-backend-1
+        core=(smsly-hosting-redis-1 "${_su_rmq[@]}" smsly-hosting-backend-1
               smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1 smsly-hosting-traefik-1)
     elif [ "$is_node_mode" = "true" ]; then
         tier0=(smsly-postgres-primary smsly-hosting-redis-1 smsly-hosting-backend-1 smsly-hosting-traefik-1)
-        core=(smsly-postgres-primary smsly-hosting-redis-1 smsly-hosting-rabbitmq-1
+        core=(smsly-postgres-primary smsly-hosting-redis-1 "${_su_rmq[@]}"
               smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-celery-beat-1
               smsly-hosting-socket-proxy-1 smsly-hosting-traefik-1)
     else
@@ -263,7 +268,7 @@ safe_update_post_verify() {
         esac
         tier0=("${db_ctrs[@]}" smsly-redis-primary smsly-hosting-pgcat-1
                smsly-hosting-backend-1 smsly-hosting-frontend-1 smsly-hosting-caddy-1)
-        core=("${db_ctrs[@]}" smsly-redis-primary smsly-hosting-rabbitmq-1
+        core=("${db_ctrs[@]}" smsly-redis-primary "${_su_rmq[@]}"
               smsly-hosting-backend-1 smsly-hosting-frontend-1 smsly-hosting-caddy-1
               smsly-hosting-celery-1 smsly-hosting-celery-beat-1
               smsly-hosting-socket-proxy-1 smsly-hosting-registry-1

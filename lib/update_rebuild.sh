@@ -402,13 +402,15 @@
             timeout -k 10 "$_build_timeout" docker compose -f "$COMPOSE_FILE" build $build_svcs
 
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
+            _upd_rmq=""
+            [ "${CELERY_BROKER_MODE:-redis}" = "amqp" ] && _upd_rmq="rabbitmq"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 verify_agent_lite_connectivity
-                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy
-                sync_agent_lite_rabbitmq_password
+                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) $_upd_rmq socket-proxy
+                [ -n "$_upd_rmq" ] && sync_agent_lite_rabbitmq_password
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) $_upd_rmq socket-proxy registry route-fallback traefik
             else
                 docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) socket-proxy
             fi
@@ -486,8 +488,10 @@
             echo -e "${BLUE}  → Starting pgcat & backend...${NC}"
             if [ -n "$(get_pgcat_if_exists)" ]; then docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat || echo -e "${YELLOW}    ⚠ docker compose up pgcat failed (non-fatal)${NC}"; fi
             if [ "$MODE_AGENT_LITE" = "true" ]; then
-                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy
-                sync_agent_lite_rabbitmq_password
+                _upd_rmq=""
+                [ "${CELERY_BROKER_MODE:-redis}" = "amqp" ] && _upd_rmq="rabbitmq"
+                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) $_upd_rmq socket-proxy
+                [ -n "$_upd_rmq" ] && sync_agent_lite_rabbitmq_password
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend
@@ -543,13 +547,15 @@
             # 6. Start everything (addons stay running, core gets fresh containers)
             # This does a graceful zero-downtime replacement instead of an explicit hard stop
             echo -e "${BLUE}    ↳ Starting all services...${NC}"
+            _upd_rmq=""
+            [ "${CELERY_BROKER_MODE:-redis}" = "amqp" ] && _upd_rmq="rabbitmq"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
-                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy
-                sync_agent_lite_rabbitmq_password
+                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) $_upd_rmq socket-proxy
+                [ -n "$_upd_rmq" ] && sync_agent_lite_rabbitmq_password
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate $CORE_SERVICES
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) $_upd_rmq socket-proxy registry route-fallback traefik
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $CORE_SERVICES
             else
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $CORE_SERVICES
@@ -574,13 +580,15 @@
             # 9. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
+            _upd_rmq=""
+            [ "${CELERY_BROKER_MODE:-redis}" = "amqp" ] && _upd_rmq="rabbitmq"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 verify_agent_lite_connectivity
-                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy
-                sync_agent_lite_rabbitmq_password
+                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) $_upd_rmq socket-proxy
+                [ -n "$_upd_rmq" ] && sync_agent_lite_rabbitmq_password
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) $_upd_rmq socket-proxy registry route-fallback traefik
             else
                 docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) socket-proxy
             fi

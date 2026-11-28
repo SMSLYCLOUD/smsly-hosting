@@ -9662,11 +9662,15 @@ validate_env_file() {
         var_value="$(env_get_value "$env_file" "$var_name")"
         if [ -z "$var_value" ]; then
             if [ "$var_name" = "RABBITMQ_PASSWORD" ]; then
-                local new_rabbitmq_pass
+                local new_rabbitmq_pass _val_broker_mode _val_broker_url
                 new_rabbitmq_pass=$(gen_hex_secret 32)
                 echo -e "${BLUE}  -> Generating missing RABBITMQ_PASSWORD for upgrade...${NC}"
                 echo "RABBITMQ_PASSWORD=$new_rabbitmq_pass" >> "$env_file"
-                env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${new_rabbitmq_pass}@rabbitmq:5672//"
+                _val_broker_mode="$(env_get_value "$env_file" "CELERY_BROKER_MODE" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+                _val_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
+                if [ "$_val_broker_mode" = "amqp" ] && [ -z "$_val_broker_url" ]; then
+                    env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${new_rabbitmq_pass}@rabbitmq:5672//"
+                fi
             elif [ "$var_name" = "GATEWAY_SECRET" ]; then
                 echo -e "${BLUE}  -> Generating missing GATEWAY_SECRET...${NC}"
                 env_set_value "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 64)"
@@ -9706,8 +9710,8 @@ validate_env_file() {
     fi
 
     celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
-    if [ -n "$celery_broker_url" ] && [[ ! "$celery_broker_url" =~ ^amqp:// ]]; then
-        invalid_vars+=("CELERY_BROKER_URL (must start with amqp://)")
+    if [ -n "$celery_broker_url" ] && [[ ! "$celery_broker_url" =~ ^(amqp|amqps|redis|rediss|sentinel):// ]]; then
+        invalid_vars+=("CELERY_BROKER_URL (must start with redis://, rediss://, sentinel://, or amqp://)")
     fi
 
     var_value="$(env_get_value "$env_file" "TUNNEL_DOMAIN")"
@@ -10776,11 +10780,15 @@ validate_env_file() {
         var_value="$(env_get_value "$env_file" "$var_name")"
         if [ -z "$var_value" ]; then
             if [ "$var_name" = "RABBITMQ_PASSWORD" ]; then
-                local new_rabbitmq_pass
+                local new_rabbitmq_pass _val_broker_mode _val_broker_url
                 new_rabbitmq_pass=$(gen_hex_secret 32)
                 echo -e "${BLUE}  -> Generating missing RABBITMQ_PASSWORD for upgrade...${NC}"
                 echo "RABBITMQ_PASSWORD=$new_rabbitmq_pass" >> "$env_file"
-                env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${new_rabbitmq_pass}@rabbitmq:5672//"
+                _val_broker_mode="$(env_get_value "$env_file" "CELERY_BROKER_MODE" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+                _val_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
+                if [ "$_val_broker_mode" = "amqp" ] && [ -z "$_val_broker_url" ]; then
+                    env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${new_rabbitmq_pass}@rabbitmq:5672//"
+                fi
             elif [ "$var_name" = "GATEWAY_SECRET" ]; then
                 echo -e "${BLUE}  -> Generating missing GATEWAY_SECRET...${NC}"
                 env_set_value "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 64)"
@@ -10820,8 +10828,8 @@ validate_env_file() {
     fi
 
     celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
-    if [ -n "$celery_broker_url" ] && [[ ! "$celery_broker_url" =~ ^amqp:// ]]; then
-        invalid_vars+=("CELERY_BROKER_URL (must start with amqp://)")
+    if [ -n "$celery_broker_url" ] && [[ ! "$celery_broker_url" =~ ^(amqp|amqps|redis|rediss|sentinel):// ]]; then
+        invalid_vars+=("CELERY_BROKER_URL (must start with redis://, rediss://, sentinel://, or amqp://)")
     fi
 
     var_value="$(env_get_value "$env_file" "TUNNEL_DOMAIN")"
@@ -16090,13 +16098,15 @@ fi
             timeout -k 10 "$_build_timeout" docker compose -f "$COMPOSE_FILE" build $build_svcs
 
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
+            _upd_rmq=""
+            [ "${CELERY_BROKER_MODE:-redis}" = "amqp" ] && _upd_rmq="rabbitmq"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 verify_agent_lite_connectivity
-                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy
-                sync_agent_lite_rabbitmq_password
+                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) $_upd_rmq socket-proxy
+                [ -n "$_upd_rmq" ] && sync_agent_lite_rabbitmq_password
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) $_upd_rmq socket-proxy registry route-fallback traefik
             else
                 docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) socket-proxy
             fi
@@ -16174,8 +16184,10 @@ fi
             echo -e "${BLUE}  → Starting pgcat & backend...${NC}"
             if [ -n "$(get_pgcat_if_exists)" ]; then docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat || echo -e "${YELLOW}    ⚠ docker compose up pgcat failed (non-fatal)${NC}"; fi
             if [ "$MODE_AGENT_LITE" = "true" ]; then
-                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy
-                sync_agent_lite_rabbitmq_password
+                _upd_rmq=""
+                [ "${CELERY_BROKER_MODE:-redis}" = "amqp" ] && _upd_rmq="rabbitmq"
+                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) $_upd_rmq socket-proxy
+                [ -n "$_upd_rmq" ] && sync_agent_lite_rabbitmq_password
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend
@@ -16231,13 +16243,15 @@ fi
             # 6. Start everything (addons stay running, core gets fresh containers)
             # This does a graceful zero-downtime replacement instead of an explicit hard stop
             echo -e "${BLUE}    ↳ Starting all services...${NC}"
+            _upd_rmq=""
+            [ "${CELERY_BROKER_MODE:-redis}" = "amqp" ] && _upd_rmq="rabbitmq"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
-                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy
-                sync_agent_lite_rabbitmq_password
+                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) $_upd_rmq socket-proxy
+                [ -n "$_upd_rmq" ] && sync_agent_lite_rabbitmq_password
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate $CORE_SERVICES
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) $_upd_rmq socket-proxy registry route-fallback traefik
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $CORE_SERVICES
             else
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $CORE_SERVICES
@@ -16262,13 +16276,15 @@ fi
             # 9. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
+            _upd_rmq=""
+            [ "${CELERY_BROKER_MODE:-redis}" = "amqp" ] && _upd_rmq="rabbitmq"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 verify_agent_lite_connectivity
-                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) rabbitmq socket-proxy
-                sync_agent_lite_rabbitmq_password
+                docker compose -f "$COMPOSE_FILE" up -d $(get_redis_service) $_upd_rmq socket-proxy
+                [ -n "$_upd_rmq" ] && sync_agent_lite_rabbitmq_password
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) $_upd_rmq socket-proxy registry route-fallback traefik
             else
                 docker compose -f "$COMPOSE_FILE" up -d $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) socket-proxy
             fi
@@ -20412,11 +20428,15 @@ validate_env_file() {
         var_value="$(env_get_value "$env_file" "$var_name")"
         if [ -z "$var_value" ]; then
             if [ "$var_name" = "RABBITMQ_PASSWORD" ]; then
-                local new_rabbitmq_pass
+                local new_rabbitmq_pass _val_broker_mode _val_broker_url
                 new_rabbitmq_pass=$(gen_hex_secret 32)
                 echo -e "${BLUE}  -> Generating missing RABBITMQ_PASSWORD for upgrade...${NC}"
                 echo "RABBITMQ_PASSWORD=$new_rabbitmq_pass" >> "$env_file"
-                env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${new_rabbitmq_pass}@rabbitmq:5672//"
+                _val_broker_mode="$(env_get_value "$env_file" "CELERY_BROKER_MODE" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+                _val_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
+                if [ "$_val_broker_mode" = "amqp" ] && [ -z "$_val_broker_url" ]; then
+                    env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${new_rabbitmq_pass}@rabbitmq:5672//"
+                fi
             elif [ "$var_name" = "GATEWAY_SECRET" ]; then
                 echo -e "${BLUE}  -> Generating missing GATEWAY_SECRET...${NC}"
                 env_set_value "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 64)"
@@ -20456,8 +20476,8 @@ validate_env_file() {
     fi
 
     celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
-    if [ -n "$celery_broker_url" ] && [[ ! "$celery_broker_url" =~ ^amqp:// ]]; then
-        invalid_vars+=("CELERY_BROKER_URL (must start with amqp://)")
+    if [ -n "$celery_broker_url" ] && [[ ! "$celery_broker_url" =~ ^(amqp|amqps|redis|rediss|sentinel):// ]]; then
+        invalid_vars+=("CELERY_BROKER_URL (must start with redis://, rediss://, sentinel://, or amqp://)")
     fi
 
     var_value="$(env_get_value "$env_file" "TUNNEL_DOMAIN")"
@@ -36075,11 +36095,15 @@ validate_env_file() {
         var_value="$(env_get_value "$env_file" "$var_name")"
         if [ -z "$var_value" ]; then
             if [ "$var_name" = "RABBITMQ_PASSWORD" ]; then
-                local new_rabbitmq_pass
+                local new_rabbitmq_pass _val_broker_mode _val_broker_url
                 new_rabbitmq_pass=$(gen_hex_secret 32)
                 echo -e "${BLUE}  -> Generating missing RABBITMQ_PASSWORD for upgrade...${NC}"
                 echo "RABBITMQ_PASSWORD=$new_rabbitmq_pass" >> "$env_file"
-                env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${new_rabbitmq_pass}@rabbitmq:5672//"
+                _val_broker_mode="$(env_get_value "$env_file" "CELERY_BROKER_MODE" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+                _val_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
+                if [ "$_val_broker_mode" = "amqp" ] && [ -z "$_val_broker_url" ]; then
+                    env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${new_rabbitmq_pass}@rabbitmq:5672//"
+                fi
             elif [ "$var_name" = "GATEWAY_SECRET" ]; then
                 echo -e "${BLUE}  -> Generating missing GATEWAY_SECRET...${NC}"
                 env_set_value "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 64)"
@@ -36119,8 +36143,8 @@ validate_env_file() {
     fi
 
     celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
-    if [ -n "$celery_broker_url" ] && [[ ! "$celery_broker_url" =~ ^amqp:// ]]; then
-        invalid_vars+=("CELERY_BROKER_URL (must start with amqp://)")
+    if [ -n "$celery_broker_url" ] && [[ ! "$celery_broker_url" =~ ^(amqp|amqps|redis|rediss|sentinel):// ]]; then
+        invalid_vars+=("CELERY_BROKER_URL (must start with redis://, rediss://, sentinel://, or amqp://)")
     fi
 
     var_value="$(env_get_value "$env_file" "TUNNEL_DOMAIN")"
